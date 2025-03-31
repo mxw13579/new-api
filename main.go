@@ -24,11 +24,16 @@ import (
 	_ "net/http/pprof"
 )
 
-//go:embed web/dist
+// go:
+// embed
+// web/dist
 var buildFS embed.FS
 
-//go:embed web/dist/index.html
+// go:
+// embed web/dist/index.html
 var indexPage []byte
+
+// 在 main 函数之前声明定时任务的函数
 
 func main() {
 	err := godotenv.Load(".env")
@@ -127,6 +132,9 @@ func main() {
 	}
 
 	service.InitTokenEncoders()
+
+	//启动日常任务调度程序
+	controller.StartDailyTaskScheduler()
 
 	// Initialize HTTP server
 	server := gin.New()
