@@ -27,10 +27,10 @@ type Token struct {
 	AllowIps           *string        `json:"allow_ips" gorm:"default:''"`
 	UsedQuota          int            `json:"used_quota" gorm:"default:0"` // used quota
 	Group              string         `json:"group" gorm:"default:''"`
-	IntervalQuota      int            `json:"interval_quota" gorm:"default:0"` // 刷新配额
+	IntervalQuota      int            `json:"interval_quota" gorm:"bigint"`    // 刷新配额
 	IntervalTime       int            `json:"interval_time" gorm:"default:0"`  //间隔时间，与间隔单位组合使用
 	TriggerLastTime    int64          `json:"trigger_last_time" gorm:"bigint"` //上次执行时间
-	IntervalUnit       int            `json:"interval_unit" gorm:"default:0"`  //间隔单位，默认为天，1 分钟、2 小时、3 天、4 周、5 月、6 季度、7 年
+	IntervalUnit       int            `json:"interval_unit" gorm:"default:3"`  //间隔单位，默认为天，1 分钟、2 小时、3 天、4 周、5 月、6 季度、7 年
 	DeletedAt          gorm.DeletedAt `gorm:"index"`
 }
 
