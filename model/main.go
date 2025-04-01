@@ -170,49 +170,49 @@ func InitLogDB() (err error) {
 
 func migrateDB() error {
 	err := DB.AutoMigrate(&Channel{})
-	if err != nil {
-		return err
-	}
-	err = DB.AutoMigrate(&Token{})
-	if err != nil {
-		return err
-	}
-	err = DB.AutoMigrate(&User{})
-	if err != nil {
-		return err
-	}
-	err = DB.AutoMigrate(&Option{})
-	if err != nil {
-		return err
-	}
-	err = DB.AutoMigrate(&Redemption{})
-	if err != nil {
-		return err
-	}
-	err = DB.AutoMigrate(&Ability{})
-	if err != nil {
-		return err
-	}
-	err = DB.AutoMigrate(&Log{})
-	if err != nil {
-		return err
-	}
-	err = DB.AutoMigrate(&Midjourney{})
-	if err != nil {
-		return err
-	}
-	err = DB.AutoMigrate(&TopUp{})
-	if err != nil {
-		return err
-	}
-	err = DB.AutoMigrate(&QuotaData{})
-	if err != nil {
-		return err
-	}
-	err = DB.AutoMigrate(&Task{})
-	if err != nil {
-		return err
-	}
+	//if err != nil {
+	//	return err
+	//}
+	//err = DB.AutoMigrate(&Token{})
+	//if err != nil {
+	//	return err
+	//}
+	//err = DB.AutoMigrate(&User{})
+	//if err != nil {
+	//	return err
+	//}
+	//err = DB.AutoMigrate(&Option{})
+	//if err != nil {
+	//	return err
+	//}
+	//err = DB.AutoMigrate(&Redemption{})
+	//if err != nil {
+	//	return err
+	//}
+	//err = DB.AutoMigrate(&Ability{})
+	//if err != nil {
+	//	return err
+	//}
+	//err = DB.AutoMigrate(&Log{})
+	//if err != nil {
+	//	return err
+	//}
+	//err = DB.AutoMigrate(&Midjourney{})
+	//if err != nil {
+	//	return err
+	//}
+	//err = DB.AutoMigrate(&TopUp{})
+	//if err != nil {
+	//	return err
+	//}
+	//err = DB.AutoMigrate(&QuotaData{})
+	//if err != nil {
+	//	return err
+	//}
+	//err = DB.AutoMigrate(&Task{})
+	//if err != nil {
+	//	return err
+	//}
 	common.SysLog("database migrated")
 	err = createRootAccountIfNeed()
 	return err
