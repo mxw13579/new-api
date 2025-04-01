@@ -145,6 +145,9 @@ func AddToken(c *gin.Context) {
 		ModelLimits:        token.ModelLimits,
 		AllowIps:           token.AllowIps,
 		Group:              token.Group,
+		IntervalTime:       token.IntervalTime,
+		IntervalQuota:      token.IntervalQuota,
+		IntervalUnit:       token.IntervalUnit,
 	}
 	err = cleanToken.Insert()
 	if err != nil {
@@ -234,6 +237,9 @@ func UpdateToken(c *gin.Context) {
 		cleanToken.ModelLimits = token.ModelLimits
 		cleanToken.AllowIps = token.AllowIps
 		cleanToken.Group = token.Group
+		cleanToken.IntervalQuota = token.IntervalQuota
+		cleanToken.IntervalTime = token.IntervalTime
+		cleanToken.IntervalUnit = token.IntervalUnit
 	}
 	err = cleanToken.Update()
 	if err != nil {

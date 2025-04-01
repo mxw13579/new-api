@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"one-api/common"
 	"strings"
+	"time"
 
 	"github.com/bytedance/gopkg/util/gopool"
 	"gorm.io/gorm"
@@ -26,6 +27,10 @@ type Token struct {
 	AllowIps           *string        `json:"allow_ips" gorm:"default:''"`
 	UsedQuota          int            `json:"used_quota" gorm:"default:0"` // used quota
 	Group              string         `json:"group" gorm:"default:''"`
+	IntervalQuota      int            `json:"interval_quota" gorm:"default:0"` // 刷新配额
+	IntervalTime       int            `json:"interval_time" gorm:"default:0"`  //间隔时间，与间隔单位组合使用
+	TriggerLastTime    int64          `json:"trigger_last_time" gorm:"bigint"` //上次执行时间
+	IntervalUnit       int            `json:"interval_unit" gorm:"default:0"`  //间隔单位，默认为天，1 分钟、2 小时、3 天、4 周、5 月、6 季度、7 年
 	DeletedAt          gorm.DeletedAt `gorm:"index"`
 }
 
@@ -53,6 +58,46 @@ func (token *Token) GetIpLimitsMap() map[string]any {
 		}
 	}
 	return ipLimitsMap
+}
+
+// RefreshTokenQuota refreshTokenQuota 刷新余额
+func (token *Token) RefreshTokenQuota() (err error) {
+	token.RemainQuota = token.IntervalQuota //刷新为间隔额度
+	token.TriggerLastTime = common.GetTimestamp()
+	err = token.Update()
+
+	return err
+}
+
+// FindTokensToExecuteNow 查询当前需要执行的定时任务
+func FindTokensToExecuteNow() ([]Token, error) {
+	var tokens []Token
+	now := time.Now().Unix() // 获取当前时间戳
+
+	// 查询条件：间隔时间大于0且已到达下次执行时间的任务
+	query := DB.Model(&Token{}).Where("interval_time > 0")
+
+	// 根据不同的间隔单位计算下次执行时间
+	condition := "((" +
+		// 分钟
+		"(interval_unit = 1 AND trigger_last_time + interval_time * 60 <= ?) OR " +
+		// 小时
+		"(interval_unit = 2 AND trigger_last_time + interval_time * 3600 <= ?) OR " +
+		// 天
+		"(interval_unit = 3 AND trigger_last_time + interval_time * 86400 <= ?) OR " +
+		// 周
+		"(interval_unit = 4 AND trigger_last_time + interval_time * 604800 <= ?) OR " +
+		// 月（按30天计算）
+		"(interval_unit = 5 AND trigger_last_time + interval_time * 2592000 <= ?) OR " +
+		// 季度（按90天计算）
+		"(interval_unit = 6 AND trigger_last_time + interval_time * 7776000 <= ?) OR " +
+		// 年（按365天计算）
+		"(interval_unit = 7 AND trigger_last_time + interval_time * 31536000 <= ?)" +
+		"))"
+
+	err := query.Where(condition, now, now, now, now, now, now, now).Find(&tokens).Error
+
+	return tokens, err
 }
 
 func GetAllUserTokens(userId int, startIdx int, num int) ([]*Token, error) {
@@ -184,7 +229,8 @@ func (token *Token) Update() (err error) {
 		}
 	}()
 	err = DB.Model(token).Select("name", "status", "expired_time", "remain_quota", "unlimited_quota",
-		"model_limits_enabled", "model_limits", "allow_ips", "group").Updates(token).Error
+		"model_limits_enabled", "model_limits", "allow_ips", "group",
+		"interval_quota", "interval_time", "trigger_last_time", "interval_unit").Updates(token).Error
 	return err
 }
 

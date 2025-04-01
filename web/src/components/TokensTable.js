@@ -139,6 +139,44 @@ const TokensTable = () => {
       },
     },
     {
+      title: t('刷新配额'),
+      dataIndex: 'interval_quota',
+      render: (text, record, index) => {
+        return <div>{text}</div>;
+      },
+    },
+    {
+      title: t('间隔时间'),
+      dataIndex: 'interval_time',
+      render: (text, record, index) => {
+        return <div>{text}</div>;
+      },
+    },
+    {
+      title: t('间隔单位'),
+      dataIndex: 'interval_unit',
+      render: (text, record, index) => {
+        const units = [
+          t('天'),
+          t('分钟'),
+          t('小时'),
+          t('天'),
+          t('周'),
+          t('月'),
+          t('季度'),
+          t('年')
+        ];
+        return <div>{units[text] || text}</div>;
+      },
+    },
+    {
+      title: t('上次执行'),
+      dataIndex: 'trigger_last_time',
+      render: (text, record, index) => {
+        return <div>{text ? timestamp2string(text) : t('未执行')}</div>;
+      },
+    },
+    {
       title: '',
       dataIndex: 'operate',
       render: (text, record, index) => {

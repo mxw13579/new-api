@@ -37,6 +37,10 @@ const EditToken = (props) => {
     model_limits: [],
     allow_ips: '',
     group: '',
+    interval_quota: 0,
+    interval_time: 0,
+    trigger_last_time: 0,
+    interval_unit: 0,
   };
   const [inputs, setInputs] = useState(originInputs);
   const {
@@ -47,7 +51,11 @@ const EditToken = (props) => {
     model_limits_enabled,
     model_limits,
     allow_ips,
-    group
+    group,
+    interval_quota,
+    interval_time,
+    trigger_last_time,
+    interval_unit
   } = inputs;
   // const [visible, setVisible] = useState(false);
   const [models, setModels] = useState([]);
@@ -174,6 +182,10 @@ const EditToken = (props) => {
       // 编辑令牌的逻辑保持不变
       let localInputs = { ...inputs };
       localInputs.remain_quota = parseInt(localInputs.remain_quota);
+      localInputs.interval_quota = parseInt(localInputs.interval_quota || 0);
+      localInputs.interval_time = parseInt(localInputs.interval_time || 0);
+      localInputs.interval_unit = parseInt(localInputs.interval_unit || 3);
+
       if (localInputs.expired_time !== -1) {
         let time = Date.parse(localInputs.expired_time);
         if (isNaN(time)) {
@@ -206,7 +218,11 @@ const EditToken = (props) => {
           localInputs.name = `${inputs.name}-${generateRandomSuffix()}`;
         }
         localInputs.remain_quota = parseInt(localInputs.remain_quota);
+        localInputs.interval_quota = parseInt(localInputs.interval_quota || 0);
+        localInputs.interval_time = parseInt(localInputs.interval_time || 0);
+        localInputs.interval_unit = parseInt(localInputs.interval_unit || 3);
 
+        
         if (localInputs.expired_time !== -1) {
           let time = Date.parse(localInputs.expired_time);
           if (isNaN(time)) {
@@ -463,6 +479,51 @@ const EditToken = (props) => {
               disabled={true}
             />
           }
+          <Divider />
+          <div style={{ marginTop: 10 }}>
+            <Typography.Text>{t('请选择间隔单位，默认为天')}</Typography.Text>
+          </div>
+          <Select
+            style={{ marginTop: 10 }}
+            placeholder={t('请选择间隔单位')}
+            name='interval_unit'
+            onChange={(value) => handleInputChange('interval_unit', value)}
+            value={interval_unit || 3}
+            optionList={[
+              { value: 1, label: t('分钟') },
+              { value: 2, label: t('小时') },
+              { value: 3, label: t('天') },
+              { value: 4, label: t('周') },
+              { value: 5, label: t('月') },
+              { value: 6, label: t('季度') },
+              { value: 7, label: t('年') },
+            ]}
+          />
+          <div style={{marginTop: 20}}>
+              <Typography.Text>{`${t('刷新配额')}${renderQuotaWithPrompt(interval_quota)}`}</Typography.Text>
+          </div>
+          <Input
+              style={{marginTop: 8}}
+              label={t('刷新配额')}
+              name='interval_quota'
+              placeholder={t('请输入刷新配额')}
+              onChange={(value) => handleInputChange('interval_quota', value)}
+            value={interval_quota}
+            type='number'
+          />
+          <div style={{ marginTop: 10 }}>
+            <Typography.Text>{t('间隔时间')}</Typography.Text>
+          </div>
+          <Input
+            style={{ marginTop: 8 }}
+            label={t('间隔时间')}
+            name='interval_time'
+            placeholder={t('请输入间隔时间')}
+            onChange={(value) => handleInputChange('interval_time', value)}
+            value={interval_time}
+            type='number'
+          />
+          <Divider />
         </Spin>
       </SideSheet>
     </>
