@@ -77,6 +77,41 @@ const TokensTable = () => {
     }
   };
 
+  const renderIntervalUnit = (IntervalUnit) => {
+    switch (IntervalUnit) {
+      case 3:
+          return (
+              <Tag color='green' size='large'>
+                {t('天卡')}
+              </Tag>
+          );
+      case 4:
+        return (
+            <Tag color='red' size='large'>
+              {t('周卡')}
+            </Tag>
+        );
+      case 5:
+        return (
+            <Tag color='yellow' size='large'>
+              {t('月卡')}
+            </Tag>
+        );
+      case 6:
+        return (
+            <Tag color='grey' size='large'>
+              {t('季卡')}
+            </Tag>
+        );
+      default:
+        return (
+            <Tag color='black' size='large'>
+              {t('错误')}
+            </Tag>
+        );
+    }
+  };
+
   const columns = [
     {
       title: t('名称'),
@@ -98,14 +133,14 @@ const TokensTable = () => {
       },
     },
     {
-      title: t('已用额度'),
+      title: t('共计已用额度'),
       dataIndex: 'used_quota',
       render: (text, record, index) => {
         return <div>{renderQuota(parseInt(text))}</div>;
       },
     },
     {
-      title: t('剩余额度'),
+      title: t('当日剩余额度'),
       dataIndex: 'remain_quota',
       render: (text, record, index) => {
         return (
@@ -136,7 +171,7 @@ const TokensTable = () => {
       render: (text, record, index) => {
         return (
           <div>
-            {record.expired_time === -1 ? t('永不过期') : renderTimestamp(text)}
+            {record.expired_time === -1 ? t('未激活') : renderTimestamp(text)}
           </div>
         );
       },
@@ -149,34 +184,34 @@ const TokensTable = () => {
       },
     },
     {
-      title: t('间隔时间'),
+      title: t('令牌间隔时间'),
       dataIndex: 'interval_time',
       render: (text, record, index) => {
-        return <div>{text}</div>;
+        return <div style={ {textAlign: 'center'}}>{record.interval_time === -1 ? t('1') : record.interval_time}</div>;
       },
     },
     {
-      title: t('间隔单位'),
+      title: t('令牌类型'),
       dataIndex: 'interval_unit',
       render: (text, record, index) => {
         const units = [
-          t('天'),
-          t('分钟'),
-          t('小时'),
-          t('天'),
-          t('周'),
-          t('月'),
-          t('季度'),
-          t('年')
+          t('天卡'),
+          t('分钟卡'),
+          t('小时卡'),
+          t('天卡'),
+          t('周卡'),
+          t('月卡'),
+          t('季卡'),
+          t('年卡')
         ];
-        return <div>{units[text] || text}</div>;
-      },
-    },
-    {
-      title: t('上次执行'),
-      dataIndex: 'trigger_last_time',
-      render: (text, record, index) => {
-        return <div>{text ? timestamp2string(text) : t('未执行')}</div>;
+        // return <div>{units[text] || text}</div>;
+        return (
+            <div>
+              <Space>
+                {renderIntervalUnit(text, record.model_limits_enabled)}
+              </Space>
+            </div>
+        );
       },
     },
     {

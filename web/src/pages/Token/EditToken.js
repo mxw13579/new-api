@@ -38,7 +38,7 @@ const EditToken = (props) => {
     model_limits: [],
     allow_ips: '',
     group: '',
-    interval_quota: 0,
+    interval_quota: isEdit ? 0 : 500000,
     interval_time: 0,
     trigger_last_time: 0,
     interval_unit: 0,
@@ -70,6 +70,22 @@ const EditToken = (props) => {
     props.handleClose();
   };
   const setExpiredTime = (month, day, hour, minute) => {
+    let now = new Date();
+    let timestamp = now.getTime() / 1000;
+    let seconds = month * 30 * 24 * 60 * 60;
+    seconds += day * 24 * 60 * 60;
+    seconds += hour * 60 * 60;
+    seconds += minute * 60;
+    if (seconds !== 0) {
+      timestamp += seconds;
+      setInputs({ ...inputs, expired_time: timestamp2string(timestamp) });
+    } else {
+      setInputs({ ...inputs, expired_time: -1 });
+    }
+  };
+
+
+  const setIntervalUnit = (month, day, hour, minute) => {
     let now = new Date();
     let timestamp = now.getTime() / 1000;
     let seconds = month * 30 * 24 * 60 * 60;
@@ -183,8 +199,8 @@ const EditToken = (props) => {
       // 编辑令牌的逻辑保持不变
       let localInputs = { ...inputs };
       localInputs.remain_quota = parseInt(localInputs.remain_quota);
-      localInputs.interval_quota = parseInt(localInputs.interval_quota || 0);
-      localInputs.interval_time = parseInt(localInputs.interval_time || 0);
+      localInputs.interval_quota = parseInt(localInputs.remain_quota);
+      localInputs.interval_time = parseInt(localInputs.interval_time || -1);
       localInputs.interval_unit = parseInt(localInputs.interval_unit || 3);
 
       if (localInputs.expired_time !== -1) {
@@ -219,10 +235,12 @@ const EditToken = (props) => {
           localInputs.name = `${inputs.name}-${generateRandomSuffix()}`;
         }
         localInputs.remain_quota = parseInt(localInputs.remain_quota);
-        localInputs.interval_quota = parseInt(localInputs.interval_quota || 0);
-        localInputs.interval_time = parseInt(localInputs.interval_time || 0);
+        localInputs.interval_quota = parseInt(localInputs.remain_quota);
+        localInputs.interval_time = parseInt(localInputs.interval_time || -1);
         localInputs.interval_unit = parseInt(localInputs.interval_unit || 3);
 
+        //强制设置为 -1
+        localInputs.expired_time = -1;
 
         if (localInputs.expired_time !== -1) {
           let time = Date.parse(localInputs.expired_time);
@@ -291,152 +309,189 @@ const EditToken = (props) => {
       >
         <Spin spinning={loading}>
           <Input
-            style={{ marginTop: 20 }}
-            label={t('名称')}
-            name='name'
-            placeholder={t('请输入名称')}
-            onChange={(value) => handleInputChange('name', value)}
-            value={name}
-            autoComplete='new-password'
-            required={!isEdit}
+              style={{marginTop: 20}}
+              label={t('名称')}
+              name='name'
+              placeholder={t('请输入名称')}
+              onChange={(value) => handleInputChange('name', value)}
+              value={name}
+              autoComplete='new-password'
+              required={!isEdit}
           />
-          <Divider />
+          <Divider/>
           <DatePicker
-            label={t('过期时间')}
-            name='expired_time'
-            placeholder={t('请选择过期时间')}
-            onChange={(value) => handleInputChange('expired_time', value)}
-            value={expired_time}
-            autoComplete='new-password'
-            type='dateTime'
+              style={{display: 'none'}}
+              label={t('过期时间')}
+              name='expired_time'
+              placeholder={t('请选择过期时间')}
+              onChange={(value) => handleInputChange('expired_time', value)}
+              value={expired_time}
+              autoComplete='new-password'
+              type='dateTime'
           />
-          <div style={{ marginTop: 20 }}>
+          <div style={{marginTop: 10}}>
+            <Typography.Text>{t('请选择令牌类型')}</Typography.Text>
+          </div>
+          <Select
+              style={{marginTop: 10, width: '100%', textAlign: 'center'}}
+              placeholder={t('请选择令牌类型')}
+              name='interval_unit'
+              onChange={(value) => handleInputChange('interval_unit', value)}
+              value={interval_unit || 3}
+              optionList={[
+                {value: 3, label: t('天卡')},
+                {value: 4, label: t('周卡')},
+                {value: 5, label: t('月卡')},
+                {value: 6, label: t('季卡')}
+              ]}
+          />
+          <Banner
+              style={{marginTop: 10}}
+              type={'warning'}
+              description={t(
+                  '注意，令牌间隔时间与令牌类型组合使用，如一天卡、三天卡等等。不填默认为一 x 卡',
+              )}
+          ></Banner>
+          <div style={{marginTop: 10}}>
+            <Typography.Text>{t('令牌间隔时间')}</Typography.Text>
+          </div>
+          <Input
+              style={{marginTop: 10}}
+              label={t('令牌间隔')}
+              name='interval_time'
+              placeholder={t('请输入令牌间隔')}
+              onChange={(value) => handleInputChange('interval_time', value)}
+              value={interval_time}
+              type='number'
+          />
+
+          <div style={{marginTop: 20, display: 'none'}}>
             <Space>
               <Button
-                type={'tertiary'}
-                onClick={() => {
-                  setExpiredTime(0, 0, 0, 0);
-                }}
+                  type={'tertiary'}
+                  onClick={() => {
+                    setExpiredTime(0, 0, 0, 0);
+                  }}
               >
                 {t('永不过期')}
               </Button>
               <Button
-                type={'tertiary'}
-                onClick={() => {
-                  setExpiredTime(0, 0, 1, 0);
-                }}
+                  type={'tertiary'}
+                  onClick={() => {
+                    setExpiredTime(0, 0, 1, 0);
+                  }}
               >
                 {t('一小时')}
               </Button>
               <Button
-                type={'tertiary'}
-                onClick={() => {
-                  setExpiredTime(1, 0, 0, 0);
-                }}
+                  type={'tertiary'}
+                  onClick={() => {
+                    setExpiredTime(1, 0, 0, 0);
+                  }}
               >
                 {t('一个月')}
               </Button>
               <Button
-                type={'tertiary'}
-                onClick={() => {
-                  setExpiredTime(0, 1, 0, 0);
-                }}
+                  type={'tertiary'}
+                  onClick={() => {
+                    setExpiredTime(0, 1, 0, 0);
+                  }}
               >
                 {t('一天')}
               </Button>
             </Space>
           </div>
 
-          <Divider />
+          <Divider/>
           <Banner
-            type={'warning'}
-            description={t(
-              '注意，令牌的额度仅用于限制令牌本身的最大额度使用量，实际的使用受到账户的剩余额度限制。',
-            )}
+              type={'warning'}
+              description={t(
+                  '注意，令牌的额度仅用于限制令牌本身的最大额度使用量，实际的使用受到账户的剩余额度限制。',
+              )}
           ></Banner>
-          <div style={{ marginTop: 20 }}>
+          <div style={{marginTop: 20}}>
             <Typography.Text>{`${t('额度')}${renderQuotaWithPrompt(remain_quota)}`}</Typography.Text>
           </div>
           <AutoComplete
-            style={{ marginTop: 8 }}
-            name='remain_quota'
-            placeholder={t('请输入额度')}
-            onChange={(value) => handleInputChange('remain_quota', value)}
-            value={remain_quota}
-            autoComplete='new-password'
-            type='number'
-            // position={'top'}
-            data={[
-              { value: 500000, label: '1$' },
-              { value: 5000000, label: '10$' },
-              { value: 25000000, label: '50$' },
-              { value: 50000000, label: '100$' },
-              { value: 250000000, label: '500$' },
-              { value: 500000000, label: '1000$' },
-            ]}
-            disabled={unlimited_quota}
+              style={{marginTop: 8}}
+              name='remain_quota'
+              placeholder={t('请输入额度')}
+              onChange={(value) => handleInputChange('remain_quota', value)}
+              value={remain_quota}
+              autoComplete='new-password'
+              type='number'
+              // position={'top'}
+              data={[
+                {value: 500000, label: '1$'},
+                {value: 5000000, label: '10$'},
+                {value: 25000000, label: '50$'},
+                {value: 50000000, label: '100$'},
+                {value: 250000000, label: '500$'},
+                {value: 500000000, label: '1000$'},
+              ]}
+              disabled={unlimited_quota}
           />
 
           {!isEdit && (
-            <>
-              <div style={{ marginTop: 20 }}>
-                <Typography.Text>{t('新建数量')}</Typography.Text>
-              </div>
-              <AutoComplete
-                style={{ marginTop: 8 }}
-                label={t('数量')}
-                placeholder={t('请选择或输入创建令牌的数量')}
-                onChange={(value) => handleTokenCountChange(value)}
-                onSelect={(value) => handleTokenCountChange(value)}
-                value={tokenCount.toString()}
-                autoComplete='off'
-                type='number'
-                data={[
-                  { value: 10, label: t('10个') },
-                  { value: 20, label: t('20个') },
-                  { value: 30, label: t('30个') },
-                  { value: 100, label: t('100个') },
-                ]}
-                disabled={unlimited_quota}
-              />
-            </>
+              <>
+                <div style={{marginTop: 20}}>
+                  <Typography.Text>{t('新建数量')}</Typography.Text>
+                </div>
+                <AutoComplete
+                    style={{marginTop: 8}}
+                    label={t('数量')}
+                    placeholder={t('请选择或输入创建令牌的数量')}
+                    onChange={(value) => handleTokenCountChange(value)}
+                    onSelect={(value) => handleTokenCountChange(value)}
+                    value={tokenCount.toString()}
+                    autoComplete='off'
+                    type='number'
+                    data={[
+                      {value: 10, label: t('10个')},
+                      {value: 20, label: t('20个')},
+                      {value: 30, label: t('30个')},
+                      {value: 100, label: t('100个')},
+                    ]}
+                    disabled={unlimited_quota}
+                />
+              </>
           )}
 
           <div>
             <Button
-              style={{ marginTop: 8 }}
-              type={'warning'}
-              onClick={() => {
-                setUnlimitedQuota();
-              }}
+                style={{marginTop: 8}}
+                type={'warning'}
+                onClick={() => {
+                  setUnlimitedQuota();
+                }}
             >
               {unlimited_quota ? t('取消无限额度') : t('设为无限额度')}
             </Button>
           </div>
-          <Divider />
-          <div style={{ marginTop: 10 }}>
+          <Divider/>
+          <div style={{marginTop: 10}}>
             <Typography.Text>
               {t('IP白名单（请勿过度信任此功能）')}
             </Typography.Text>
           </div>
           <TextArea
-            label={t('IP白名单')}
-            name='allow_ips'
-            placeholder={t('允许的IP，一行一个，不填写则不限制')}
-            onChange={(value) => {
-              handleInputChange('allow_ips', value);
-            }}
-            value={inputs.allow_ips}
-            style={{ fontFamily: 'JetBrains Mono, Consolas' }}
+              label={t('IP白名单')}
+              name='allow_ips'
+              placeholder={t('允许的IP，一行一个，不填写则不限制')}
+              onChange={(value) => {
+                handleInputChange('allow_ips', value);
+              }}
+              value={inputs.allow_ips}
+              style={{fontFamily: 'JetBrains Mono, Consolas'}}
           />
-          <div style={{ marginTop: 10, display: 'flex' }}>
+          <div style={{marginTop: 10, display: 'flex'}}>
             <Space>
               <Checkbox
-                name='model_limits_enabled'
-                checked={model_limits_enabled}
-                onChange={(e) =>
-                  handleInputChange('model_limits_enabled', e.target.checked)
-                }
+                  name='model_limits_enabled'
+                  checked={model_limits_enabled}
+                  onChange={(e) =>
+                      handleInputChange('model_limits_enabled', e.target.checked)
+                  }
               >
                 {t('启用模型限制（非必要，不建议启用）')}
               </Checkbox>
@@ -444,92 +499,63 @@ const EditToken = (props) => {
           </div>
 
           <Select
-            style={{ marginTop: 8 }}
-            placeholder={t('请选择该渠道所支持的模型')}
-            name='models'
-            required
-            multiple
-            selection
-            onChange={(value) => {
-              handleInputChange('model_limits', value);
-            }}
-            value={inputs.model_limits}
-            autoComplete='new-password'
-            optionList={models}
-            disabled={!model_limits_enabled}
+              style={{marginTop: 8}}
+              placeholder={t('请选择该渠道所支持的模型')}
+              name='models'
+              required
+              multiple
+              selection
+              onChange={(value) => {
+                handleInputChange('model_limits', value);
+              }}
+              value={inputs.model_limits}
+              autoComplete='new-password'
+              optionList={models}
+              disabled={!model_limits_enabled}
           />
-          <div style={{ marginTop: 10 }}>
+          <div style={{marginTop: 10}}>
             <Typography.Text>{t('令牌分组，默认为用户的分组')}</Typography.Text>
           </div>
           {groups.length > 0 ? (
-            <Select
-              style={{ marginTop: 8 }}
-              placeholder={t('令牌分组，默认为用户的分组')}
-              name='gruop'
-              required
-              selection
-              onChange={(value) => {
-                handleInputChange('group', value);
-              }}
-              position={'topLeft'}
-              renderOptionItem={renderGroupOption}
-              value={inputs.group}
-              autoComplete='new-password'
-              optionList={groups}
-            />
+              <Select
+                  style={{marginTop: 8}}
+                  placeholder={t('令牌分组，默认为用户的分组')}
+                  name='gruop'
+                  required
+                  selection
+                  onChange={(value) => {
+                    handleInputChange('group', value);
+                  }}
+                  position={'topLeft'}
+                  renderOptionItem={renderGroupOption}
+                  value={inputs.group}
+                  autoComplete='new-password'
+                  optionList={groups}
+              />
           ) : (
-            <Select
-              style={{ marginTop: 8 }}
-              placeholder={t('管理员未设置用户可选分组')}
-              name='gruop'
-              disabled={true}
-            />
+              <Select
+                  style={{marginTop: 8}}
+                  placeholder={t('管理员未设置用户可选分组')}
+                  name='gruop'
+                  disabled={true}
+              />
           )}
-          <Divider />
-          <div style={{ marginTop: 10 }}>
-            <Typography.Text>{t('请选择间隔单位，默认为天')}</Typography.Text>
-          </div>
-          <Select
-            style={{ marginTop: 10 }}
-            placeholder={t('请选择间隔单位')}
-            name='interval_unit'
-            onChange={(value) => handleInputChange('interval_unit', value)}
-            value={interval_unit || 3}
-            optionList={[
-              { value: 1, label: t('分钟') },
-              { value: 2, label: t('小时') },
-              { value: 3, label: t('天') },
-              { value: 4, label: t('周') },
-              { value: 5, label: t('月') },
-              { value: 6, label: t('季度') },
-              { value: 7, label: t('年') },
-            ]}
-          />
-          <div style={{marginTop: 20}}>
-              <Typography.Text>{`${t('刷新配额')}${renderQuotaWithPrompt(interval_quota)}`}</Typography.Text>
+          <Divider/>
+
+          <div style={{marginTop: 20,display: 'none'}}>
+            <Typography.Text>{`${t('刷新配额')}${renderQuotaWithPrompt(interval_quota)}`}</Typography.Text>
           </div>
           <Input
-              style={{marginTop: 8}}
+              style={{marginTop: 8,display: 'none'}}
               label={t('刷新配额')}
               name='interval_quota'
               placeholder={t('请输入刷新配额')}
               onChange={(value) => handleInputChange('interval_quota', value)}
-            value={interval_quota}
-            type='number'
+              value={interval_quota}
+              type='number'
           />
-          <div style={{ marginTop: 10 }}>
-            <Typography.Text>{t('间隔时间')}</Typography.Text>
-          </div>
-          <Input
-            style={{ marginTop: 8 }}
-            label={t('间隔时间')}
-            name='interval_time'
-            placeholder={t('请输入间隔时间')}
-            onChange={(value) => handleInputChange('interval_time', value)}
-            value={interval_time}
-            type='number'
-          />
-          <Divider />
+
+
         </Spin>
       </SideSheet>
     </>

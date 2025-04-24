@@ -8,6 +8,7 @@ import (
 	"net/http"
 )
 
+// DecompressRequestMiddleware 解压请求体
 func DecompressRequestMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if c.Request.Body == nil || c.Request.Method == http.MethodGet {
