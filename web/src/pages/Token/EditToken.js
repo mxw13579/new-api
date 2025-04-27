@@ -25,6 +25,7 @@ import {
 import Title from '@douyinfe/semi-ui/lib/es/typography/title';
 import { Divider } from 'semantic-ui-react';
 import { useTranslation } from 'react-i18next';
+import { Modal, Button as AntdButton, Input as AntdInput, message } from 'antd';
 
 const EditToken = (props) => {
   const [isEdit, setIsEdit] = useState(false);
@@ -193,8 +194,134 @@ const EditToken = (props) => {
     return result;
   };
 
+  // const submit = async () => {
+  //   setLoading(true);
+  //   if (isEdit) {
+  //     // 编辑令牌的逻辑保持不变
+  //     let localInputs = { ...inputs };
+  //     localInputs.remain_quota = parseInt(localInputs.remain_quota);
+  //     localInputs.interval_quota = parseInt(localInputs.remain_quota);
+  //     localInputs.interval_time = parseInt(localInputs.interval_time || -1);
+  //     localInputs.interval_unit = parseInt(localInputs.interval_unit || 3);
+  //
+  //     if (localInputs.expired_time !== -1) {
+  //       let time = Date.parse(localInputs.expired_time);
+  //       if (isNaN(time)) {
+  //         showError(t('过期时间格式错误！'));
+  //         setLoading(false);
+  //         return;
+  //       }
+  //       localInputs.expired_time = Math.ceil(time / 1000);
+  //     }
+  //     localInputs.model_limits = localInputs.model_limits.join(',');
+  //     let res = await API.put(`/api/token/`, {
+  //       ...localInputs,
+  //       id: parseInt(props.editingToken.id),
+  //     });
+  //     const { success, message } = res.data;
+  //     if (success) {
+  //       showSuccess(t('令牌更新成功！'));
+  //       props.refresh();
+  //       props.handleClose();
+  //     } else {
+  //       showError(t(message));
+  //     }
+  //   } else {
+  //     // 处理新增多个令牌的情况
+  //     let successCount = 0; // 记录成功创建的令牌数量
+  //     for (let i = 0; i < tokenCount; i++) {
+  //       let localInputs = { ...inputs };
+  //       if (i !== 0) {
+  //         // 如果用户想要创建多个令牌，则给每个令牌一个序号后缀
+  //         localInputs.name = `${inputs.name}-${generateRandomSuffix()}`;
+  //       }
+  //       localInputs.remain_quota = parseInt(localInputs.remain_quota);
+  //       localInputs.interval_quota = parseInt(localInputs.remain_quota);
+  //       localInputs.interval_time = parseInt(localInputs.interval_time || -1);
+  //       localInputs.interval_unit = parseInt(localInputs.interval_unit || 3);
+  //
+  //       //强制设置为 -1
+  //       localInputs.expired_time = -1;
+  //
+  //       if (localInputs.expired_time !== -1) {
+  //         let time = Date.parse(localInputs.expired_time);
+  //         if (isNaN(time)) {
+  //           showError(t('过期时间格式错误！'));
+  //           setLoading(false);
+  //           break;
+  //         }
+  //         localInputs.expired_time = Math.ceil(time / 1000);
+  //       }
+  //       localInputs.model_limits = localInputs.model_limits.join(',');
+  //       let res = await API.post(`/api/token/`, localInputs);
+  //       const { success, message } = res.data;
+  //
+  //       if (success) {
+  //         successCount++;
+  //       } else {
+  //         showError(t(message));
+  //         break; // 如果创建失败，终止循环
+  //       }
+  //     }
+  //
+  //     if (successCount > 0) {
+  //       showSuccess(t('令牌创建成功，请在列表页面点击复制获取令牌！'));
+  //       props.refresh();
+  //       props.handleClose();
+  //     }
+  //   }
+  //   setLoading(false);
+  //   setInputs(originInputs); // 重置表单
+  //   setTokenCount(1); // 重置数量为默认值
+  // };
+
+  // const generateRandomSuffix = () => {
+  //   const characters =
+  //       'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  //   let result = '';
+  //   for (let i = 0; i < 6; i++) {
+  //     result += characters.charAt(Math.floor(Math.random() * characters.length));
+  //   }
+  //   return result;
+  // };
+
+// 优化版批量 keys 展示弹窗
+  const showKeysDialog = (keys) => {
+    const keysText = keys.join('\n');
+    Modal.info({
+      title: '令牌批量创建成功',
+      width: 600,
+      content: (
+          <div>
+            <AntdInput.TextArea
+                value={keysText}
+                readOnly
+                autoSize={{ minRows: 6, maxRows: 16 }}
+                style={{ marginBottom: 8, fontFamily: 'monospace' }}
+            />
+            <AntdButton
+                type="primary"
+                style={{ marginTop: 8 }}
+                onClick={() => {
+                  navigator.clipboard.writeText(keysText);
+                  message.success('已复制到剪贴板！');
+                }}
+                block
+            >
+              复制所有Key
+            </AntdButton>
+          </div>
+      ),
+      okText: "知道了",
+    });
+  };
+
+
+
+
   const submit = async () => {
     setLoading(true);
+
     if (isEdit) {
       // 编辑令牌的逻辑保持不变
       let localInputs = { ...inputs };
@@ -225,54 +352,63 @@ const EditToken = (props) => {
       } else {
         showError(t(message));
       }
-    } else {
-      // 处理新增多个令牌的情况
-      let successCount = 0; // 记录成功创建的令牌数量
-      for (let i = 0; i < tokenCount; i++) {
-        let localInputs = { ...inputs };
-        if (i !== 0) {
-          // 如果用户想要创建多个令牌，则给每个令牌一个序号后缀
-          localInputs.name = `${inputs.name}-${generateRandomSuffix()}`;
-        }
-        localInputs.remain_quota = parseInt(localInputs.remain_quota);
-        localInputs.interval_quota = parseInt(localInputs.remain_quota);
-        localInputs.interval_time = parseInt(localInputs.interval_time || -1);
-        localInputs.interval_unit = parseInt(localInputs.interval_unit || 3);
 
-        //强制设置为 -1
-        localInputs.expired_time = -1;
+    } else if (tokenCount === 1) {
+      // 单一令牌添加
+      let localInputs = { ...inputs };
+      localInputs.remain_quota = parseInt(localInputs.remain_quota);
+      localInputs.interval_quota = parseInt(localInputs.remain_quota);
+      localInputs.interval_time = parseInt(localInputs.interval_time || -1);
+      localInputs.interval_unit = parseInt(localInputs.interval_unit || 3);
+      localInputs.expired_time = -1;
+      localInputs.model_limits = localInputs.model_limits.join(',');
 
-        if (localInputs.expired_time !== -1) {
-          let time = Date.parse(localInputs.expired_time);
-          if (isNaN(time)) {
-            showError(t('过期时间格式错误！'));
-            setLoading(false);
-            break;
-          }
-          localInputs.expired_time = Math.ceil(time / 1000);
-        }
-        localInputs.model_limits = localInputs.model_limits.join(',');
-        let res = await API.post(`/api/token/`, localInputs);
-        const { success, message } = res.data;
-
-        if (success) {
-          successCount++;
+      let res = await API.post(`/api/token/`, localInputs);
+      const { success, message, keys } = res.data;
+      if (success) {
+        // keys 可能有可能没有，兼容一下
+        if (keys && keys.length > 0) {
+          showKeysDialog(keys);
         } else {
-          showError(t(message));
-          break; // 如果创建失败，终止循环
+          showSuccess(t('令牌创建成功，请在列表页面点击复制获取令牌！'));
         }
-      }
-
-      if (successCount > 0) {
-        showSuccess(t('令牌创建成功，请在列表页面点击复制获取令牌！'));
         props.refresh();
         props.handleClose();
+      } else {
+        showError(t(message));
+      }
+
+    } else {
+      // 批量生成令牌（tokenCount > 1）
+
+      let localInputs = { ...inputs };
+      localInputs.remain_quota = parseInt(localInputs.remain_quota);
+      localInputs.interval_quota = parseInt(localInputs.remain_quota);
+      localInputs.interval_time = parseInt(localInputs.interval_time || -1);
+      localInputs.interval_unit = parseInt(localInputs.interval_unit || 3);
+      localInputs.model_limits = localInputs.model_limits.join(',');
+      localInputs.expired_time = -1;
+
+      // 后端批量请求，字段 tokenCount 一起传
+      let res = await API.post(
+          `/api/token/tokens?tokenCount=${tokenCount}`,
+          localInputs
+      );
+      const { success, message, keys } = res.data;
+      if (success) {
+        showKeysDialog(keys);
+        props.refresh();
+        props.handleClose();
+      } else {
+        showError(t(message));
       }
     }
+
     setLoading(false);
     setInputs(originInputs); // 重置表单
     setTokenCount(1); // 重置数量为默认值
   };
+
 
   return (
     <>

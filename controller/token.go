@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"fmt"
 	"github.com/gin-gonic/gin"
 	"net/http"
 	"one-api/common"
@@ -160,6 +161,76 @@ func AddToken(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
+	})
+	return
+}
+
+func AddTokens(c *gin.Context) {
+	token := model.Token{}
+	err := c.ShouldBindJSON(&token)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": err.Error(),
+		})
+		return
+	}
+	tokenCountStr := c.Query("tokenCount")
+	tokenCount, _ := strconv.Atoi(tokenCountStr)
+	if tokenCount < 1 {
+		tokenCount = 1
+	}
+	if len(token.Name) > 30 {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": "令牌名称过长",
+		})
+		return
+	}
+	userId := c.GetInt("id")
+	keys := make([]string, 0, tokenCount)
+	for i := 0; i < tokenCount; i++ {
+		key, err := common.GenerateKey()
+		if err != nil {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": "生成令牌失败",
+			})
+			common.SysError("failed to generate token key: " + err.Error())
+			return
+		}
+		cleanToken := model.Token{
+			UserId:             userId,
+			Name:               token.Name,
+			Key:                key,
+			CreatedTime:        common.GetTimestamp(),
+			AccessedTime:       common.GetTimestamp(),
+			ExpiredTime:        token.ExpiredTime,
+			RemainQuota:        token.RemainQuota,
+			UnlimitedQuota:     token.UnlimitedQuota,
+			ModelLimitsEnabled: token.ModelLimitsEnabled,
+			ModelLimits:        token.ModelLimits,
+			AllowIps:           token.AllowIps,
+			Group:              token.Group,
+			IntervalTime:       token.IntervalTime,
+			IntervalQuota:      token.IntervalQuota,
+			IntervalUnit:       token.IntervalUnit,
+		}
+		err = cleanToken.Insert()
+		if err != nil {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": fmt.Sprintf("第%d次插入失败: %s", i+1, err.Error()),
+				"keys":    keys, // 返回已成功生成的 key
+			})
+			return
+		}
+		keys = append(keys, "sk-"+key)
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": fmt.Sprintf("成功添加%d个令牌", tokenCount),
+		"keys":    keys,
 	})
 	return
 }
