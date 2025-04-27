@@ -149,7 +149,7 @@ func InitDB() (err error) {
 			return nil
 		}
 		if common.UsingMySQL {
-			_, _ = sqlDB.Exec("ALTER TABLE channels MODIFY model_mapping TEXT;") // TODO: delete this line when most users have upgraded
+			//_, _ = sqlDB.Exec("ALTER TABLE channels MODIFY model_mapping TEXT;") // TODO: delete this line when most users have upgraded
 		}
 		common.SysLog("database migration started")
 		err = migrateDB()
@@ -202,46 +202,46 @@ func migrateDB() error {
 	if err != nil {
 		return err
 	}
-	err = DB.AutoMigrate(&Token{})
-	if err != nil {
-		return err
-	}
-	err = DB.AutoMigrate(&User{})
-	if err != nil {
-		return err
-	}
-	err = DB.AutoMigrate(&Option{})
-	if err != nil {
-		return err
-	}
-	err = DB.AutoMigrate(&Redemption{})
-	if err != nil {
-		return err
-	}
-	err = DB.AutoMigrate(&Ability{})
-	if err != nil {
-		return err
-	}
-	err = DB.AutoMigrate(&Log{})
-	if err != nil {
-		return err
-	}
-	err = DB.AutoMigrate(&Midjourney{})
-	if err != nil {
-		return err
-	}
-	err = DB.AutoMigrate(&TopUp{})
-	if err != nil {
-		return err
-	}
-	err = DB.AutoMigrate(&QuotaData{})
-	if err != nil {
-		return err
-	}
-	err = DB.AutoMigrate(&Task{})
-	if err != nil {
-		return err
-	}
+	//err = DB.AutoMigrate(&Token{})
+	//if err != nil {
+	//	return err
+	//}
+	//err = DB.AutoMigrate(&User{})
+	//if err != nil {
+	//	return err
+	//}
+	//err = DB.AutoMigrate(&Option{})
+	//if err != nil {
+	//	return err
+	//}
+	//err = DB.AutoMigrate(&Redemption{})
+	//if err != nil {
+	//	return err
+	//}
+	//err = DB.AutoMigrate(&Ability{})
+	//if err != nil {
+	//	return err
+	//}
+	//err = DB.AutoMigrate(&Log{})
+	//if err != nil {
+	//	return err
+	//}
+	//err = DB.AutoMigrate(&Midjourney{})
+	//if err != nil {
+	//	return err
+	//}
+	//err = DB.AutoMigrate(&TopUp{})
+	//if err != nil {
+	//	return err
+	//}
+	//err = DB.AutoMigrate(&QuotaData{})
+	//if err != nil {
+	//	return err
+	//}
+	//err = DB.AutoMigrate(&Task{})
+	//if err != nil {
+	//	return err
+	//}
 	err = DB.AutoMigrate(&Setup{})
 	common.SysLog("database migrated")
 	//err = createRootAccountIfNeed()
