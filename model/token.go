@@ -77,8 +77,8 @@ func FindTokensToExecuteNow() ([]Token, error) {
 
 	// 只取天卡，expired_time!=-1，interval_time>0，且当前已经到定时任务的时间
 	err := DB.Model(&Token{}).
-		Where("expired_time != ? AND interval_time > 0 AND trigger_last_time + interval_time * 86400 <= ?",
-			-1, now).
+		Where("expired_time != ? AND interval_time > 0 AND trigger_last_time + interval_time * 86400 <= ? AND status = ?",
+			-1, now, 1).
 		Find(&tokens).Error
 
 	return tokens, err
