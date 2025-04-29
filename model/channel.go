@@ -38,7 +38,14 @@ type Channel struct {
 	Setting           *string `json:"setting" gorm:"type:text"`
 	ParamOverride     *string `json:"param_override" gorm:"type:text"`
 	//是否角色转换.1为开启，2为关闭
-	IsConvertRole int64  `json:"is_convert_role" gorm:"default:2"`
+	IsConvertRole   int64  `json:"is_convert_role" gorm:"default:2"`
+	AuditEnabled    int    `json:"audit_enabled" gorm:"default:0"`                   // 是否开启内容审查，0关闭 1开启
+	AuditCategories string `json:"audit_categories" gorm:"type:text"`                // 审查类别，JSON字符串数组（如'["hate","violence"]'）
+	AuditUrl        string `json:"audit_url" gorm:"type:varchar(255);default:''"`    // 审查API接口地址
+	AuditApiKey     string `json:"audit_apikey" gorm:"type:varchar(255);default:''"` // 审查API密钥
+	AuditModel      string `json:"audit_model" gorm:"type:varchar(64);default:''"`   // 审查所用模型
+	// BillingSupplement 示例数据格式: [{"tokenCount":"30000","multiplied":2}]
+	BillingSupplement *string `json:"billing_supplement" gorm:"type:text" comment:'以JSON字符串存储的计费补充信息'`
 }
 
 func (channel *Channel) GetModels() []string {

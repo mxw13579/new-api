@@ -196,16 +196,26 @@ func TokenAuth() func(c *gin.Context) {
 			parts = strings.Split(key, "-")
 			key = parts[0]
 		}
-		token, err := model.ValidateUserToken(key)
+		var token *model.Token
+		// 检查path包含/v1/messages
+		if !strings.Contains(c.Request.URL.Path, "/v1/dashboard/billing/subscription") {
+			tokenValli, err := model.ValidateUserToken(key)
+			if err != nil {
+				abortWithOpenAiMessage(c, http.StatusUnauthorized, err.Error())
+				return
+			}
+			token = tokenValli
+		} else {
+			var id, err = model.GetTokenByKey(key, false)
+			if err == nil {
+				token = id
+			}
+		}
 		if token != nil {
 			id := c.GetInt("id")
 			if id == 0 {
 				c.Set("id", token.UserId)
 			}
-		}
-		if err != nil {
-			abortWithOpenAiMessage(c, http.StatusUnauthorized, err.Error())
-			return
 		}
 		userCache, err := model.GetUserCache(token.UserId)
 		if err != nil {
