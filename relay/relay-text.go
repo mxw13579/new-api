@@ -106,7 +106,13 @@ func TextHelper(c *gin.Context, channel *model.Channel) (openaiErr *dto.OpenAIEr
 			common.LogError(c, fmt.Sprintf("内容审查异常 failed: %s", err.Error()))
 			return service.OpenAIErrorWrapperLocal(err, "content_review_abnormality", http.StatusBadRequest)
 		} else if len(violated) > 0 {
-			common.LogError(c, fmt.Sprintf("内容审查异常，请不要进行如下行为 failed: %s", err.Error()))
+			common.LogError(c, fmt.Sprintf("内容审查异常，请不要进行如下行为 failed: %s", violated))
+			var msgBuilder strings.Builder
+			msgBuilder.WriteString("内容审查异常，请不要进行如下行为:\n")
+			for i, v := range violated {
+				msgBuilder.WriteString(fmt.Sprintf("%d. %s\n", i+1, v))
+			}
+			err := errors.New(msgBuilder.String())
 			return service.OpenAIErrorWrapperLocal(err, "content_review_abnormality", http.StatusBadRequest)
 		}
 	}
