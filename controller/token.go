@@ -1,12 +1,14 @@
 package controller
 
 import (
+	"crypto/rand"
 	"fmt"
 	"github.com/gin-gonic/gin"
 	"net/http"
 	"one-api/common"
 	"one-api/model"
 	"strconv"
+	"time"
 )
 
 func GetAllTokens(c *gin.Context) {
@@ -180,16 +182,35 @@ func AddTokens(c *gin.Context) {
 	if tokenCount < 1 {
 		tokenCount = 1
 	}
-	if len(token.Name) > 30 {
+	// 检查原始名称长度
+	originalName := token.Name
+	if len(originalName) > 30 {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
 			"message": "令牌名称过长",
 		})
 		return
 	}
+
 	userId := c.GetInt("id")
 	keys := make([]string, 0, tokenCount)
+
 	for i := 0; i < tokenCount; i++ {
+		// 生成UUID，确保名称唯一性
+		uniqueName := originalName
+		if tokenCount > 1 {
+			// 只在批量生成时添加UUID
+			uuid := generateUUID()
+
+			// 确保名称+UUID不超过120字符
+			maxNameLen := 120 - len(uuid) - 1 // 减1是为了分隔符"-"
+			if len(originalName) > maxNameLen {
+				uniqueName = originalName[:maxNameLen]
+			}
+
+			uniqueName = fmt.Sprintf("%s-%s", uniqueName, uuid)
+		}
+
 		key, err := common.GenerateKey()
 		if err != nil {
 			c.JSON(http.StatusOK, gin.H{
@@ -201,7 +222,7 @@ func AddTokens(c *gin.Context) {
 		}
 		cleanToken := model.Token{
 			UserId:             userId,
-			Name:               token.Name,
+			Name:               uniqueName,
 			Key:                key,
 			CreatedTime:        common.GetTimestamp(),
 			AccessedTime:       common.GetTimestamp(),
@@ -233,6 +254,20 @@ func AddTokens(c *gin.Context) {
 		"keys":    keys,
 	})
 	return
+}
+
+// 生成UUID函数
+func generateUUID() string {
+	// 使用crypto/rand生成随机字节
+	b := make([]byte, 16)
+	_, err := rand.Read(b)
+	if err != nil {
+		return fmt.Sprintf("%d", time.Now().UnixNano()) // 备用方案
+	}
+
+	// 格式化为UUID格式
+	return fmt.Sprintf("%x-%x-%x-%x-%x",
+		b[0:4], b[4:6], b[6:8], b[8:10], b[10:])
 }
 
 func DeleteToken(c *gin.Context) {

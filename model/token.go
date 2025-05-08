@@ -76,9 +76,11 @@ func FindTokensToExecuteNow() ([]Token, error) {
 	now := time.Now().Unix() // 当前时间戳
 
 	// 只取天卡，expired_time!=-1，interval_time>0，且当前已经到定时任务的时间
+	// 修正查询条件，正确处理interval_time=-1的情况
 	err := DB.Model(&Token{}).
-		Where("expired_time != ? AND interval_time > 0 AND trigger_last_time + interval_time * 86400 <= ? AND status = ?",
-			-1, now, 1).
+		Where("expired_time != ? AND expired_time > ? AND status = ?", -1, now, 1).
+		Where("((interval_time > 0) OR (interval_time = -1))").
+		Where("trigger_last_time + CASE WHEN interval_time = -1 THEN 86400 ELSE interval_time * 86400 END <= ?", now).
 		Find(&tokens).Error
 
 	return tokens, err
@@ -148,7 +150,7 @@ func ValidateUserToken(key string) (token *Token, err error) {
 				token.ExpiredTime = now + int64(token.IntervalTime)*intervalSeconds
 			} else {
 				// 没有设置IntervalTime,则默认为1
-				token.ExpiredTime = now + 1*86400
+				token.ExpiredTime = now + 1*intervalSeconds
 			}
 			token.TriggerLastTime = now
 			// 更新到数据库

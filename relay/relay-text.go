@@ -80,28 +80,50 @@ func TextHelper(c *gin.Context, channel *model.Channel) (openaiErr *dto.OpenAIEr
 	channelLocal, err := model.GetIsConvertRole(channel.Id)
 	//写入补充计费
 	c.Set("BillingSupplement", channelLocal.BillingSupplement)
+
+	messages := textRequest.Messages
+	var lastUserIdx, lastAssistantIdx int = -1, -1
+	for i := len(messages) - 1; i >= 0; i-- {
+		if lastUserIdx == -1 && messages[i].Role == "user" {
+			lastUserIdx = i
+			continue
+		}
+		if lastUserIdx != -1 && messages[i].Role == "assistant" {
+			lastAssistantIdx = i
+			break
+		}
+	}
+	var contentForAudit string
+	if lastUserIdx != -1 && lastAssistantIdx != -1 {
+		contentForAudit = fmt.Sprintf(
+			"assistant: %s\nuser: %s",
+			messages[lastAssistantIdx].Content,
+			messages[lastUserIdx].Content,
+		)
+	} else if lastUserIdx != -1 {
+		contentForAudit = fmt.Sprintf("user: %s", messages[lastUserIdx].Content)
+	} else {
+		contentForAudit = ""
+	}
+
 	isConvertRole := channelLocal.IsConvertRole
 	if isConvertRole == 1 {
-		//转换  assistant -》 user
-		messages := textRequest.Messages
+		//转换  system -》 user
 		for i := range messages {
 			role := messages[i].Role
-			if role == "assistant" {
+			if role == "system" {
 				messages[i].Role = "user"
 			}
 		}
 	}
 	//外部审查
 	if channelLocal.AuditEnabled == 1 {
-		all, err := io.ReadAll(c.Request.Body)
-		content := all
-
 		arr := strings.Split(channelLocal.AuditCategories, ",")
 		for i := range arr {
 			arr[i] = strings.TrimSpace(arr[i]) // 去掉每一项两端的空格
 		}
 		// 调用审查
-		violated, err := DoOpenAIModerationAuditing(string(content), arr, channelLocal.AuditUrl, channelLocal.AuditApiKey, channelLocal.AuditModel)
+		violated, err := DoOpenAIModerationAuditing(contentForAudit, arr, channelLocal.AuditUrl, channelLocal.AuditApiKey, channelLocal.AuditModel)
 		if err != nil {
 			common.LogError(c, fmt.Sprintf("内容审查异常 failed: %s", err.Error()))
 			return service.OpenAIErrorWrapperLocal(err, "content_review_abnormality", http.StatusBadRequest)
