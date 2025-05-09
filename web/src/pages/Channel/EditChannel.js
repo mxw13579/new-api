@@ -325,14 +325,34 @@ const EditChannel = (props) => {
     fetchModels().then();
     fetchGroups().then();
     if (isEdit) {
-      loadChannel().then(() => { });
+      loadChannel().then(() => {
+        // 处理已有的审核类别
+        if (data.audit_categories) {
+          try {
+            // 尝试作为JSON解析
+            JSON.parse(data.audit_categories);
+          } catch (e) {
+            // 如果不是有效的JSON，则转换旧格式
+            const oldCategories = data.audit_categories.split(',').map(item => item.trim()).filter(item => item);
+            // 转换为新格式 ["类别:0.9", ...]
+            const newCategories = oldCategories.map(cat => `${cat}:0.9`);
+            handleInputChange('audit_categories', JSON.stringify(newCategories));
+          }
+        } else {
+          // 设置为空数组
+          handleInputChange('audit_categories', '[]');
+        }
+      });
     } else {
       setInputs(originInputs);
+      handleInputChange('audit_categories', '[]');
       let localModels = getChannelModels(inputs.type);
       setBasicModels(localModels);
       setInputs((inputs) => ({ ...inputs, models: localModels }));
     }
   }, [props.editingChannel.id]);
+
+
 
   const submit = async () => {
     if (!isEdit && (inputs.name === '' || inputs.key === '')) {
@@ -357,6 +377,20 @@ const EditChannel = (props) => {
     if (localInputs.type === 18 && localInputs.other === '') {
       localInputs.other = 'v2.1';
     }
+    // 处理审核类别
+    if (localInputs.audit_enabled === 1 && localInputs.audit_categories) {
+      try {
+        // 确保是有效的JSON格式
+        const categories = JSON.parse(localInputs.audit_categories);
+        // 保持JSON字符串格式
+        localInputs.audit_categories = JSON.stringify(categories);
+      } catch (e) {
+        // 如果解析出错，设置为空数组
+        localInputs.audit_categories = '[]';
+      }
+    }
+
+
     let res;
     if (!Array.isArray(localInputs.models)) {
       showError(t('提交失败，请勿重复提交！'));
@@ -983,22 +1017,24 @@ const EditChannel = (props) => {
                 {/* 选择审核项 */}
                 <div style={{marginBottom: 10}}>
                   <Typography.Text strong>
-                    审核类别
+                    审核类别及阈值
                     <Typography.Text type="secondary" style={{fontSize: 12, marginLeft: 6}}>
-                      （可多选，至少选一项）
+                      （格式：类别:阈值，如hate:0.9）
                     </Typography.Text>
                   </Typography.Text>
                   <div>
-                    <Select
-                        style={{minWidth: 300, marginTop: 6}}
-                        multiple
-                        value={inputs.audit_categories ? inputs.audit_categories.split(',') : []}
-                        onChange={(vals) => {
-                          // vals为数组，保存为用,分隔的字符串
-                          handleInputChange("audit_categories", vals.join(","));
-                        }}
-                        placeholder="请选择需要拦截的内容类别"
-                        optionList={Object.entries({
+                    {/* 审核类别列表 */}
+                    {inputs.audit_categories ?
+                      JSON.parse(inputs.audit_categories || '[]').map((item, index) => {
+                        const [category, threshold] = item.split(':');
+
+                        // 获取所有已选类别，除了当前项
+                        const selectedCategories = JSON.parse(inputs.audit_categories || '[]')
+                          .filter((_, i) => i !== index)
+                          .map(item => item.split(':')[0]);
+
+                        // 过滤掉已选择的类别
+                        const availableOptions = Object.entries({
                           "harassment": "骚扰言论",
                           "harassment/threatening": "威胁性骚扰",
                           "hate": "仇恨言论",
@@ -1012,14 +1048,89 @@ const EditChannel = (props) => {
                           "sexual/minors": "未成年人涉性",
                           "violence": "暴力内容",
                           "violence/graphic": "血腥暴力内容"
-                        }).map(([value, label]) => ({
-                          value,
-                          label, // 这里只显示名称
-                        }))}
-                    />
-                  </div>
+                        }).filter(([value, _]) => !selectedCategories.includes(value) || value === category)
+                          .map(([value, label]) => ({
+                            value,
+                            label: `${value} - ${label}`,
+                          }));
 
+                        return (
+                          <div key={index} style={{display: 'flex', alignItems: 'center', gap: 8, marginTop: 8}}>
+                            <Select
+                              style={{width: 240}}
+                              value={category}
+                              onChange={(val) => {
+                                // 更新当前项的类别
+                                const currentCategories = JSON.parse(inputs.audit_categories || '[]');
+                                currentCategories[index] = `${val}:${threshold || '0.9'}`;
+                                handleInputChange("audit_categories", JSON.stringify(currentCategories));
+                              }}
+                              optionList={availableOptions}
+                            />
+                            <Input
+                              style={{width: 100}}
+                              placeholder="阈值"
+                              value={threshold}
+                              onChange={(val) => {
+                                // 更新当前项的阈值，仅接受数字和小数点
+                                const numericValue = val.replace(/[^0-9.]/g, '');
+                                const currentCategories = JSON.parse(inputs.audit_categories || '[]');
+                                currentCategories[index] = `${category}:${numericValue}`;
+                                handleInputChange("audit_categories", JSON.stringify(currentCategories));
+                              }}
+                            />
+                            <Button
+                              theme="borderless"
+                              type="danger"
+                              onClick={() => {
+                                // 删除此项
+                                const currentCategories = JSON.parse(inputs.audit_categories || '[]');
+                                currentCategories.splice(index, 1);
+                                handleInputChange("audit_categories", JSON.stringify(currentCategories));
+                              }}
+                            >
+                              删除
+                            </Button>
+                          </div>
+                        );
+                      }) : []
+                    }
+
+                    {/* 添加新审核类别按钮 */}
+                    <Button
+                      style={{marginTop: 10}}
+                      type="primary"
+                      theme="light"
+                      onClick={() => {
+                        const currentCategories = JSON.parse(inputs.audit_categories || '[]');
+
+                        // 获取所有已选类别
+                        const selectedCategories = currentCategories.map(item => item.split(':')[0]);
+
+                        // 查找第一个未被选择的类别
+                        const allCategories = [
+                          "harassment", "harassment/threatening", "hate", "hate/threatening",
+                          "illicit", "illicit/violent", "self-harm", "self-harm/instructions",
+                          "self-harm/intent", "sexual", "sexual/minors", "violence", "violence/graphic"
+                        ];
+
+                        const availableCategory = allCategories.find(cat => !selectedCategories.includes(cat));
+
+                        if (availableCategory) {
+                          currentCategories.push(`${availableCategory}:0.9`); // 添加一个默认项
+                          handleInputChange("audit_categories", JSON.stringify(currentCategories));
+                        } else {
+                          // 所有类别都已选择，显示提示
+                          showInfo('所有审核类别已添加');
+                        }
+                      }}
+                    >
+                      添加审核类别
+                    </Button>
+                  </div>
                 </div>
+
+
                 {/* 审查API Key */}
                 <div style={{marginBottom: 10}}>
                   <Typography.Text strong>

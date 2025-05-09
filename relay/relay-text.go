@@ -116,14 +116,33 @@ func TextHelper(c *gin.Context, channel *model.Channel) (openaiErr *dto.OpenAIEr
 			}
 		}
 	}
-	//外部审查
+
+	// 外部审查
 	if channelLocal.AuditEnabled == 1 {
-		arr := strings.Split(channelLocal.AuditCategories, ",")
-		for i := range arr {
-			arr[i] = strings.TrimSpace(arr[i]) // 去掉每一项两端的空格
+		//计时
+		startAudit := time.Now()
+		common.LogInfo(c, fmt.Sprintf("外部审查开始"))
+
+		// 解析审查类别和阈值
+		var auditCategories []string
+		if channelLocal.AuditCategories != "" {
+			// 尝试先按JSON数组格式解析
+			if err := json.Unmarshal([]byte(channelLocal.AuditCategories), &auditCategories); err != nil {
+				// 解析失败，尝试按逗号分隔的字符串解析
+				arr := strings.Split(channelLocal.AuditCategories, ",")
+				for i := range arr {
+					auditCategories = append(auditCategories, strings.TrimSpace(arr[i]))
+				}
+			}
 		}
+
 		// 调用审查
-		violated, err := DoOpenAIModerationAuditing(contentForAudit, arr, channelLocal.AuditUrl, channelLocal.AuditApiKey, channelLocal.AuditModel)
+		violated, err := DoOpenAIModerationAuditing(contentForAudit, auditCategories, channelLocal.AuditUrl, channelLocal.AuditApiKey, channelLocal.AuditModel)
+
+		// 计算审查耗时
+		auditCost := time.Since(startAudit)
+		common.LogInfo(c, fmt.Sprintf("外部审查耗时: %v", auditCost))
+
 		if err != nil {
 			common.LogError(c, fmt.Sprintf("内容审查异常 failed: %s", err.Error()))
 			return service.OpenAIErrorWrapperLocal(err, "content_review_abnormality", http.StatusBadRequest)
@@ -137,6 +156,8 @@ func TextHelper(c *gin.Context, channel *model.Channel) (openaiErr *dto.OpenAIEr
 			err := errors.New(msgBuilder.String())
 			return service.OpenAIErrorWrapperLocal(err, "content_review_abnormality", http.StatusBadRequest)
 		}
+
+		common.LogInfo(c, fmt.Sprintf("外部审查结束"))
 	}
 
 	if err != nil {

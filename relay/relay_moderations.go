@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 )
 
@@ -35,10 +36,10 @@ type ModerationResponse struct {
 	} `json:"results"`
 }
 
-// DoOpenAIModerationAuditing 内容审查主方法
+// DoOpenAIModerationAuditing 内容审查主方法 - 基于阈值的版本
 func DoOpenAIModerationAuditing(
 	content string, // 需要审查的文本内容
-	auditCategories []string, // 需要检查的审查类别，如[]string{"hate", "violence"}
+	auditCategories []string, // 需要检查的审查类别与阈值，如[]string{"hate:0.9", "violence:0.8"}
 	auditUrl string, // 审查API URL，如"https://api.openai.com/v1/moderations"
 	auditApiKey string, // 审查API密钥
 	auditModel string, // 审查模型（可选，若空用默认模型）
@@ -53,13 +54,15 @@ func DoOpenAIModerationAuditing(
 	if auditApiKey == "" {
 		return nil, errors.New("API key不能为空")
 	}
+
 	// 构建请求体
-	body := map[string]string{
+	body := map[string]interface{}{
 		"input": content,
 	}
 	if auditModel != "" {
 		body["model"] = auditModel
 	}
+
 	bodyBytes, _ := json.Marshal(body)
 	req, err := http.NewRequest("POST", auditUrl, bytes.NewBuffer(bodyBytes))
 	if err != nil {
@@ -67,6 +70,7 @@ func DoOpenAIModerationAuditing(
 	}
 	req.Header.Set("Authorization", "Bearer "+auditApiKey)
 	req.Header.Set("Content-Type", "application/json")
+
 	// 发起请求
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -74,9 +78,11 @@ func DoOpenAIModerationAuditing(
 	}
 	defer resp.Body.Close()
 	bs, _ := io.ReadAll(resp.Body)
+	fmt.Println("OpenAI Moderation API 原始响应：", string(bs))
 	if resp.StatusCode != 200 {
 		return nil, fmt.Errorf("OpenAI Moderation接口异常: %s", bs)
 	}
+
 	// 解析响应
 	var modResp ModerationResponse
 	if err := json.Unmarshal(bs, &modResp); err != nil {
@@ -86,25 +92,50 @@ func DoOpenAIModerationAuditing(
 		return nil, errors.New("内容审查无返回结果")
 	}
 
-	// 收集命中的违规项
-	var violated []string
+	// 解析审查类别和阈值
+	categoryThresholds := make(map[string]float64)
 
-	if modResp.Results[0].Flagged == false {
-		return violated, nil // 空数组表示审查通过，无违规
-	}
+	for _, cat := range auditCategories {
+		cat = strings.TrimSpace(cat)
+		if cat == "" {
+			continue
+		}
 
-	categories := modResp.Results[0].Categories
-	// 配置的审核项去重并转set
-	wantedSet := map[string]struct{}{}
-	for _, c := range auditCategories {
-		wantedSet[strings.TrimSpace(c)] = struct{}{}
-	}
-
-	for cat, val := range categories {
-		if _, ok := wantedSet[cat]; ok && val {
-			desc := ModerationCategoryMap[cat]
-			violated = append(violated, desc)
+		parts := strings.Split(cat, ":")
+		if len(parts) == 1 {
+			// 未指定阈值，跳过此类别
+			continue
+		} else if len(parts) == 2 {
+			// 已指定阈值
+			threshold, err := strconv.ParseFloat(parts[1], 64)
+			if err != nil {
+				// 解析阈值失败，跳过此类别
+				continue
+			} else {
+				categoryThresholds[parts[0]] = threshold
+			}
 		}
 	}
+
+	// 收集达到阈值的违规项
+	var violated []string
+	categoryScores := modResp.Results[0].CategoryScores
+
+	// 如果没有配置任何有效的审核类别+阈值，直接返回空数组表示通过
+	if len(categoryThresholds) == 0 {
+		return violated, nil
+	}
+
+	// 检查每个配置的类别是否超过阈值
+	for cat, threshold := range categoryThresholds {
+		if score, exists := categoryScores[cat]; exists && score >= threshold {
+			desc := ModerationCategoryMap[cat]
+			if desc == "" {
+				desc = cat // 如果没有找到描述，就使用类别名称
+			}
+			violated = append(violated, fmt.Sprintf("%s (分数: %.4f, 阈值: %.4f)", desc, score, threshold))
+		}
+	}
+
 	return violated, nil
 }
