@@ -67,6 +67,18 @@ func getAndValidateTextRequest(c *gin.Context, relayInfo *relaycommon.RelayInfo)
 			return nil, errors.New("field instruction is required")
 		}
 	}
+
+	m := textRequest.Model
+
+	// 检查模型名称是否以 -noStream 结尾
+	if strings.HasSuffix(m, "-noStream") {
+		// 替换流式传输为非流
+		textRequest.Stream = false
+		// 移除 -noStream 后缀以获取正确的模型名称
+		textRequest.Model = strings.TrimSuffix(m, "-noStream")
+		relayInfo.OriginModelName = strings.TrimSuffix(m, "-noStream")
+	}
+
 	relayInfo.IsStream = textRequest.Stream
 	return textRequest, nil
 }
@@ -80,16 +92,6 @@ func TextHelper(c *gin.Context, channel *model.Channel) (openaiErr *dto.OpenAIEr
 	channelLocal, err := model.GetIsConvertRole(channel.Id)
 	//写入补充计费
 	c.Set("BillingSupplement", channelLocal.BillingSupplement)
-
-	m := textRequest.Model
-
-	// 检查模型名称是否以 -noStream 结尾
-	if strings.HasSuffix(m, "-noStream") {
-		// 替换流式传输为非流
-		textRequest.Stream = false
-		// 移除 -noStream 后缀以获取正确的模型名称
-		textRequest.Model = strings.TrimSuffix(m, "-noStream")
-	}
 
 	messages := textRequest.Messages
 	var lastUserIdx, lastAssistantIdx int = -1, -1

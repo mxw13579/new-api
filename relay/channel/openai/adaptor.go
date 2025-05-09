@@ -174,6 +174,16 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 			}
 		}
 	}
+	if strings.HasPrefix(request.Model, "gemini") {
+		request.Temperature = nil
+		if strings.HasSuffix(request.Model, "-noStream") {
+			request.Stream = false
+			request.Model = strings.TrimSuffix(request.Model, "-noStream")
+		}
+		info.ReasoningEffort = request.ReasoningEffort
+		info.UpstreamModelName = request.Model
+
+	}
 
 	return request, nil
 }
