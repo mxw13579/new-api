@@ -83,12 +83,12 @@ func TextHelper(c *gin.Context, channel *model.Channel) (openaiErr *dto.OpenAIEr
 
 	m := textRequest.Model
 
-	// 检查模型名称是否以 -nothinking 结尾
-	if strings.HasSuffix(m, "-nothinking") {
+	// 检查模型名称是否以 -noStream 结尾
+	if strings.HasSuffix(m, "-noStream") {
 		// 替换流式传输为非流
 		textRequest.Stream = false
-		// 移除 -nothinking 后缀以获取正确的模型名称
-		textRequest.Model = strings.TrimSuffix(m, "-nothinking")
+		// 移除 -noStream 后缀以获取正确的模型名称
+		textRequest.Model = strings.TrimSuffix(m, "-noStream")
 	}
 
 	messages := textRequest.Messages
