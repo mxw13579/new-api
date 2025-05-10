@@ -198,7 +198,9 @@ func TokenAuth() func(c *gin.Context) {
 		}
 		var token *model.Token
 		// 检查path包含/v1/messages
-		if !strings.Contains(c.Request.URL.Path, "/v1/dashboard/billing/subscription") {
+		if !strings.Contains(c.Request.URL.Path, "/v1/dashboard/billing/subscription") &&
+			!strings.Contains(c.Request.URL.Path, "/v1/dashboard/billing/usage") &&
+			!strings.Contains(c.Request.URL.Path, "/api/log/token") {
 			tokenValli, err := model.ValidateUserToken(key)
 			if err != nil {
 				abortWithOpenAiMessage(c, http.StatusUnauthorized, err.Error())

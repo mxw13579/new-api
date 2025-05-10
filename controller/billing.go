@@ -10,6 +10,7 @@ import (
 func GetSubscription(c *gin.Context) {
 	var remainQuota int
 	var usedQuota int
+	var totelQuota int
 	var err error
 	var token *model.Token
 	var expiredTime int64
@@ -19,6 +20,7 @@ func GetSubscription(c *gin.Context) {
 		expiredTime = token.ExpiredTime
 		remainQuota = token.RemainQuota
 		usedQuota = token.UsedQuota
+		totelQuota = token.IntervalQuota
 	} else {
 		userId := c.GetInt("id")
 		remainQuota, err = model.GetUserQuota(userId, false)
@@ -37,7 +39,8 @@ func GetSubscription(c *gin.Context) {
 		})
 		return
 	}
-	quota := remainQuota + usedQuota
+	//quota := remainQuota + usedQuota
+	quota := totelQuota
 	amount := float64(quota)
 	if common.DisplayInCurrencyEnabled {
 		amount /= common.QuotaPerUnit
@@ -50,6 +53,8 @@ func GetSubscription(c *gin.Context) {
 		HasPaymentMethod:   true,
 		SoftLimitUSD:       amount,
 		HardLimitUSD:       amount,
+		RemainQuota:        int64(remainQuota),
+		UsedQuota:          int64(usedQuota),
 		SystemHardLimitUSD: amount,
 		AccessUntil:        expiredTime,
 	}
