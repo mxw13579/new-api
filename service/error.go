@@ -29,7 +29,12 @@ func MidjourneyErrorWithStatusCodeWrapper(code int, desc string, statusCode int)
 func OpenAIErrorWrapper(err error, code string, statusCode int) *dto.OpenAIErrorWithStatusCode {
 	text := err.Error()
 	lowerText := strings.ToLower(text)
-	if strings.Contains(lowerText, "post") || strings.Contains(lowerText, "dial") || strings.Contains(lowerText, "http") {
+	if strings.Contains(lowerText, "post") ||
+		strings.Contains(lowerText, "dial") ||
+		strings.Contains(lowerText, "http") ||
+		strings.Contains(lowerText, "443") ||
+		strings.Contains(lowerText, "app") ||
+		strings.Contains(lowerText, "online") {
 		common.SysLog(fmt.Sprintf("error: %s", text))
 		text = "请求上游地址失败"
 	}
