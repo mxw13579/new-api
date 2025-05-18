@@ -103,6 +103,24 @@ const TokensTable = () => {
               {t('季卡')}
             </Tag>
         );
+      case 8:
+        return (
+          <Tag color='grey' size='large'>
+            {t('周不刷新卡')}
+          </Tag>
+        );
+      case 9:
+        return (
+          <Tag color='grey' size='large'>
+            {t('月不刷新卡')}
+          </Tag>
+        );
+      case 10:
+        return (
+          <Tag color='grey' size='large'>
+            {t('季不刷新卡')}
+          </Tag>
+        );
       default:
         return (
             <Tag color='black' size='large'>
@@ -202,7 +220,10 @@ const TokensTable = () => {
           t('周卡'),
           t('月卡'),
           t('季卡'),
-          t('年卡')
+          t('年卡'),
+          t('周不刷新卡'),
+          t('月不刷新卡'),
+          t('季不刷新卡')
         ];
         // return <div>{units[text] || text}</div>;
         return (
