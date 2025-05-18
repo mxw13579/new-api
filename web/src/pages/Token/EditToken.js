@@ -478,7 +478,10 @@ const EditToken = (props) => {
                 {value: 3, label: t('天卡')},
                 {value: 4, label: t('周卡')},
                 {value: 5, label: t('月卡')},
-                {value: 6, label: t('季卡')}
+                {value: 6, label: t('季卡')},
+                {value: 8, label: t('周不刷新卡')},
+                {value: 9, label: t('月不刷新卡')},
+                {value: 10, label: t('季不刷新卡')}
               ]}
           />
           <Banner

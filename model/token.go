@@ -31,7 +31,7 @@ type Token struct {
 	IntervalQuota      int            `json:"interval_quota" gorm:"bigint"`    // 刷新配额
 	IntervalTime       int            `json:"interval_time" gorm:"default:0"`  //间隔时间，与间隔单位组合使用，可与token类型组合使用，如1天卡、三天卡等等
 	TriggerLastTime    int64          `json:"trigger_last_time" gorm:"bigint"` //上次执行时间
-	IntervalUnit       int            `json:"interval_unit" gorm:"default:3"`  //token类型，默认为天，3 天、4 周、5 月、6 季度
+	IntervalUnit       int            `json:"interval_unit" gorm:"default:3"`  //token类型，默认为天，3 天、4 周、5 月、6 季度、7年卡、8周不刷新次卡、9月不刷新次卡、10季不刷新卡
 	DeletedAt          gorm.DeletedAt `gorm:"index"`
 }
 
@@ -112,7 +112,13 @@ func GetIntervalSeconds(unit int) int64 {
 	case 6: // 季度（90天）
 		return 7776000
 	case 7: // 年（365天）
-		return 31536000
+		return 31536000 // 年（365天）
+	case 8: // 周不刷新次卡
+		return 604800
+	case 9: // 月不刷新次卡
+		return 2592000
+	case 10: // 季不刷新次卡
+		return 7776000
 	default:
 		return 86400 // 默认按天
 	}
@@ -130,6 +136,12 @@ func GetIntervalString(unit int) string {
 		return "季卡"
 	case 7: // 年（365天）
 		return "年卡"
+	case 8: // 年（365天）
+		return "周不刷新次卡"
+	case 9: // 年（365天）
+		return "月不刷新次卡"
+	case 10: // 年（365天）
+		return "季不刷新次卡"
 	default:
 		return "天卡" // 默认按天
 	}
@@ -145,14 +157,21 @@ func ValidateUserToken(key string) (token *Token, err error) {
 		if token.ExpiredTime == -1 {
 			// 需要激活
 			now := common.GetTimestamp()
-			intervalSeconds := GetIntervalSeconds(token.IntervalUnit)
+			unit := token.IntervalUnit
+			intervalSeconds := GetIntervalSeconds(unit)
 			if token.IntervalTime > 0 {
 				token.ExpiredTime = now + int64(token.IntervalTime)*intervalSeconds
 			} else {
 				// 没有设置IntervalTime,则默认为1
 				token.ExpiredTime = now + 1*intervalSeconds
 			}
-			token.TriggerLastTime = now
+			triggerLastTime := now
+			//为不刷新卡时，上次执行时间为结束时间
+			if unit == 8 || unit == 9 || unit == 10 {
+				triggerLastTime = token.ExpiredTime
+			}
+			token.TriggerLastTime = triggerLastTime
+
 			// 更新到数据库
 			if err := token.Update(); err != nil {
 				common.SysError("激活token时数据库更新失败: " + err.Error())
