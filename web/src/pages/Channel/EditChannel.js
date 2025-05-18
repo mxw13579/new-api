@@ -25,8 +25,10 @@ import {
   Checkbox,
   Banner,
   Modal,
+  ImagePreview,
 } from '@douyinfe/semi-ui';
 import { getChannelModels, loadChannelModels } from '../../components/utils.js';
+import { IconHelpCircle } from '@douyinfe/semi-icons';
 import axios from 'axios';
 import { Switch } from 'antd';
 
@@ -109,6 +111,8 @@ const EditChannel = (props) => {
   const [basicModels, setBasicModels] = useState([]);
   const [fullModels, setFullModels] = useState([]);
   const [customModel, setCustomModel] = useState('');
+  const [modalImageUrl, setModalImageUrl] = useState('');
+  const [isModalOpenurl, setIsModalOpenurl] = useState(false);
   const handleInputChange = (name, value) => {
     if (name === 'base_url' && value.endsWith('/v1')) {
       Modal.confirm({
@@ -533,44 +537,67 @@ const EditChannel = (props) => {
               </div>
           )}
           {inputs.type === 3 && (
-              <>
-                <div style={{marginTop: 10}}>
-                  <Banner
-                      type={'warning'}
-                      description={t('注意，系统请求的时模型名称中的点会被剔除，例如：gpt-4.5-preview会请求为gpt-45-preview，所以部署的模型名称需要去掉点')}
-                  ></Banner>
-                </div>
-                <div style={{marginTop: 10}}>
-                  <Typography.Text strong>
-                    AZURE_OPENAI_ENDPOINT：
-                  </Typography.Text>
-                </div>
-                <Input
-                    label='AZURE_OPENAI_ENDPOINT'
-                    name='azure_base_url'
-                    placeholder={t(
-                        '请输入 AZURE_OPENAI_ENDPOINT，例如：https://docs-test-001.openai.azure.com',
-                    )}
-                    onChange={(value) => {
-                      handleInputChange('base_url', value);
-                    }}
-                    value={inputs.base_url}
-                    autoComplete='new-password'
-                />
-                <div style={{marginTop: 10}}>
-                  <Typography.Text strong>{t('默认 API 版本')}：</Typography.Text>
-                </div>
-                <Input
-                    label={t('默认 API 版本')}
-                    name='azure_other'
-                    placeholder={t('请输入默认 API 版本，例如：2024-12-01-preview')}
-                    onChange={(value) => {
-                      handleInputChange('other', value);
-                    }}
-                    value={inputs.other}
-                    autoComplete='new-password'
-                />
-              </>
+            <>
+              <div style={{ marginTop: 10 }}>
+                <Banner
+                  type={'warning'}
+                  description={
+                    <>
+                      {t(
+                        '2025年5月10日后添加的渠道，不需要再在部署的时候移除模型名称中的"."',
+                      )}
+                      {/*<br />*/}
+                      {/*<Typography.Text*/}
+                      {/*  style={{*/}
+                      {/*    color: 'rgba(var(--semi-blue-5), 1)',*/}
+                      {/*    userSelect: 'none',*/}
+                      {/*    cursor: 'pointer',*/}
+                      {/*  }}*/}
+                      {/*  onClick={() => {*/}
+                      {/*    setModalImageUrl(*/}
+                      {/*      '/azure_model_name.png',*/}
+                      {/*    );*/}
+                      {/*    setIsModalOpenurl(true)*/}
+
+                      {/*  }}*/}
+                      {/*>*/}
+                      {/*  {t('查看示例')}*/}
+                      {/*</Typography.Text>*/}
+                    </>
+                  }
+                ></Banner>
+              </div>
+              <div style={{ marginTop: 10 }}>
+                <Typography.Text strong>
+                  AZURE_OPENAI_ENDPOINT：
+                </Typography.Text>
+              </div>
+              <Input
+                label='AZURE_OPENAI_ENDPOINT'
+                name='azure_base_url'
+                placeholder={t(
+                  '请输入 AZURE_OPENAI_ENDPOINT，例如：https://docs-test-001.openai.azure.com',
+                )}
+                onChange={(value) => {
+                  handleInputChange('base_url', value);
+                }}
+                value={inputs.base_url}
+                autoComplete='new-password'
+              />
+              <div style={{ marginTop: 10 }}>
+                <Typography.Text strong>{t('默认 API 版本')}：</Typography.Text>
+              </div>
+              <Input
+                label={t('默认 API 版本')}
+                name='azure_other'
+                placeholder={t('请输入默认 API 版本，例如：2025-04-01-preview')}
+                onChange={(value) => {
+                  handleInputChange('other', value);
+                }}
+                value={inputs.other}
+                autoComplete='new-password'
+              />
+            </>
           )}
           {inputs.type === 8 && (
               <>
@@ -625,27 +652,36 @@ const EditChannel = (props) => {
               value={inputs.name}
               autoComplete='new-password'
           />
-          {inputs.type !== 3 && inputs.type !== 8 && inputs.type !== 22 && inputs.type !== 36 && inputs.type !== 45 && (
+          {inputs.type !== 3 &&
+            inputs.type !== 8 &&
+            inputs.type !== 22 &&
+            inputs.type !== 36 &&
+            inputs.type !== 45 && (
               <>
-                <div style={{marginTop: 10}}>
+                <div style={{ marginTop: 10 }}>
                   <Typography.Text strong>{t('API地址')}：</Typography.Text>
                 </div>
                 <Tooltip
-                    content={t('对于官方渠道，new-api已经内置地址，除非是第三方代理站点或者Azure的特殊接入地址，否则不需要填写')}>
+                  content={t(
+                    '对于官方渠道，new-api已经内置地址，除非是第三方代理站点或者Azure的特殊接入地址，否则不需要填写',
+                  )}
+                >
                   <Input
-                      label={t('API地址')}
-                      name="base_url"
-                      placeholder={t('此项可选，用于通过自定义API地址来进行 API 调用，末尾不要带/v1和/')}
-                      onChange={(value) => {
-                        handleInputChange('base_url', value);
-                      }}
-                      value={inputs.base_url}
-                      autoComplete="new-password"
+                    label={t('API地址')}
+                    name='base_url'
+                    placeholder={t(
+                      '此项可选，用于通过自定义API地址来进行 API 调用，末尾不要带/v1和/',
+                    )}
+                    onChange={(value) => {
+                      handleInputChange('base_url', value);
+                    }}
+                    value={inputs.base_url}
+                    autoComplete='new-password'
                   />
                 </Tooltip>
               </>
-          )}
-          <div style={{marginTop: 10}}>
+            )}
+          <div style={{ marginTop: 10 }}>
             <Typography.Text strong>{t('密钥')}：</Typography.Text>
           </div>
           {batch ? (
@@ -795,42 +831,42 @@ const EditChannel = (props) => {
               </>
           )}
           {inputs.type === 41 && (
-              <>
-                <div style={{marginTop: 10}}>
-                  <Typography.Text strong>{t('部署地区')}：</Typography.Text>
-                </div>
-                <TextArea
-                    name='other'
-                    placeholder={t(
-                        '请输入部署地区，例如：us-central1\n支持使用模型映射格式\n' +
-                        '{\n' +
-                        '    "default": "us-central1",\n' +
-                        '    "claude-3-5-sonnet-20240620": "europe-west1"\n' +
-                        '}',
-                    )}
-                    autosize={{minRows: 2}}
-                    onChange={(value) => {
-                      handleInputChange('other', value);
-                    }}
-                    value={inputs.other}
-                    autoComplete='new-password'
-                />
-                <Typography.Text
-                    style={{
-                      color: 'rgba(var(--semi-blue-5), 1)',
-                      userSelect: 'none',
-                      cursor: 'pointer',
-                    }}
-                    onClick={() => {
-                      handleInputChange(
-                          'other',
-                          JSON.stringify(REGION_EXAMPLE, null, 2),
-                      );
-                    }}
-                >
-                  {t('填入模板')}
-                </Typography.Text>
-              </>
+            <>
+              <div style={{ marginTop: 10 }}>
+                <Typography.Text strong>{t('部署地区')}：</Typography.Text>
+              </div>
+              <TextArea
+                name='other'
+                placeholder={t(
+                  '请输入部署地区，例如：us-central1\n支持使用模型映射格式\n' +
+                    '{\n' +
+                    '    "default": "us-central1",\n' +
+                    '    "claude-3-5-sonnet-20240620": "europe-west1"\n' +
+                    '}',
+                )}
+                autosize={{ minRows: 2 }}
+                onChange={(value) => {
+                  handleInputChange('other', value);
+                }}
+                value={inputs.other}
+                autoComplete='new-password'
+              />
+              <Typography.Text
+                style={{
+                  color: 'rgba(var(--semi-blue-5), 1)',
+                  userSelect: 'none',
+                  cursor: 'pointer',
+                }}
+                onClick={() => {
+                  handleInputChange(
+                    'other',
+                    JSON.stringify(REGION_EXAMPLE, null, 2),
+                  );
+                }}
+              >
+                {t('填入模板')}
+              </Typography.Text>
+            </>
           )}
           {inputs.type === 21 && (
               <>
@@ -850,22 +886,38 @@ const EditChannel = (props) => {
               </>
           )}
           {inputs.type === 39 && (
-              <>
-                <div style={{marginTop: 10}}>
-                  <Typography.Text strong>Account ID：</Typography.Text>
-                </div>
-                <Input
-                    name='other'
-                    placeholder={
-                      '请输入Account ID，例如：d6b5da8hk1awo8nap34ube6gh'
-                    }
-                    onChange={(value) => {
-                      handleInputChange('other', value);
-                    }}
-                    value={inputs.other}
-                    autoComplete='new-password'
-                />
-              </>
+            <>
+              <div style={{ marginTop: 10 }}>
+                <Typography.Text strong>Account ID：</Typography.Text>
+              </div>
+              <Input
+                name='other'
+                placeholder={
+                  '请输入Account ID，例如：d6b5da8hk1awo8nap34ube6gh'
+                }
+                onChange={(value) => {
+                  handleInputChange('other', value);
+                }}
+                value={inputs.other}
+                autoComplete='new-password'
+              />
+            </>
+          )}
+          {inputs.type === 49 && (
+            <>
+              <div style={{ marginTop: 10 }}>
+                <Typography.Text strong>智能体ID：</Typography.Text>
+              </div>
+              <Input
+                name='other'
+                placeholder={'请输入智能体ID，例如：7342866812345'}
+                onChange={(value) => {
+                  handleInputChange('other', value);
+                }}
+                value={inputs.other}
+                autoComplete='new-password'
+              />
+            </>
           )}
           <div style={{marginTop: 10}}>
             <Typography.Text strong>{t('模型')}：</Typography.Text>
@@ -1428,6 +1480,11 @@ const EditChannel = (props) => {
             {t('填入模板')}
           </Typography.Text>
         </Spin>
+        <ImagePreview
+          src={modalImageUrl}
+          visible={isModalOpenurl}
+          onVisibleChange={(visible) => setIsModalOpenurl(visible)}
+        />
       </SideSheet>
     </>
   );

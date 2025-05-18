@@ -391,6 +391,7 @@ func removeAdditionalPropertiesWithDepth(schema interface{}, depth int) interfac
 	}
 	// 删除所有的title字段
 	delete(v, "title")
+	delete(v, "$schema")
 	// 如果type不为object和array，则直接返回
 	if typeVal, exists := v["type"]; !exists || (typeVal != "object" && typeVal != "array") {
 		return schema
@@ -670,6 +671,7 @@ func GeminiChatStreamHandler(c *gin.Context, resp *http.Response, info *relaycom
 			usage.PromptTokens = geminiResponse.UsageMetadata.PromptTokenCount
 			usage.CompletionTokens = geminiResponse.UsageMetadata.CandidatesTokenCount
 			usage.CompletionTokenDetails.ReasoningTokens = geminiResponse.UsageMetadata.ThoughtsTokenCount
+			usage.TotalTokens = geminiResponse.UsageMetadata.TotalTokenCount
 		}
 		err = helper.ObjectData(c, response)
 		if err != nil {
@@ -690,9 +692,8 @@ func GeminiChatStreamHandler(c *gin.Context, resp *http.Response, info *relaycom
 		}
 	}
 
-	usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
 	usage.PromptTokensDetails.TextTokens = usage.PromptTokens
-	//usage.CompletionTokenDetails.TextTokens = usage.CompletionTokens
+	usage.CompletionTokens = usage.TotalTokens - usage.PromptTokens
 
 	if info.ShouldIncludeUsage {
 		response = helper.GenerateFinalUsageResponse(id, createAt, info.UpstreamModelName, *usage)
@@ -740,6 +741,7 @@ func GeminiChatHandler(c *gin.Context, resp *http.Response, info *relaycommon.Re
 	}
 
 	usage.CompletionTokenDetails.ReasoningTokens = geminiResponse.UsageMetadata.ThoughtsTokenCount
+	usage.CompletionTokens = usage.TotalTokens - usage.PromptTokens
 
 	fullTextResponse.Usage = usage
 	jsonResponse, err := json.Marshal(fullTextResponse)

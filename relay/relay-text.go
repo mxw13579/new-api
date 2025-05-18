@@ -19,6 +19,7 @@ import (
 	"one-api/service"
 	"one-api/setting"
 	"one-api/setting/model_setting"
+	"one-api/setting/operation_setting"
 	"sort"
 	"strings"
 	"time"
@@ -290,6 +291,7 @@ func TextHelper(c *gin.Context, channel *model.Channel) (openaiErr *dto.OpenAIEr
 
 	var httpResp *http.Response
 	resp, err := adaptor.DoRequest(c, relayInfo, requestBody)
+
 	if err != nil {
 		return service.OpenAIErrorWrapper(err, "do_request_failed", http.StatusInternalServerError)
 	}
@@ -428,12 +430,14 @@ func postConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo,
 	useTimeSeconds := time.Now().Unix() - relayInfo.StartTime.Unix()
 	promptTokens := usage.PromptTokens
 	cacheTokens := usage.PromptTokensDetails.CachedTokens
+	imageTokens := usage.PromptTokensDetails.ImageTokens
 	completionTokens := usage.CompletionTokens
 	modelName := relayInfo.OriginModelName
 
 	tokenName := ctx.GetString("token_name")
 	completionRatio := priceData.CompletionRatio
 	cacheRatio := priceData.CacheRatio
+	imageRatio := priceData.ImageRatio
 	modelRatio := priceData.ModelRatio
 	groupRatio := priceData.GroupRatio
 	modelPrice := priceData.ModelPrice
@@ -441,9 +445,11 @@ func postConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo,
 	// Convert values to decimal for precise calculation
 	dPromptTokens := decimal.NewFromInt(int64(promptTokens))
 	dCacheTokens := decimal.NewFromInt(int64(cacheTokens))
+	dImageTokens := decimal.NewFromInt(int64(imageTokens))
 	dCompletionTokens := decimal.NewFromInt(int64(completionTokens))
 	dCompletionRatio := decimal.NewFromFloat(completionRatio)
 	dCacheRatio := decimal.NewFromFloat(cacheRatio)
+	dImageRatio := decimal.NewFromFloat(imageRatio)
 	dModelRatio := decimal.NewFromFloat(modelRatio)
 	dGroupRatio := decimal.NewFromFloat(groupRatio)
 	dModelPrice := decimal.NewFromFloat(modelPrice)
@@ -451,11 +457,46 @@ func postConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo,
 
 	ratio := dModelRatio.Mul(dGroupRatio)
 
+	// openai web search 工具计费
+	var dWebSearchQuota decimal.Decimal
+	var webSearchPrice float64
+	if relayInfo.ResponsesUsageInfo != nil {
+		if webSearchTool, exists := relayInfo.ResponsesUsageInfo.BuiltInTools[dto.BuildInToolWebSearchPreview]; exists && webSearchTool.CallCount > 0 {
+			// 计算 web search 调用的配额 (配额 = 价格 * 调用次数 / 1000 * 分组倍率)
+			webSearchPrice = operation_setting.GetWebSearchPricePerThousand(modelName, webSearchTool.SearchContextSize)
+			dWebSearchQuota = decimal.NewFromFloat(webSearchPrice).
+				Mul(decimal.NewFromInt(int64(webSearchTool.CallCount))).
+				Div(decimal.NewFromInt(1000)).Mul(dGroupRatio).Mul(dQuotaPerUnit)
+			extraContent += fmt.Sprintf("Web Search 调用 %d 次，上下文大小 %s，调用花费 $%s",
+				webSearchTool.CallCount, webSearchTool.SearchContextSize, dWebSearchQuota.String())
+		}
+	}
+	// file search tool 计费
+	var dFileSearchQuota decimal.Decimal
+	var fileSearchPrice float64
+	if relayInfo.ResponsesUsageInfo != nil {
+		if fileSearchTool, exists := relayInfo.ResponsesUsageInfo.BuiltInTools[dto.BuildInToolFileSearch]; exists && fileSearchTool.CallCount > 0 {
+			fileSearchPrice = operation_setting.GetFileSearchPricePerThousand()
+			dFileSearchQuota = decimal.NewFromFloat(fileSearchPrice).
+				Mul(decimal.NewFromInt(int64(fileSearchTool.CallCount))).
+				Div(decimal.NewFromInt(1000)).Mul(dGroupRatio).Mul(dQuotaPerUnit)
+			extraContent += fmt.Sprintf("File Search 调用 %d 次，调用花费 $%s",
+				fileSearchTool.CallCount, dFileSearchQuota.String())
+		}
+	}
+
 	var quotaCalculateDecimal decimal.Decimal
 	if !priceData.UsePrice {
 		nonCachedTokens := dPromptTokens.Sub(dCacheTokens)
 		cachedTokensWithRatio := dCacheTokens.Mul(dCacheRatio)
+
 		promptQuota := nonCachedTokens.Add(cachedTokensWithRatio)
+		if imageTokens > 0 {
+			nonImageTokens := dPromptTokens.Sub(dImageTokens)
+			imageTokensWithRatio := dImageTokens.Mul(dImageRatio)
+			promptQuota = nonImageTokens.Add(imageTokensWithRatio)
+		}
+
 		completionQuota := dCompletionTokens.Mul(dCompletionRatio)
 
 		quotaCalculateDecimal = promptQuota.Add(completionQuota).Mul(ratio)
@@ -466,6 +507,9 @@ func postConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo,
 	} else {
 		quotaCalculateDecimal = dModelPrice.Mul(dQuotaPerUnit).Mul(dGroupRatio)
 	}
+	// 添加 responses tools call 调用的配额
+	quotaCalculateDecimal = quotaCalculateDecimal.Add(dWebSearchQuota)
+	quotaCalculateDecimal = quotaCalculateDecimal.Add(dFileSearchQuota)
 
 	quota := int(quotaCalculateDecimal.Round(0).IntPart())
 	totalTokens := promptTokens + completionTokens
@@ -513,6 +557,25 @@ func postConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo,
 		logContent += ", " + extraContent
 	}
 	other := service.GenerateTextOtherInfo(ctx, relayInfo, modelRatio, groupRatio, completionRatio, cacheTokens, cacheRatio, modelPrice)
+	if imageTokens != 0 {
+		other["image"] = true
+		other["image_ratio"] = imageRatio
+		other["image_output"] = imageTokens
+	}
+	if !dWebSearchQuota.IsZero() && relayInfo.ResponsesUsageInfo != nil {
+		if webSearchTool, exists := relayInfo.ResponsesUsageInfo.BuiltInTools[dto.BuildInToolWebSearchPreview]; exists {
+			other["web_search"] = true
+			other["web_search_call_count"] = webSearchTool.CallCount
+			other["web_search_price"] = webSearchPrice
+		}
+	}
+	if !dFileSearchQuota.IsZero() && relayInfo.ResponsesUsageInfo != nil {
+		if fileSearchTool, exists := relayInfo.ResponsesUsageInfo.BuiltInTools[dto.BuildInToolFileSearch]; exists {
+			other["file_search"] = true
+			other["file_search_call_count"] = fileSearchTool.CallCount
+			other["file_search_price"] = fileSearchPrice
+		}
+	}
 	model.RecordConsumeLog(ctx, relayInfo.UserId, relayInfo.ChannelId, promptTokens, completionTokens, logModel,
 		tokenName, quota, logContent, relayInfo.TokenId, userQuota, int(useTimeSeconds), relayInfo.IsStream, relayInfo.Group, other)
 }

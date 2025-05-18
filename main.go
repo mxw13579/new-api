@@ -76,11 +76,13 @@ func main() {
 	}
 
 	// Initialize model settings
-	operation_setting.InitModelSettings()
+	operation_setting.InitRatioSettings()
 	// Initialize constants
 	constant.InitEnv()
 	// Initialize options
 	model.InitOptionMap()
+
+	service.InitTokenEncoders()
 
 	if common.RedisEnabled {
 		// for compatibility with old versions
@@ -139,7 +141,6 @@ func main() {
 
 	//启动日常任务调度程序
 	controller.StartDailyTaskScheduler()
-
 	// Initialize HTTP server
 	server := gin.New()
 	server.Use(gin.CustomRecovery(func(c *gin.Context, err any) {
