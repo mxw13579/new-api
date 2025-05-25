@@ -8,7 +8,6 @@ import (
 	"one-api/common"
 	"one-api/dto"
 	"strconv"
-	"strings"
 )
 
 func MidjourneyErrorWrapper(code int, desc string) *dto.MidjourneyResponse {
@@ -28,11 +27,11 @@ func MidjourneyErrorWithStatusCodeWrapper(code int, desc string, statusCode int)
 // OpenAIErrorWrapper wraps an error into an OpenAIErrorWithStatusCode
 func OpenAIErrorWrapper(err error, code string, statusCode int) *dto.OpenAIErrorWithStatusCode {
 	text := err.Error()
-	lowerText := strings.ToLower(text)
-	if strings.Contains(lowerText, "post") || strings.Contains(lowerText, "dial") || strings.Contains(lowerText, "http") {
-		common.SysLog(fmt.Sprintf("error: %s", text))
-		text = "请求上游地址失败"
-	}
+	//lowerText := strings.ToLower(text)
+	//if strings.Contains(lowerText, "post") || strings.Contains(lowerText, "dial") || strings.Contains(lowerText, "http") {
+	common.SysLog(fmt.Sprintf("error: %s", text))
+	text = "请求上游地址失败"
+	//}
 	openAIError := dto.OpenAIError{
 		Message: text,
 		Type:    "new_api_error",
@@ -52,11 +51,11 @@ func OpenAIErrorWrapperLocal(err error, code string, statusCode int) *dto.OpenAI
 
 func ClaudeErrorWrapper(err error, code string, statusCode int) *dto.ClaudeErrorWithStatusCode {
 	text := err.Error()
-	lowerText := strings.ToLower(text)
-	if strings.Contains(lowerText, "post") || strings.Contains(lowerText, "dial") || strings.Contains(lowerText, "http") {
-		common.SysLog(fmt.Sprintf("error: %s", text))
-		text = "请求上游地址失败"
-	}
+	//lowerText := strings.ToLower(text)
+	//if strings.Contains(lowerText, "post") || strings.Contains(lowerText, "dial") || strings.Contains(lowerText, "http") {
+	common.SysLog(fmt.Sprintf("error: %s", text))
+	text = "请求上游地址失败"
+	//}
 	claudeError := dto.ClaudeError{
 		Message: text,
 		Type:    "new_api_error",
@@ -139,11 +138,11 @@ func TaskErrorWrapperLocal(err error, code string, statusCode int) *dto.TaskErro
 
 func TaskErrorWrapper(err error, code string, statusCode int) *dto.TaskError {
 	text := err.Error()
-	lowerText := strings.ToLower(text)
-	if strings.Contains(lowerText, "post") || strings.Contains(lowerText, "dial") || strings.Contains(lowerText, "http") {
-		common.SysLog(fmt.Sprintf("error: %s", text))
-		text = "请求上游地址失败"
-	}
+	//lowerText := strings.ToLower(text)
+	//if strings.Contains(lowerText, "post") || strings.Contains(lowerText, "dial") || strings.Contains(lowerText, "http") {
+	common.SysLog(fmt.Sprintf("error: %s", text))
+	text = "请求上游地址失败"
+	//}
 	//避免暴露内部错误
 	taskError := &dto.TaskError{
 		Code:       code,
