@@ -34,6 +34,7 @@ func OpenAIErrorWrapper(err error, code string, statusCode int) *dto.OpenAIError
 		strings.Contains(lowerText, "http") ||
 		strings.Contains(lowerText, "443") ||
 		strings.Contains(lowerText, "app") ||
+		strings.Contains(lowerText, "TLS") ||
 		strings.Contains(lowerText, "online") {
 		common.SysLog(fmt.Sprintf("error: %s", text))
 		text = "请求上游地址失败"

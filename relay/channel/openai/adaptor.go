@@ -24,6 +24,8 @@ import (
 	"one-api/relay/constant"
 	"one-api/service"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -189,8 +191,39 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 		info.UpstreamModelName = request.Model
 
 	}
+	//上下文处理
+	if err := HandleModelNameK(info, request); err != nil {
+		return nil, err
+	}
 
 	return request, nil
+}
+
+// 支持前缀[xxk]和后缀-xxk通用处理
+var (
+	prefixKRegexp = regexp.MustCompile(`^\[(\d+)k\]`)
+	suffixKRegexp = regexp.MustCompile(`-(\d+)k$`)
+)
+
+// 上下文处理
+func HandleModelNameK(info *relaycommon.RelayInfo, request *dto.GeneralOpenAIRequest) error {
+	// 1. 处理前缀 [xxk]
+	if matches := prefixKRegexp.FindStringSubmatch(request.Model); matches != nil {
+		k, _ := strconv.Atoi(matches[1])
+		maxPrompt := k * 1024
+		if info.PromptTokens > maxPrompt {
+			return errors.New("输入长度已经大于 " + strconv.Itoa(maxPrompt) + "，请检查上下文")
+		}
+		request.Model = strings.TrimPrefix(request.Model, "["+matches[1]+"k]")
+	}
+	// 2. 处理后缀 -xxk
+	if matches := suffixKRegexp.FindStringSubmatch(request.Model); matches != nil {
+		k, _ := strconv.Atoi(matches[1])
+		maxToken := k * 1024
+		request.MaxTokens = uint(maxToken)
+		request.Model = strings.TrimSuffix(request.Model, "-"+matches[1]+"k")
+	}
+	return nil
 }
 
 func (a *Adaptor) ConvertRerankRequest(c *gin.Context, relayMode int, request dto.RerankRequest) (any, error) {
