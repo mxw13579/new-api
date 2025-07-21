@@ -2,7 +2,6 @@ import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   API,
-  isMobile,
   showError,
   showSuccess,
   timestamp2string,
@@ -441,7 +440,6 @@ const EditToken = (props) => {
         }
         closeIcon={null}
         onCancel={() => handleCancel()}
-        width={isMobile() ? '100%' : 600}
       >
         <Spin spinning={loading}>
           <Input
