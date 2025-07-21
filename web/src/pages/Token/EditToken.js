@@ -36,13 +36,10 @@ const { Text, Title } = Typography;
 import { Modal, Button as AntdButton, Input as AntdInput, message } from 'antd';
 
 const EditToken = (props) => {
-  const { t } = useTranslation();
   const [statusState, statusDispatch] = useContext(StatusContext);
   const [loading, setLoading] = useState(false);
   const isMobile = useIsMobile();
   const formApiRef = useRef(null);
-  const [models, setModels] = useState([]);
-  const [groups, setGroups] = useState([]);
   const isEdit = props.editingToken.id !== undefined;
 
   const getInitValues = () => ({

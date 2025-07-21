@@ -40,9 +40,6 @@ import {
 } from '@douyinfe/semi-icons';
 
 const { Text, Title } = Typography;
-import { getChannelModels, loadChannelModels } from '../../components/utils.js';
-import { IconHelpCircle } from '@douyinfe/semi-icons';
-import axios from 'axios';
 import { Switch } from 'antd';
 
 
