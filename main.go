@@ -25,10 +25,12 @@ import (
 	_ "net/http/pprof"
 )
 
-//go:embed web/dist
+// go:
+// embed web/dist
 var buildFS embed.FS
 
-//go:embed web/dist/index.html
+// go:
+// embed web/dist/index.html
 var indexPage []byte
 
 // 在 main 函数之前声明定时任务的函数
