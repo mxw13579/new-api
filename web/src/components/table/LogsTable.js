@@ -917,6 +917,7 @@ const LogsTable = () => {
       logs[i].timestamp2string = timestamp2string(logs[i].created_at);
       logs[i].key = logs[i].id;
       let other = getLogOther(logs[i].other);
+      let billingContent =logs[i].content;
       let expandDataLocal = [];
       if (isAdmin()) {
         // let content = '渠道：' + logs[i].channel;
@@ -1075,6 +1076,10 @@ const LogsTable = () => {
         expandDataLocal.push({
           key: t('计费过程'),
           value: content,
+        });
+        expandDataLocal.push({
+          key: t('补充计费'),
+          value: billingContent,
         });
         if (other?.reasoning_effort) {
           expandDataLocal.push({

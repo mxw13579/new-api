@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"math"
 	"net/http"
 	"one-api/common"
@@ -19,6 +20,7 @@ import (
 	"one-api/setting"
 	"one-api/setting/model_setting"
 	"one-api/setting/operation_setting"
+	"sort"
 	"one-api/types"
 	"strings"
 	"time"
@@ -81,16 +83,110 @@ func getAndValidateTextRequest(c *gin.Context, relayInfo *relaycommon.RelayInfo)
 			return nil, errors.New("field instruction is required")
 		}
 	}
+
+	m := textRequest.Model
+
+	// 检查模型名称是否以 -noStream 结尾
+	if strings.HasSuffix(m, "-noStream") {
+		// 替换流式传输为非流
+		textRequest.Stream = false
+		// 移除 -noStream 后缀以获取正确的模型名称
+		textRequest.Model = strings.TrimSuffix(m, "-noStream")
+		relayInfo.OriginModelName = strings.TrimSuffix(m, "-noStream")
+	}
+
 	relayInfo.IsStream = textRequest.Stream
 	return textRequest, nil
 }
 
-func TextHelper(c *gin.Context) (newAPIError *types.NewAPIError) {
+func TextHelper(c *gin.Context, channel *model.Channel) (newAPIError *types.NewAPIError) {
 
 	relayInfo := relaycommon.GenRelayInfo(c)
 
 	// get & validate textRequest 获取并验证文本请求
 	textRequest, err := getAndValidateTextRequest(c, relayInfo)
+	channelLocal, err := model.GetIsConvertRole(channel.Id)
+	//写入补充计费
+	c.Set("BillingSupplement", channelLocal.BillingSupplement)
+
+	messages := textRequest.Messages
+	var lastUserIdx, lastAssistantIdx int = -1, -1
+	for i := len(messages) - 1; i >= 0; i-- {
+		if lastUserIdx == -1 && messages[i].Role == "user" {
+			lastUserIdx = i
+			continue
+		}
+		if lastUserIdx != -1 && messages[i].Role == "assistant" {
+			lastAssistantIdx = i
+			break
+		}
+	}
+	var contentForAudit string
+	if lastUserIdx != -1 && lastAssistantIdx != -1 {
+		contentForAudit = fmt.Sprintf(
+			"assistant: %s\nuser: %s",
+			messages[lastAssistantIdx].Content,
+			messages[lastUserIdx].Content,
+		)
+	} else if lastUserIdx != -1 {
+		contentForAudit = fmt.Sprintf("user: %s", messages[lastUserIdx].Content)
+	} else {
+		contentForAudit = ""
+	}
+
+	isConvertRole := channelLocal.IsConvertRole
+	if isConvertRole == 1 {
+		//转换  system -》 user
+		for i := range messages {
+			role := messages[i].Role
+			if role == "system" {
+				messages[i].Role = "user"
+			}
+		}
+	}
+
+	// 外部审查
+	if channelLocal.AuditEnabled == 1 {
+		//计时
+		startAudit := time.Now()
+		common.LogInfo(c, fmt.Sprintf("外部审查开始"))
+
+		// 解析审查类别和阈值
+		var auditCategories []string
+		if channelLocal.AuditCategories != "" {
+			// 尝试先按JSON数组格式解析
+			if err := json.Unmarshal([]byte(channelLocal.AuditCategories), &auditCategories); err != nil {
+				// 解析失败，尝试按逗号分隔的字符串解析
+				arr := strings.Split(channelLocal.AuditCategories, ",")
+				for i := range arr {
+					auditCategories = append(auditCategories, strings.TrimSpace(arr[i]))
+				}
+			}
+		}
+
+		// 调用审查
+		violated, err := DoOpenAIModerationAuditing(contentForAudit, auditCategories, channelLocal.AuditUrl, channelLocal.AuditApiKey, channelLocal.AuditModel)
+
+		// 计算审查耗时
+		auditCost := time.Since(startAudit)
+		common.LogInfo(c, fmt.Sprintf("外部审查耗时: %v", auditCost))
+
+		if err != nil {
+			common.LogError(c, fmt.Sprintf("内容审查异常 failed: %s", err.Error()))
+			return service.OpenAIErrorWrapperLocal(err, "content_review_abnormality", http.StatusBadRequest)
+		} else if len(violated) > 0 {
+			common.LogError(c, fmt.Sprintf("内容审查异常，请不要进行如下行为 failed: %s", violated))
+			var msgBuilder strings.Builder
+			msgBuilder.WriteString("内容审查异常，请不要进行如下行为:\n")
+			for i, v := range violated {
+				msgBuilder.WriteString(fmt.Sprintf("%d. %s\n", i+1, v))
+			}
+			err := errors.New(msgBuilder.String())
+			return service.OpenAIErrorWrapperLocal(err, "content_review_abnormality", http.StatusBadRequest)
+		}
+
+		common.LogInfo(c, fmt.Sprintf("外部审查结束"))
+	}
 
 	if err != nil {
 		return types.NewError(err, types.ErrorCodeInvalidRequest)
@@ -479,10 +575,12 @@ func postConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo,
 	totalTokens := promptTokens + completionTokens
 
 	var logContent string
+	quota, logContent = billingHandler(ctx, promptTokens, quota, logContent)
+
 	if !priceData.UsePrice {
-		logContent = fmt.Sprintf("模型倍率 %.2f，补全倍率 %.2f，分组倍率 %.2f", modelRatio, completionRatio, groupRatio)
+		logContent = fmt.Sprintf(logContent+"，模型倍率 %.2f，补全倍率 %.2f，分组倍率 %.2f", modelRatio, completionRatio, groupRatio)
 	} else {
-		logContent = fmt.Sprintf("模型价格 %.2f，分组倍率 %.2f", modelPrice, groupRatio)
+		logContent = fmt.Sprintf(logContent+"，模型价格 %.2f，分组倍率 %.2f", modelPrice, groupRatio)
 	}
 
 	// record all the consume log even if quota is 0
@@ -568,4 +666,69 @@ func postConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo,
 		Group:            relayInfo.UsingGroup,
 		Other:            other,
 	})
+}
+
+// billingHandler  计费处理
+func billingHandler(ctx *gin.Context, promptTokens int, quota int, logContent string) (int, string) {
+	value, exists := ctx.Get("BillingSupplement")
+	if !exists || value == nil {
+		return quota, logContent
+	}
+
+	var supplementStr string
+
+	switch v := value.(type) {
+	case string:
+		supplementStr = v
+	case *string:
+		if v != nil {
+			supplementStr = *v
+		}
+	case []interface{}:
+		// 需要重新编码为 JSON 字符串
+		bytes, err := json.Marshal(v)
+		if err != nil {
+			log.Printf("BillingSupplement 类型为 []interface{} 但编码为 JSON 失败: %v", err)
+			return quota, logContent
+		}
+		supplementStr = string(bytes)
+	default:
+		log.Printf("BillingSupplement 的类型无法处理: %T", value)
+		return quota, logContent
+	}
+
+	if supplementStr == "" {
+		return quota, logContent
+	}
+
+	var supplements []BillingSupplementItem
+	if err := json.Unmarshal([]byte(supplementStr), &supplements); err != nil {
+		log.Printf("解析 BillingSupplement 失败: %v, 源数据: %s", err, supplementStr)
+		return quota, logContent
+	}
+	if len(supplements) == 0 {
+		return quota, logContent
+	}
+
+	// 按 tokenCount 升序排列
+	sort.Slice(supplements, func(i, j int) bool {
+		return supplements[i].TokenCount < supplements[j].TokenCount
+	})
+
+	// 倒序遍历，找到第一个 token 数小于 promptTokens 的规则
+	for i := len(supplements) - 1; i >= 0; i-- {
+		if promptTokens > supplements[i].TokenCount {
+			quota *= supplements[i].Multiplied
+			logContent += fmt.Sprintf("应用补充计费规则: 输入 >  %d tokens 时计价 x %d", supplements[i].TokenCount, supplements[i].Multiplied)
+			common.LogInfo(ctx, fmt.Sprintf("应用了计费补充规则, quota: %d, promptTokens: %d, tokenCount: %d, Multiplied: %d",
+				quota, promptTokens, supplements[i].TokenCount, supplements[i].Multiplied))
+			break
+		}
+	}
+	return quota, logContent
+}
+
+type BillingSupplementItem struct {
+	TokenCount int `json:"tokenCount"`
+	Multiplied int `json:"multiplied"`
 }

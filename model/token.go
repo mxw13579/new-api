@@ -4,7 +4,9 @@ import (
 	"errors"
 	"fmt"
 	"one-api/common"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/bytedance/gopkg/util/gopool"
 	"gorm.io/gorm"
@@ -13,7 +15,7 @@ import (
 type Token struct {
 	Id                 int            `json:"id"`
 	UserId             int            `json:"user_id" gorm:"index"`
-	Key                string         `json:"key" gorm:"type:char(48);uniqueIndex"`
+	Key                string         `json:"key" gorm:"type:char(48);"`
 	Status             int            `json:"status" gorm:"default:1"`
 	Name               string         `json:"name" gorm:"index" `
 	CreatedTime        int64          `json:"created_time" gorm:"bigint"`
@@ -26,6 +28,10 @@ type Token struct {
 	AllowIps           *string        `json:"allow_ips" gorm:"default:''"`
 	UsedQuota          int            `json:"used_quota" gorm:"default:0"` // used quota
 	Group              string         `json:"group" gorm:"default:''"`
+	IntervalQuota      int            `json:"interval_quota" gorm:"bigint"`    // 刷新配额
+	IntervalTime       int            `json:"interval_time" gorm:"default:0"`  //间隔时间，与间隔单位组合使用，可与token类型组合使用，如1天卡、三天卡等等
+	TriggerLastTime    int64          `json:"trigger_last_time" gorm:"bigint"` //上次执行时间
+	IntervalUnit       int            `json:"interval_unit" gorm:"default:3"`  //token类型，默认为天，3 天、4 周、5 月、6 季度、7年卡、8周不刷新次卡、9月不刷新次卡、10季不刷新卡
 	DeletedAt          gorm.DeletedAt `gorm:"index"`
 }
 
@@ -55,6 +61,31 @@ func (token *Token) GetIpLimitsMap() map[string]any {
 	return ipLimitsMap
 }
 
+// RefreshTokenQuota refreshTokenQuota 刷新余额
+func (token *Token) RefreshTokenQuota() (err error) {
+	token.RemainQuota = token.IntervalQuota //刷新为间隔额度
+	token.TriggerLastTime = common.GetTimestamp()
+	err = token.Update()
+
+	return err
+}
+
+// FindTokensToExecuteNow 查询当前需要执行的按天定时任务，且排除ExpiredTime为-1的任务
+func FindTokensToExecuteNow() ([]Token, error) {
+	var tokens []Token
+	now := time.Now().Unix() // 当前时间戳
+
+	// 只取天卡，expired_time!=-1，interval_time>0，且当前已经到定时任务的时间
+	// 修正查询条件，正确处理interval_time=-1的情况
+	err := DB.Model(&Token{}).
+		Where("expired_time != ? AND expired_time > ? AND status = ?", -1, now, 1).
+		Where("((interval_time > 0) OR (interval_time = -1))").
+		Where("trigger_last_time + CASE WHEN interval_time = -1 THEN 86400 ELSE interval_time * 86400 END <= ?", now).
+		Find(&tokens).Error
+
+	return tokens, err
+}
+
 func GetAllUserTokens(userId int, startIdx int, num int) ([]*Token, error) {
 	var tokens []*Token
 	var err error
@@ -70,12 +101,92 @@ func SearchUserTokens(userId int, keyword string, token string) (tokens []*Token
 	return tokens, err
 }
 
+func GetIntervalSeconds(unit int) int64 {
+	switch unit {
+	case 3: // 天
+		return 86400
+	case 4: // 周
+		return 604800
+	case 5: // 月（30天）
+		return 2592000
+	case 6: // 季度（90天）
+		return 7776000
+	case 7: // 年（365天）
+		return 31536000 // 年（365天）
+	case 8: // 周不刷新次卡
+		return 604800
+	case 9: // 月不刷新次卡
+		return 2592000
+	case 10: // 季不刷新次卡
+		return 7776000
+	default:
+		return 86400 // 默认按天
+	}
+}
+
+func GetIntervalString(unit int) string {
+	switch unit {
+	case 3: // 天
+		return "天卡"
+	case 4: // 周
+		return "周卡"
+	case 5: // 月（30天）
+		return "月卡"
+	case 6: // 季度（90天）
+		return "季卡"
+	case 7: // 年（365天）
+		return "年卡"
+	case 8: // 年（365天）
+		return "周不刷新次卡"
+	case 9: // 年（365天）
+		return "月不刷新次卡"
+	case 10: // 年（365天）
+		return "季不刷新次卡"
+	default:
+		return "天卡" // 默认按天
+	}
+}
+
 func ValidateUserToken(key string) (token *Token, err error) {
 	if key == "" {
 		return nil, errors.New("未提供令牌")
 	}
 	token, err = GetTokenByKey(key, false)
 	if err == nil {
+		//检验是否激活，未激活则激活token(刷新过期时间)
+		if token.ExpiredTime == -1 {
+			// 需要激活
+			now := common.GetTimestamp()
+			unit := token.IntervalUnit
+			intervalSeconds := GetIntervalSeconds(unit)
+			if token.IntervalTime > 0 {
+				token.ExpiredTime = now + int64(token.IntervalTime)*intervalSeconds
+			} else {
+				// 没有设置IntervalTime,则默认为1
+				token.ExpiredTime = now + 1*intervalSeconds
+			}
+			triggerLastTime := now
+			//为不刷新卡时，上次执行时间为结束时间
+			if unit == 8 || unit == 9 || unit == 10 {
+				triggerLastTime = token.ExpiredTime
+			}
+			token.TriggerLastTime = triggerLastTime
+
+			// 更新到数据库
+			if err := token.Update(); err != nil {
+				common.SysError("激活token时数据库更新失败: " + err.Error())
+				return token, errors.New("激活令牌失败")
+			}
+			// 格式化过期时间
+			expiredStr := time.Unix(token.ExpiredTime, 0).Format("2006-01-02 15:04:05")
+			intervalString := GetIntervalString(token.IntervalUnit)
+			tokenTime := 1
+			if token.IntervalTime > 0 {
+				tokenTime = token.IntervalTime
+			}
+			common.SysLog("激活令牌成功: " + token.Key + " 过期时间: " + expiredStr + " 卡类型：" + strconv.Itoa(tokenTime) + " " + intervalString)
+		}
+
 		if token.Status == common.TokenStatusExhausted {
 			keyPrefix := key[:3]
 			keySuffix := key[len(key)-3:]
@@ -184,7 +295,8 @@ func (token *Token) Update() (err error) {
 		}
 	}()
 	err = DB.Model(token).Select("name", "status", "expired_time", "remain_quota", "unlimited_quota",
-		"model_limits_enabled", "model_limits", "allow_ips", "group").Updates(token).Error
+		"model_limits_enabled", "model_limits", "allow_ips", "group",
+		"interval_quota", "interval_time", "trigger_last_time", "interval_unit").Updates(token).Error
 	return err
 }
 

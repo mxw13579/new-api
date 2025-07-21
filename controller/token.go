@@ -1,12 +1,16 @@
 package controller
 
 import (
+	"crypto/rand"
+	"fmt"
+	"github.com/gin-gonic/gin"
 	"net/http"
 	"one-api/common"
 	"one-api/model"
 	"strconv"
 
 	"github.com/gin-gonic/gin"
+	"time"
 )
 
 func GetAllTokens(c *gin.Context) {
@@ -118,6 +122,9 @@ func AddToken(c *gin.Context) {
 		ModelLimits:        token.ModelLimits,
 		AllowIps:           token.AllowIps,
 		Group:              token.Group,
+		IntervalTime:       token.IntervalTime,
+		IntervalQuota:      token.IntervalQuota,
+		IntervalUnit:       token.IntervalUnit,
 	}
 	err = cleanToken.Insert()
 	if err != nil {
@@ -129,6 +136,109 @@ func AddToken(c *gin.Context) {
 		"message": "",
 	})
 	return
+}
+
+func AddTokens(c *gin.Context) {
+	token := model.Token{}
+	err := c.ShouldBindJSON(&token)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": err.Error(),
+		})
+		return
+	}
+	tokenCountStr := c.Query("tokenCount")
+	tokenCount, _ := strconv.Atoi(tokenCountStr)
+	if tokenCount < 1 {
+		tokenCount = 1
+	}
+	// 检查原始名称长度
+	originalName := token.Name
+	if len(originalName) > 30 {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": "令牌名称过长",
+		})
+		return
+	}
+
+	userId := c.GetInt("id")
+	keys := make([]string, 0, tokenCount)
+
+	for i := 0; i < tokenCount; i++ {
+		// 生成UUID，确保名称唯一性
+		uniqueName := originalName
+		if tokenCount > 1 {
+			// 只在批量生成时添加UUID
+			uuid := generateUUID()
+
+			// 确保名称+UUID不超过120字符
+			maxNameLen := 120 - len(uuid) - 1 // 减1是为了分隔符"-"
+			if len(originalName) > maxNameLen {
+				uniqueName = originalName[:maxNameLen]
+			}
+
+			uniqueName = fmt.Sprintf("%s-%s", uniqueName, uuid)
+		}
+
+		key, err := common.GenerateKey()
+		if err != nil {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": "生成令牌失败",
+			})
+			common.SysError("failed to generate token key: " + err.Error())
+			return
+		}
+		cleanToken := model.Token{
+			UserId:             userId,
+			Name:               uniqueName,
+			Key:                key,
+			CreatedTime:        common.GetTimestamp(),
+			AccessedTime:       common.GetTimestamp(),
+			ExpiredTime:        token.ExpiredTime,
+			RemainQuota:        token.RemainQuota,
+			UnlimitedQuota:     token.UnlimitedQuota,
+			ModelLimitsEnabled: token.ModelLimitsEnabled,
+			ModelLimits:        token.ModelLimits,
+			AllowIps:           token.AllowIps,
+			Group:              token.Group,
+			IntervalTime:       token.IntervalTime,
+			IntervalQuota:      token.IntervalQuota,
+			IntervalUnit:       token.IntervalUnit,
+		}
+		err = cleanToken.Insert()
+		if err != nil {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": fmt.Sprintf("第%d次插入失败: %s", i+1, err.Error()),
+				"keys":    keys, // 返回已成功生成的 key
+			})
+			return
+		}
+		keys = append(keys, "sk-"+key)
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": fmt.Sprintf("成功添加%d个令牌", tokenCount),
+		"keys":    keys,
+	})
+	return
+}
+
+// 生成UUID函数
+func generateUUID() string {
+	// 使用crypto/rand生成随机字节
+	b := make([]byte, 16)
+	_, err := rand.Read(b)
+	if err != nil {
+		return fmt.Sprintf("%d", time.Now().UnixNano()) // 备用方案
+	}
+
+	// 格式化为UUID格式
+	return fmt.Sprintf("%x-%x-%x-%x-%x",
+		b[0:4], b[4:6], b[6:8], b[8:10], b[10:])
 }
 
 func DeleteToken(c *gin.Context) {
@@ -195,6 +305,9 @@ func UpdateToken(c *gin.Context) {
 		cleanToken.ModelLimits = token.ModelLimits
 		cleanToken.AllowIps = token.AllowIps
 		cleanToken.Group = token.Group
+		cleanToken.IntervalQuota = token.IntervalQuota
+		cleanToken.IntervalTime = token.IntervalTime
+		cleanToken.IntervalUnit = token.IntervalUnit
 	}
 	err = cleanToken.Update()
 	if err != nil {
