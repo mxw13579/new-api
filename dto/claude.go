@@ -1,29 +1,34 @@
 package dto
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"one-api/common"
+	"one-api/types"
+)
 
 type ClaudeMetadata struct {
 	UserId string `json:"user_id"`
 }
 
 type ClaudeMediaMessage struct {
-	Type        string               `json:"type,omitempty"`
-	Text        *string              `json:"text,omitempty"`
-	Model       string               `json:"model,omitempty"`
-	Source      *ClaudeMessageSource `json:"source,omitempty"`
-	Usage       *ClaudeUsage         `json:"usage,omitempty"`
-	StopReason  *string              `json:"stop_reason,omitempty"`
-	PartialJson *string              `json:"partial_json,omitempty"`
-	Role        string               `json:"role,omitempty"`
-	Thinking    string               `json:"thinking,omitempty"`
-	Signature   string               `json:"signature,omitempty"`
-	Delta       string               `json:"delta,omitempty"`
+	Type         string               `json:"type,omitempty"`
+	Text         *string              `json:"text,omitempty"`
+	Model        string               `json:"model,omitempty"`
+	Source       *ClaudeMessageSource `json:"source,omitempty"`
+	Usage        *ClaudeUsage         `json:"usage,omitempty"`
+	StopReason   *string              `json:"stop_reason,omitempty"`
+	PartialJson  *string              `json:"partial_json,omitempty"`
+	Role         string               `json:"role,omitempty"`
+	Thinking     string               `json:"thinking,omitempty"`
+	Signature    string               `json:"signature,omitempty"`
+	Delta        string               `json:"delta,omitempty"`
+	CacheControl json.RawMessage      `json:"cache_control,omitempty"`
 	// tool_calls
-	Id        string          `json:"id,omitempty"`
-	Name      string          `json:"name,omitempty"`
-	Input     any             `json:"input,omitempty"`
-	Content   json.RawMessage `json:"content,omitempty"`
-	ToolUseId string          `json:"tool_use_id,omitempty"`
+	Id        string `json:"id,omitempty"`
+	Name      string `json:"name,omitempty"`
+	Input     any    `json:"input,omitempty"`
+	Content   any    `json:"content,omitempty"`
+	ToolUseId string `json:"tool_use_id,omitempty"`
 }
 
 func (c *ClaudeMediaMessage) SetText(s string) {
@@ -38,15 +43,39 @@ func (c *ClaudeMediaMessage) GetText() string {
 }
 
 func (c *ClaudeMediaMessage) IsStringContent() bool {
-	var content string
-	return json.Unmarshal(c.Content, &content) == nil
+	if c.Content == nil {
+		return false
+	}
+	_, ok := c.Content.(string)
+	if ok {
+		return true
+	}
+	return false
 }
 
 func (c *ClaudeMediaMessage) GetStringContent() string {
-	var content string
-	if err := json.Unmarshal(c.Content, &content); err == nil {
-		return content
+	if c.Content == nil {
+		return ""
 	}
+	switch c.Content.(type) {
+	case string:
+		return c.Content.(string)
+	case []any:
+		var contentStr string
+		for _, contentItem := range c.Content.([]any) {
+			contentMap, ok := contentItem.(map[string]any)
+			if !ok {
+				continue
+			}
+			if contentMap["type"] == ContentTypeText {
+				if subStr, ok := contentMap["text"].(string); ok {
+					contentStr += subStr
+				}
+			}
+		}
+		return contentStr
+	}
+
 	return ""
 }
 
@@ -56,16 +85,12 @@ func (c *ClaudeMediaMessage) GetJsonRowString() string {
 }
 
 func (c *ClaudeMediaMessage) SetContent(content any) {
-	jsonContent, _ := json.Marshal(content)
-	c.Content = jsonContent
+	c.Content = content
 }
 
 func (c *ClaudeMediaMessage) ParseMediaContent() []ClaudeMediaMessage {
-	var mediaContent []ClaudeMediaMessage
-	if err := json.Unmarshal(c.Content, &mediaContent); err == nil {
-		return mediaContent
-	}
-	return make([]ClaudeMediaMessage, 0)
+	mediaContent, _ := common.Any2Type[[]ClaudeMediaMessage](c.Content)
+	return mediaContent
 }
 
 type ClaudeMessageSource struct {
@@ -81,14 +106,36 @@ type ClaudeMessage struct {
 }
 
 func (c *ClaudeMessage) IsStringContent() bool {
+	if c.Content == nil {
+		return false
+	}
 	_, ok := c.Content.(string)
 	return ok
 }
 
 func (c *ClaudeMessage) GetStringContent() string {
-	if c.IsStringContent() {
-		return c.Content.(string)
+	if c.Content == nil {
+		return ""
 	}
+	switch c.Content.(type) {
+	case string:
+		return c.Content.(string)
+	case []any:
+		var contentStr string
+		for _, contentItem := range c.Content.([]any) {
+			contentMap, ok := contentItem.(map[string]any)
+			if !ok {
+				continue
+			}
+			if contentMap["type"] == ContentTypeText {
+				if subStr, ok := contentMap["text"].(string); ok {
+					contentStr += subStr
+				}
+			}
+		}
+		return contentStr
+	}
+
 	return ""
 }
 
@@ -97,15 +144,7 @@ func (c *ClaudeMessage) SetStringContent(content string) {
 }
 
 func (c *ClaudeMessage) ParseContent() ([]ClaudeMediaMessage, error) {
-	// map content to []ClaudeMediaMessage
-	// parse to json
-	jsonContent, _ := json.Marshal(c.Content)
-	var contentList []ClaudeMediaMessage
-	err := json.Unmarshal(jsonContent, &contentList)
-	if err != nil {
-		return make([]ClaudeMediaMessage, 0), err
-	}
-	return contentList, nil
+	return common.Any2Type[[]ClaudeMediaMessage](c.Content)
 }
 
 type Tool struct {
@@ -118,6 +157,27 @@ type InputSchema struct {
 	Type       string `json:"type"`
 	Properties any    `json:"properties,omitempty"`
 	Required   any    `json:"required,omitempty"`
+}
+
+type ClaudeWebSearchTool struct {
+	Type         string                       `json:"type"`
+	Name         string                       `json:"name"`
+	MaxUses      int                          `json:"max_uses,omitempty"`
+	UserLocation *ClaudeWebSearchUserLocation `json:"user_location,omitempty"`
+}
+
+type ClaudeWebSearchUserLocation struct {
+	Type     string `json:"type"`
+	Timezone string `json:"timezone,omitempty"`
+	Country  string `json:"country,omitempty"`
+	Region   string `json:"region,omitempty"`
+	City     string `json:"city,omitempty"`
+}
+
+type ClaudeToolChoice struct {
+	Type                   string `json:"type"`
+	Name                   string `json:"name,omitempty"`
+	DisableParallelToolUse bool   `json:"disable_parallel_tool_use,omitempty"`
 }
 
 type ClaudeRequest struct {
@@ -138,9 +198,69 @@ type ClaudeRequest struct {
 	Thinking   *Thinking `json:"thinking,omitempty"`
 }
 
+// AddTool 添加工具到请求中
+func (c *ClaudeRequest) AddTool(tool any) {
+	if c.Tools == nil {
+		c.Tools = make([]any, 0)
+	}
+
+	switch tools := c.Tools.(type) {
+	case []any:
+		c.Tools = append(tools, tool)
+	default:
+		// 如果Tools不是[]any类型，重新初始化为[]any
+		c.Tools = []any{tool}
+	}
+}
+
+// GetTools 获取工具列表
+func (c *ClaudeRequest) GetTools() []any {
+	if c.Tools == nil {
+		return nil
+	}
+
+	switch tools := c.Tools.(type) {
+	case []any:
+		return tools
+	default:
+		return nil
+	}
+}
+
+// ProcessTools 处理工具列表，支持类型断言
+func ProcessTools(tools []any) ([]*Tool, []*ClaudeWebSearchTool) {
+	var normalTools []*Tool
+	var webSearchTools []*ClaudeWebSearchTool
+
+	for _, tool := range tools {
+		switch t := tool.(type) {
+		case *Tool:
+			normalTools = append(normalTools, t)
+		case *ClaudeWebSearchTool:
+			webSearchTools = append(webSearchTools, t)
+		case Tool:
+			normalTools = append(normalTools, &t)
+		case ClaudeWebSearchTool:
+			webSearchTools = append(webSearchTools, &t)
+		default:
+			// 未知类型，跳过
+			continue
+		}
+	}
+
+	return normalTools, webSearchTools
+}
+
 type Thinking struct {
 	Type         string `json:"type"`
-	BudgetTokens int    `json:"budget_tokens"`
+	BudgetTokens *int   `json:"budget_tokens,omitempty"`
+}
+
+func (c *Thinking) GetBudgetTokens() int {
+	if c.BudgetTokens == nil {
+		return 0
+	}
+	return *c.BudgetTokens
 }
 
 func (c *ClaudeRequest) IsStringSystem() bool {
@@ -160,14 +280,8 @@ func (c *ClaudeRequest) SetStringSystem(system string) {
 }
 
 func (c *ClaudeRequest) ParseSystem() []ClaudeMediaMessage {
-	// map content to []ClaudeMediaMessage
-	// parse to json
-	jsonContent, _ := json.Marshal(c.System)
-	var contentList []ClaudeMediaMessage
-	if err := json.Unmarshal(jsonContent, &contentList); err == nil {
-		return contentList
-	}
-	return make([]ClaudeMediaMessage, 0)
+	mediaContent, _ := common.Any2Type[[]ClaudeMediaMessage](c.System)
+	return mediaContent
 }
 
 type ClaudeError struct {
@@ -189,7 +303,7 @@ type ClaudeResponse struct {
 	Completion   string               `json:"completion,omitempty"`
 	StopReason   string               `json:"stop_reason,omitempty"`
 	Model        string               `json:"model,omitempty"`
-	Error        *ClaudeError         `json:"error,omitempty"`
+	Error        *types.ClaudeError   `json:"error,omitempty"`
 	Usage        *ClaudeUsage         `json:"usage,omitempty"`
 	Index        *int                 `json:"index,omitempty"`
 	ContentBlock *ClaudeMediaMessage  `json:"content_block,omitempty"`
@@ -211,8 +325,13 @@ func (c *ClaudeResponse) GetIndex() int {
 }
 
 type ClaudeUsage struct {
-	InputTokens              int `json:"input_tokens"`
-	CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
-	CacheReadInputTokens     int `json:"cache_read_input_tokens"`
-	OutputTokens             int `json:"output_tokens"`
+	InputTokens              int                  `json:"input_tokens"`
+	CacheCreationInputTokens int                  `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     int                  `json:"cache_read_input_tokens"`
+	OutputTokens             int                  `json:"output_tokens"`
+	ServerToolUse            *ClaudeServerToolUse `json:"server_tool_use"`
+}
+
+type ClaudeServerToolUse struct {
+	WebSearchRequests int `json:"web_search_requests"`
 }

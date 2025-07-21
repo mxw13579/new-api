@@ -44,6 +44,9 @@
 
 For detailed documentation, please visit our official Wiki: [https://docs.newapi.pro/](https://docs.newapi.pro/)
 
+You can also access the AI-generated DeepWiki:
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/QuantumNous/new-api)
+
 ## ✨ Key Features
 
 New API offers a wide range of features, please refer to [Features Introduction](https://docs.newapi.pro/wiki/features-introduction) for details:
@@ -97,7 +100,7 @@ This version supports multiple models, please refer to [API Documentation-Relay 
 For detailed configuration instructions, please refer to [Installation Guide-Environment Variables Configuration](https://docs.newapi.pro/installation/environment-variables):
 
 - `GENERATE_DEFAULT_TOKEN`: Whether to generate initial tokens for newly registered users, default is `false`
-- `STREAMING_TIMEOUT`: Streaming response timeout, default is 60 seconds
+- `STREAMING_TIMEOUT`: Streaming response timeout, default is 120 seconds
 - `DIFY_DEBUG`: Whether to output workflow and node information for Dify channels, default is `true`
 - `FORCE_STREAM_OPTION`: Whether to override client stream_options parameter, default is `true`
 - `GET_MEDIA_TOKEN`: Whether to count image tokens, default is `true`
@@ -110,6 +113,7 @@ For detailed configuration instructions, please refer to [Installation Guide-Env
 - `AZURE_DEFAULT_API_VERSION`: Azure channel default API version, default is `2025-04-01-preview`
 - `NOTIFICATION_LIMIT_DURATION_MINUTE`: Notification limit duration, default is `10` minutes
 - `NOTIFY_LIMIT_COUNT`: Maximum number of user notifications within the specified duration, default is `2`
+- `ERROR_LOG_ENABLED=true`: Whether to record and display error logs, default is `false`
 
 ## Deployment
 

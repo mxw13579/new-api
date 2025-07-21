@@ -44,6 +44,9 @@
 
 详细文档请访问我们的官方Wiki：[https://docs.newapi.pro/](https://docs.newapi.pro/)
 
+也可访问AI生成的DeepWiki:
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/QuantumNous/new-api)
+
 ## ✨ 主要特性
 
 New API提供了丰富的功能，详细特性请参考[特性说明](https://docs.newapi.pro/wiki/features-introduction)：
@@ -97,7 +100,7 @@ New API提供了丰富的功能，详细特性请参考[特性说明](https://do
 详细配置说明请参考[安装指南-环境变量配置](https://docs.newapi.pro/installation/environment-variables)：
 
 - `GENERATE_DEFAULT_TOKEN`：是否为新注册用户生成初始令牌，默认为 `false`
-- `STREAMING_TIMEOUT`：流式回复超时时间，默认60秒
+- `STREAMING_TIMEOUT`：流式回复超时时间，默认120秒
 - `DIFY_DEBUG`：Dify渠道是否输出工作流和节点信息，默认 `true`
 - `FORCE_STREAM_OPTION`：是否覆盖客户端stream_options参数，默认 `true`
 - `GET_MEDIA_TOKEN`：是否统计图片token，默认 `true`
@@ -110,6 +113,7 @@ New API提供了丰富的功能，详细特性请参考[特性说明](https://do
 - `AZURE_DEFAULT_API_VERSION`：Azure渠道默认API版本，默认 `2025-04-01-preview`
 - `NOTIFICATION_LIMIT_DURATION_MINUTE`：通知限制持续时间，默认 `10`分钟
 - `NOTIFY_LIMIT_COUNT`：用户通知在指定持续时间内的最大数量，默认 `2`
+- `ERROR_LOG_ENABLED=true`: 是否记录并显示错误日志，默认`false`
 
 ## 部署
 
@@ -176,7 +180,6 @@ docker run --name new-api -d --restart always -p 3000:3000 -e SQL_DSN="root:1234
 
 其他基于New API的项目：
 - [new-api-horizon](https://github.com/Calcium-Ion/new-api-horizon)：New API高性能优化版
-- [VoAPI](https://github.com/VoAPI/VoAPI)：基于New API的前端美化版本
 
 ## 帮助支持
 

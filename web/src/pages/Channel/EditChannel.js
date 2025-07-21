@@ -1,32 +1,45 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import React, { useEffect, useState, useRef, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import {
   API,
-  isMobile,
   showError,
   showInfo,
   showSuccess,
-  showWarning,
   verifyJSON,
 } from '../../helpers';
+import { useIsMobile } from '../../hooks/useIsMobile.js';
 import { CHANNEL_OPTIONS } from '../../constants';
-import Title from '@douyinfe/semi-ui/lib/es/typography/title';
 import {
   SideSheet,
   Space,
   Spin,
   Button,
-  Tooltip,
-  Input,
   Typography,
-  Select,
-  TextArea,
   Checkbox,
   Banner,
   Modal,
   ImagePreview,
+  Card,
+  Tag,
+  Avatar,
+  Form,
+  Row,
+  Col,
+  Highlight,
 } from '@douyinfe/semi-ui';
+import { getChannelModels, copy, getChannelIcon, getModelCategories } from '../../helpers';
+import {
+  IconSave,
+  IconClose,
+  IconServer,
+  IconSetting,
+  IconCode,
+  IconGlobe,
+  IconBolt,
+} from '@douyinfe/semi-icons';
+
+const { Text, Title } = Typography;
 import { getChannelModels, loadChannelModels } from '../../components/utils.js';
 import { IconHelpCircle } from '@douyinfe/semi-icons';
 import axios from 'axios';
@@ -59,6 +72,10 @@ function type2secretPrompt(type) {
       return '按照如下格式输入：AppId|SecretId|SecretKey';
     case 33:
       return '按照如下格式输入：Ak|Sk|Region';
+    case 50:
+      return '按照如下格式输入: AccessKey|SecretKey';
+    case 51:
+      return '按照如下格式输入: Access Key ID|Secret Access Key';
     default:
       return '请输入渠道对应的鉴权密钥';
   }
@@ -70,6 +87,7 @@ const EditChannel = (props) => {
   const channelId = props.editingChannel.id;
   const isEdit = channelId !== undefined;
   const [loading, setLoading] = useState(isEdit);
+  const isMobile = useIsMobile();
   const [billingSupplementList, setBillingSupplementList] = useState([]);
 
   const handleCancel = () => {
@@ -100,10 +118,12 @@ const EditChannel = (props) => {
     audit_model: "",
     billing_supplement: "",
 
+    multi_key_mode: 'random',
   };
   const [batch, setBatch] = useState(false);
+  const [multiToSingle, setMultiToSingle] = useState(false);
+  const [multiKeyMode, setMultiKeyMode] = useState('random');
   const [autoBan, setAutoBan] = useState(true);
-  // const [autoBan, setAutoBan] = useState(true);
   const [inputs, setInputs] = useState(originInputs);
   const [originModelOptions, setOriginModelOptions] = useState([]);
   const [modelOptions, setModelOptions] = useState([]);
@@ -113,7 +133,22 @@ const EditChannel = (props) => {
   const [customModel, setCustomModel] = useState('');
   const [modalImageUrl, setModalImageUrl] = useState('');
   const [isModalOpenurl, setIsModalOpenurl] = useState(false);
+  const formApiRef = useRef(null);
+  const [vertexKeys, setVertexKeys] = useState([]);
+  const [vertexFileList, setVertexFileList] = useState([]);
+  const vertexErroredNames = useRef(new Set()); // 避免重复报错
+  const [isMultiKeyChannel, setIsMultiKeyChannel] = useState(false);
+  const [channelSearchValue, setChannelSearchValue] = useState('');
+  const [useManualInput, setUseManualInput] = useState(false); // 是否使用手动输入模式
+  const getInitValues = () => ({ ...originInputs });
   const handleInputChange = (name, value) => {
+    if (formApiRef.current) {
+      formApiRef.current.setValue(name, value);
+    }
+    if (name === 'models' && Array.isArray(value)) {
+      value = Array.from(new Set(value.map((m) => (m || '').trim())));
+    }
+
     if (name === 'base_url' && value.endsWith('/v1')) {
       Modal.confirm({
         title: '警告',
@@ -144,6 +179,8 @@ const EditChannel = (props) => {
           localModels = [
             'swap_face',
             'mj_imagine',
+            'mj_video',
+            'mj_edits',
             'mj_variation',
             'mj_reroll',
             'mj_blend',
@@ -171,6 +208,9 @@ const EditChannel = (props) => {
         setInputs((inputs) => ({ ...inputs, models: localModels }));
       }
       setBasicModels(localModels);
+
+      // 重置手动输入模式状态
+      setUseManualInput(false);
     }
     //setAutoBan
   };
@@ -200,7 +240,23 @@ const EditChannel = (props) => {
           2,
         );
       }
+      const chInfo = data.channel_info || {};
+      const isMulti = chInfo.is_multi_key === true;
+      setIsMultiKeyChannel(isMulti);
+      if (isMulti) {
+        setBatch(true);
+        setMultiToSingle(true);
+        const modeVal = chInfo.multi_key_mode || 'random';
+        setMultiKeyMode(modeVal);
+        data.multi_key_mode = modeVal;
+      } else {
+        setBatch(false);
+        setMultiToSingle(false);
+      }
       setInputs(data);
+      if (formApiRef.current) {
+        formApiRef.current.setValues(data);
+      }
       if (data.auto_ban === 0) {
         setAutoBan(false);
       } else {
@@ -233,9 +289,9 @@ const EditChannel = (props) => {
     let err = false;
 
     if (isEdit) {
-      // 如果是编辑模式，使用已有的channel id获取模型列表
-      const res = await API.get('/api/channel/fetch_models/' + channelId);
-      if (res.data && res.data?.success) {
+      // 如果是编辑模式，使用已有的 channelId 获取模型列表
+      const res = await API.get('/api/channel/fetch_models/' + channelId, { skipErrorHandler: true });
+      if (res && res.data && res.data.success) {
         models.push(...res.data.data);
       } else {
         err = true;
@@ -247,13 +303,17 @@ const EditChannel = (props) => {
         err = true;
       } else {
         try {
-          const res = await API.post('/api/channel/fetch_models', {
-            base_url: inputs['base_url'],
-            type: inputs['type'],
-            key: inputs['key'],
-          });
+          const res = await API.post(
+            '/api/channel/fetch_models',
+            {
+              base_url: inputs['base_url'],
+              type: inputs['type'],
+              key: inputs['key'],
+            },
+            { skipErrorHandler: true },
+          );
 
-          if (res.data && res.data.success) {
+          if (res && res.data && res.data.success) {
             models.push(...res.data.data);
           } else {
             err = true;
@@ -277,10 +337,14 @@ const EditChannel = (props) => {
   const fetchModels = async () => {
     try {
       let res = await API.get(`/api/channel/models`);
-      let localModelOptions = res.data.data.map((model) => ({
-        label: model.id,
-        value: model.id,
-      }));
+      const localModelOptions = res.data.data.map((model) => {
+        const id = (model.id || '').trim();
+        return {
+          key: id,
+          label: id,
+          value: id,
+        };
+      });
       setOriginModelOptions(localModelOptions);
       setFullModels(res.data.data.map((model) => model.id));
       setBasicModels(
@@ -313,17 +377,49 @@ const EditChannel = (props) => {
   };
 
   useEffect(() => {
-    let localModelOptions = [...originModelOptions];
+    const modelMap = new Map();
+
+    originModelOptions.forEach((option) => {
+      const v = (option.value || '').trim();
+      if (!modelMap.has(v)) {
+        modelMap.set(v, option);
+      }
+    });
+
     inputs.models.forEach((model) => {
-      if (!localModelOptions.find((option) => option.label === model)) {
-        localModelOptions.push({
-          label: model,
-          value: model,
+      const v = (model || '').trim();
+      if (!modelMap.has(v)) {
+        modelMap.set(v, {
+          key: v,
+          label: v,
+          value: v,
         });
       }
     });
-    setModelOptions(localModelOptions);
-  }, [originModelOptions, inputs.models]);
+
+    const categories = getModelCategories(t);
+    const optionsWithIcon = Array.from(modelMap.values()).map((opt) => {
+      const modelName = opt.value;
+      let icon = null;
+      for (const [key, category] of Object.entries(categories)) {
+        if (key !== 'all' && category.filter({ model_name: modelName })) {
+          icon = category.icon;
+          break;
+        }
+      }
+      return {
+        ...opt,
+        label: (
+          <span className="flex items-center gap-1">
+            {icon}
+            {modelName}
+          </span>
+        ),
+      };
+    });
+
+    setModelOptions(optionsWithIcon);
+  }, [originModelOptions, inputs.models, t]);
 
   useEffect(() => {
     fetchModels().then();
@@ -349,6 +445,9 @@ const EditChannel = (props) => {
       });
     } else {
       setInputs(originInputs);
+      if (formApiRef.current) {
+        formApiRef.current.setValues(originInputs);
+      }
       handleInputChange('audit_categories', '[]');
       let localModels = getChannelModels(inputs.type);
       setBasicModels(localModels);
@@ -358,20 +457,147 @@ const EditChannel = (props) => {
 
 
 
+  useEffect(() => {
+    if (formApiRef.current) {
+      formApiRef.current.setValues(inputs);
+    }
+  }, [inputs]);
+
+  useEffect(() => {
+    if (props.visible) {
+      if (isEdit) {
+        loadChannel();
+      } else {
+        formApiRef.current?.setValues(getInitValues());
+      }
+      // 重置手动输入模式状态
+      setUseManualInput(false);
+    } else {
+      formApiRef.current?.reset();
+    }
+  }, [props.visible, channelId]);
+
+  const handleVertexUploadChange = ({ fileList }) => {
+    vertexErroredNames.current.clear();
+    (async () => {
+      let validFiles = [];
+      let keys = [];
+      const errorNames = [];
+      for (const item of fileList) {
+        const fileObj = item.fileInstance;
+        if (!fileObj) continue;
+        try {
+          const txt = await fileObj.text();
+          keys.push(JSON.parse(txt));
+          validFiles.push(item);
+        } catch (err) {
+          if (!vertexErroredNames.current.has(item.name)) {
+            errorNames.push(item.name);
+            vertexErroredNames.current.add(item.name);
+          }
+        }
+      }
+
+      // 非批量模式下只保留一个文件（最新选择的），避免重复叠加
+      if (!batch && validFiles.length > 1) {
+        validFiles = [validFiles[validFiles.length - 1]];
+        keys = [keys[keys.length - 1]];
+      }
+
+      setVertexKeys(keys);
+      setVertexFileList(validFiles);
+      if (formApiRef.current) {
+        formApiRef.current.setValue('vertex_files', validFiles);
+      }
+      setInputs((prev) => ({ ...prev, vertex_files: validFiles }));
+
+      if (errorNames.length > 0) {
+        showError(t('以下文件解析失败，已忽略：{{list}}', { list: errorNames.join(', ') }));
+      }
+    })();
+  };
+
   const submit = async () => {
-    if (!isEdit && (inputs.name === '' || inputs.key === '')) {
+    const formValues = formApiRef.current ? formApiRef.current.getValues() : {};
+    let localInputs = { ...formValues };
+
+    if (localInputs.type === 41) {
+      if (useManualInput) {
+        // 手动输入模式
+        if (localInputs.key && localInputs.key.trim() !== '') {
+          try {
+            // 验证 JSON 格式
+            const parsedKey = JSON.parse(localInputs.key);
+            // 确保是有效的密钥格式
+            localInputs.key = JSON.stringify(parsedKey);
+          } catch (err) {
+            showError(t('密钥格式无效，请输入有效的 JSON 格式密钥'));
+            return;
+          }
+        } else if (!isEdit) {
+          showInfo(t('请输入密钥！'));
+          return;
+        }
+      } else {
+        // 文件上传模式
+        let keys = vertexKeys;
+
+        // 若当前未选择文件，尝试从已上传文件列表解析（异步读取）
+        if (keys.length === 0 && vertexFileList.length > 0) {
+          try {
+            const parsed = await Promise.all(
+              vertexFileList.map(async (item) => {
+                const fileObj = item.fileInstance;
+                if (!fileObj) return null;
+                const txt = await fileObj.text();
+                return JSON.parse(txt);
+              })
+            );
+            keys = parsed.filter(Boolean);
+          } catch (err) {
+            showError(t('解析密钥文件失败: {{msg}}', { msg: err.message }));
+            return;
+          }
+        }
+
+        // 创建模式必须上传密钥；编辑模式可选
+        if (keys.length === 0) {
+          if (!isEdit) {
+            showInfo(t('请上传密钥文件！'));
+            return;
+          } else {
+            // 编辑模式且未上传新密钥，不修改 key
+            delete localInputs.key;
+          }
+        } else {
+          // 有新密钥，则覆盖
+          if (batch) {
+            localInputs.key = JSON.stringify(keys);
+          } else {
+            localInputs.key = JSON.stringify(keys[0]);
+          }
+        }
+      }
+    }
+
+    // 如果是编辑模式且 key 为空字符串，避免提交空值覆盖旧密钥
+    if (isEdit && (!localInputs.key || localInputs.key.trim() === '')) {
+      delete localInputs.key;
+    }
+    delete localInputs.vertex_files;
+
+    if (!isEdit && (!localInputs.name || !localInputs.key)) {
       showInfo(t('请填写渠道名称和渠道密钥！'));
       return;
     }
-    if (inputs.models.length === 0) {
+    if (!Array.isArray(localInputs.models) || localInputs.models.length === 0) {
       showInfo(t('请至少选择一个模型！'));
       return;
     }
-    if (inputs.model_mapping !== '' && !verifyJSON(inputs.model_mapping)) {
+    if (localInputs.model_mapping && localInputs.model_mapping !== '' && !verifyJSON(localInputs.model_mapping)) {
       showInfo(t('模型映射必须是合法的 JSON 格式！'));
       return;
     }
-    let localInputs = { ...inputs };
     if (localInputs.base_url && localInputs.base_url.endsWith('/')) {
       localInputs.base_url = localInputs.base_url.slice(
         0,
@@ -396,6 +622,7 @@ const EditChannel = (props) => {
 
 
     let res;
+    localInputs.auto_ban = localInputs.auto_ban ? 1 : 0;
     if (!Array.isArray(localInputs.models)) {
       showError(t('提交失败，请勿重复提交！'));
       handleCancel();
@@ -411,14 +638,24 @@ const EditChannel = (props) => {
     );
     localInputs.auto_ban = autoBan ? 1 : 0;
     localInputs.models = localInputs.models.join(',');
-    localInputs.group = localInputs.groups.join(',');
+    localInputs.group = (localInputs.groups || []).join(',');
+
+    let mode = 'single';
+    if (batch) {
+      mode = multiToSingle ? 'multi_to_single' : 'batch';
+    }
+
     if (isEdit) {
       res = await API.put(`/api/channel/`, {
         ...localInputs,
         id: parseInt(channelId),
       });
     } else {
-      res = await API.post(`/api/channel/`, localInputs);
+      res = await API.post(`/api/channel/`, {
+        mode: mode,
+        multi_key_mode: mode === 'multi_to_single' ? multiKeyMode : undefined,
+        channel: localInputs,
+      });
     }
     const { success, message } = res.data;
     if (success) {
@@ -441,53 +678,201 @@ const EditChannel = (props) => {
 
     let localModels = [...inputs.models];
     let localModelOptions = [...modelOptions];
-    let hasError = false;
+    const addedModels = [];
 
     modelArray.forEach((model) => {
       if (model && !localModels.includes(model)) {
         localModels.push(model);
         localModelOptions.push({
           key: model,
-          text: model,
+          label: model,
           value: model,
         });
-      } else if (model) {
-        showError(t('某些模型已存在！'));
-        hasError = true;
+        addedModels.push(model);
       }
     });
-
-    if (hasError) return;
 
     setModelOptions(localModelOptions);
     setCustomModel('');
     handleInputChange('models', localModels);
+
+    if (addedModels.length > 0) {
+      showSuccess(
+        t('已新增 {{count}} 个模型：{{list}}', {
+          count: addedModels.length,
+          list: addedModels.join(', '),
+        })
+      );
+    } else {
+      showInfo(t('未发现新增模型'));
+    }
+  };
+
+  const batchAllowed = !isEdit || isMultiKeyChannel;
+  const batchExtra = batchAllowed ? (
+    <Space>
+      <Checkbox
+        disabled={isEdit}
+        checked={batch}
+        onChange={(e) => {
+          const checked = e.target.checked;
+
+          if (!checked && vertexFileList.length > 1) {
+            Modal.confirm({
+              title: t('切换为单密钥模式'),
+              content: t('将仅保留第一个密钥文件，其余文件将被移除，是否继续？'),
+              onOk: () => {
+                const firstFile = vertexFileList[0];
+                const firstKey = vertexKeys[0] ? [vertexKeys[0]] : [];
+
+                setVertexFileList([firstFile]);
+                setVertexKeys(firstKey);
+
+                formApiRef.current?.setValue('vertex_files', [firstFile]);
+                setInputs((prev) => ({ ...prev, vertex_files: [firstFile] }));
+
+                setBatch(false);
+                setMultiToSingle(false);
+                setMultiKeyMode('random');
+              },
+              onCancel: () => {
+                setBatch(true);
+              },
+              centered: true,
+            });
+            return;
+          }
+
+          setBatch(checked);
+          if (!checked) {
+            setMultiToSingle(false);
+            setMultiKeyMode('random');
+          } else {
+            // 批量模式下禁用手动输入，并清空手动输入的内容
+            setUseManualInput(false);
+            if (inputs.type === 41) {
+              // 清空手动输入的密钥内容
+              if (formApiRef.current) {
+                formApiRef.current.setValue('key', '');
+              }
+              handleInputChange('key', '');
+            }
+          }
+        }}
+      >{t('批量创建')}</Checkbox>
+      {/*{batch && (*/}
+      {/*  <Checkbox disabled={isEdit} checked={multiToSingle} onChange={() => {*/}
+      {/*    setMultiToSingle(prev => !prev);*/}
+      {/*    setInputs(prev => {*/}
+      {/*      const newInputs = { ...prev };*/}
+      {/*      if (!multiToSingle) {*/}
+      {/*        newInputs.multi_key_mode = multiKeyMode;*/}
+      {/*      } else {*/}
+      {/*        delete newInputs.multi_key_mode;*/}
+      {/*      }*/}
+      {/*      return newInputs;*/}
+      {/*    });*/}
+      {/*  }}>{t('密钥聚合模式')}</Checkbox>*/}
+      {/*)}*/}
+    </Space>
+  ) : null;
+
+  const channelOptionList = useMemo(
+    () =>
+      CHANNEL_OPTIONS.map((opt) => ({
+        ...opt,
+        // 保持 label 为纯文本以支持搜索
+        label: opt.label,
+      })),
+    [],
+  );
+
+  const renderChannelOption = (renderProps) => {
+    const {
+      disabled,
+      selected,
+      label,
+      value,
+      focused,
+      className,
+      style,
+      onMouseEnter,
+      onClick,
+      ...rest
+    } = renderProps;
+
+    const searchWords = channelSearchValue ? [channelSearchValue] : [];
+
+    // 构建样式类名
+    const optionClassName = [
+      'flex items-center gap-3 px-3 py-2 transition-all duration-200 rounded-lg mx-2 my-1',
+      focused && 'bg-blue-50 shadow-sm',
+      selected && 'bg-blue-100 text-blue-700 shadow-lg ring-2 ring-blue-200 ring-opacity-50',
+      disabled && 'opacity-50 cursor-not-allowed',
+      !disabled && 'hover:bg-gray-50 hover:shadow-md cursor-pointer',
+      className
+    ].filter(Boolean).join(' ');
+
+    return (
+      <div
+        style={style}
+        className={optionClassName}
+        onClick={() => !disabled && onClick()}
+        onMouseEnter={e => onMouseEnter()}
+      >
+        <div className="flex items-center gap-3 w-full">
+          <div className="flex-shrink-0 w-5 h-5 flex items-center justify-center">
+            {getChannelIcon(value)}
+          </div>
+          <div className="flex-1 min-w-0">
+            <Highlight
+              sourceString={label}
+              searchWords={searchWords}
+              className="text-sm font-medium truncate"
+            />
+          </div>
+          {selected && (
+            <div className="flex-shrink-0 text-blue-600">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                <path d="M13.78 4.22a.75.75 0 010 1.06l-7.25 7.25a.75.75 0 01-1.06 0L2.22 9.28a.75.75 0 011.06-1.06L6 10.94l6.72-6.72a.75.75 0 011.06 0z"/>
+              </svg>
+            </div>
+          )}
+        </div>
+      </div>
+    );
   };
 
   return (
     <>
       <SideSheet
-        maskClosable={false}
         placement={isEdit ? 'right' : 'left'}
         title={
-          <Title level={3}>
-            {isEdit ? t('更新渠道信息') : t('创建新的渠道')}
-          </Title>
+          <Space>
+            <Tag color="blue" shape="circle">{isEdit ? t('编辑') : t('新建')}</Tag>
+            <Title heading={4} className="m-0">
+              {isEdit ? t('更新渠道信息') : t('创建新的渠道')}
+            </Title>
+          </Space>
         }
-        headerStyle={{ borderBottom: '1px solid var(--semi-color-border)' }}
-        bodyStyle={{ borderBottom: '1px solid var(--semi-color-border)' }}
+        bodyStyle={{ padding: '0' }}
         visible={props.visible}
+        width={isMobile ? '100%' : 600}
         footer={
-          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+          <div className="flex justify-end bg-white">
             <Space>
-              <Button theme='solid' size={'large'} onClick={submit}>
+              <Button
+                theme="solid"
+                onClick={() => formApiRef.current?.submitForm()}
+                icon={<IconSave />}
+              >
                 {t('提交')}
               </Button>
               <Button
-                theme='solid'
-                size={'large'}
-                type={'tertiary'}
+                theme="light"
+                type="primary"
                 onClick={handleCancel}
+                icon={<IconClose />}
               >
                 {t('取消')}
               </Button>
@@ -496,45 +881,43 @@ const EditChannel = (props) => {
         }
         closeIcon={null}
         onCancel={() => handleCancel()}
-        width={isMobile() ? '100%' : 600}
       >
         <Spin spinning={loading}>
-          <div style={{marginTop: 10}}>
-
+          <div style={{ marginTop: 10 }}>
             <Typography.Text strong>{t('类型')}：</Typography.Text>
           </div>
           <Select
-              name='type'
-              required
-              optionList={CHANNEL_OPTIONS}
-              value={inputs.type}
-              onChange={(value) => handleInputChange('type', value)}
-              style={{width: '50%'}}
-              filter
-              searchPosition='dropdown'
-              placeholder={t('请选择渠道类型')}
+            name='type'
+            required
+            optionList={CHANNEL_OPTIONS}
+            value={inputs.type}
+            onChange={(value) => handleInputChange('type', value)}
+            style={{ width: '50%' }}
+            filter
+            searchPosition='dropdown'
+            placeholder={t('请选择渠道类型')}
           />
           {inputs.type === 40 && (
-              <div style={{marginTop: 10}}>
-                <Banner
-                    type='info'
-                    description={
-                      <div>
-                        <Typography.Text strong>{t('邀请链接')}:</Typography.Text>
-                        <Typography.Text
-                            link
-                            underline
-                            style={{marginLeft: 8}}
-                            onClick={() =>
-                                window.open('https://cloud.siliconflow.cn/i/hij0YNTZ')
-                            }
-                        >
-                          https://cloud.siliconflow.cn/i/hij0YNTZ
-                        </Typography.Text>
-                      </div>
-                    }
-                />
-              </div>
+            <div style={{ marginTop: 10 }}>
+              <Banner
+                type='info'
+                description={
+                  <div>
+                    <Typography.Text strong>{t('邀请链接')}:</Typography.Text>
+                    <Typography.Text
+                      link
+                      underline
+                      style={{ marginLeft: 8 }}
+                      onClick={() =>
+                        window.open('https://cloud.siliconflow.cn/i/hij0YNTZ')
+                      }
+                    >
+                      https://cloud.siliconflow.cn/i/hij0YNTZ
+                    </Typography.Text>
+                  </div>
+                }
+              />
+            </div>
           )}
           {inputs.type === 3 && (
             <>
@@ -600,57 +983,57 @@ const EditChannel = (props) => {
             </>
           )}
           {inputs.type === 8 && (
-              <>
-                <div style={{marginTop: 10}}>
-                  <Banner
-                      type={'warning'}
-                      description={t(
-                          '如果你对接的是上游One API或者New API等转发项目，请使用OpenAI类型，不要使用此类型，除非你知道你在做什么。',
-                      )}
-                  ></Banner>
-                </div>
-                <div style={{marginTop: 10}}>
-                  <Typography.Text strong>
-                    {t('完整的 Base URL，支持变量{model}')}：
-                  </Typography.Text>
-                </div>
-                <Input
-                    name='base_url'
-                    placeholder={t(
-                        '请输入完整的URL，例如：https://api.openai.com/v1/chat/completions',
-                    )}
-                    onChange={(value) => {
-                      handleInputChange('base_url', value);
-                    }}
-                    value={inputs.base_url}
-                    autoComplete='new-password'
-                />
-              </>
+            <>
+              <div style={{ marginTop: 10 }}>
+                <Banner
+                  type={'warning'}
+                  description={t(
+                    '如果你对接的是上游One API或者New API等转发项目，请使用OpenAI类型，不要使用此类型，除非你知道你在做什么。',
+                  )}
+                ></Banner>
+              </div>
+              <div style={{ marginTop: 10 }}>
+                <Typography.Text strong>
+                  {t('完整的 Base URL，支持变量{model}')}：
+                </Typography.Text>
+              </div>
+              <Input
+                name='base_url'
+                placeholder={t(
+                  '请输入完整的URL，例如：https://api.openai.com/v1/chat/completions',
+                )}
+                onChange={(value) => {
+                  handleInputChange('base_url', value);
+                }}
+                value={inputs.base_url}
+                autoComplete='new-password'
+              />
+            </>
           )}
           {inputs.type === 37 && (
-              <>
-                <div style={{marginTop: 10}}>
-                  <Banner
-                      type={'warning'}
-                      description={t(
-                          'Dify渠道只适配chatflow和agent，并且agent不支持图片！',
-                      )}
-                  ></Banner>
-                </div>
-              </>
+            <>
+              <div style={{ marginTop: 10 }}>
+                <Banner
+                  type={'warning'}
+                  description={t(
+                    'Dify渠道只适配chatflow和agent，并且agent不支持图片！',
+                  )}
+                ></Banner>
+              </div>
+            </>
           )}
-          <div style={{marginTop: 10}}>
+          <div style={{ marginTop: 10 }}>
             <Typography.Text strong>{t('名称')}：</Typography.Text>
           </div>
           <Input
-              required
-              name='name'
-              placeholder={t('请为渠道命名')}
-              onChange={(value) => {
-                handleInputChange('name', value);
-              }}
-              value={inputs.name}
-              autoComplete='new-password'
+            required
+            name='name'
+            placeholder={t('请为渠道命名')}
+            onChange={(value) => {
+              handleInputChange('name', value);
+            }}
+            value={inputs.name}
+            autoComplete='new-password'
           />
           {inputs.type !== 3 &&
             inputs.type !== 8 &&
