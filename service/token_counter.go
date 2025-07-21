@@ -497,3 +497,11 @@ func CountTextToken(text string, model string) (int, error) {
 	tokenEncoder := getTokenEncoder(model)
 	return getTokenNum(tokenEncoder, text), err
 }
+
+func CountTextTokenGemini(text string, model string) int {
+	if text == "" {
+		return 0
+	}
+	tokenEncoder := getTokenEncoder(model)
+	return getTokenNum(tokenEncoder, text)
+}

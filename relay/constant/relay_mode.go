@@ -29,6 +29,8 @@ const (
 	RelayModeMidjourneyShorten
 	RelayModeSwapFace
 	RelayModeMidjourneyUpload
+	RelayModeMidjourneyVideo
+	RelayModeMidjourneyEdits
 
 	RelayModeAudioSpeech        // tts
 	RelayModeAudioTranscription // whisper
@@ -38,11 +40,19 @@ const (
 	RelayModeSunoFetchByID
 	RelayModeSunoSubmit
 
+	RelayModeKlingFetchByID
+	RelayModeKlingSubmit
+
+	RelayModeJimengFetchByID
+	RelayModeJimengSubmit
+
 	RelayModeRerank
 
 	RelayModeResponses
 
 	RelayModeRealtime
+
+	RelayModeGemini
 )
 
 func Path2RelayMode(path string) int {
@@ -75,6 +85,8 @@ func Path2RelayMode(path string) int {
 		relayMode = RelayModeRerank
 	} else if strings.HasPrefix(path, "/v1/realtime") {
 		relayMode = RelayModeRealtime
+	} else if strings.HasPrefix(path, "/v1beta/models") || strings.HasPrefix(path, "/v1/models") {
+		relayMode = RelayModeGemini
 	}
 	return relayMode
 }
@@ -126,6 +138,26 @@ func Path2RelaySuno(method, path string) int {
 		relayMode = RelayModeSunoFetchByID
 	} else if strings.Contains(path, "/submit/") {
 		relayMode = RelayModeSunoSubmit
+	}
+	return relayMode
+}
+
+func Path2RelayKling(method, path string) int {
+	relayMode := RelayModeUnknown
+	if method == http.MethodPost && strings.HasSuffix(path, "/video/generations") {
+		relayMode = RelayModeKlingSubmit
+	} else if method == http.MethodGet && strings.Contains(path, "/video/generations/") {
+		relayMode = RelayModeKlingFetchByID
+	}
+	return relayMode
+}
+
+func Path2RelayJimeng(method, path string) int {
+	relayMode := RelayModeUnknown
+	if method == http.MethodPost && strings.HasSuffix(path, "/video/generations") {
+		relayMode = RelayModeJimengSubmit
+	} else if method == http.MethodGet && strings.Contains(path, "/video/generations/") {
+		relayMode = RelayModeJimengFetchByID
 	}
 	return relayMode
 }

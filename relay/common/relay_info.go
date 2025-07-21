@@ -34,9 +34,14 @@ type ClaudeConvertInfo struct {
 }
 
 const (
-	RelayFormatOpenAI = "openai"
-	RelayFormatClaude = "claude"
-	RelayFormatGemini = "gemini"
+	RelayFormatOpenAI          = "openai"
+	RelayFormatClaude          = "claude"
+	RelayFormatGemini          = "gemini"
+	RelayFormatOpenAIResponses = "openai_responses"
+	RelayFormatOpenAIAudio     = "openai_audio"
+	RelayFormatOpenAIImage     = "openai_image"
+	RelayFormatRerank          = "rerank"
+	RelayFormatEmbedding       = "embedding"
 )
 
 type RerankerInfo struct {
@@ -171,6 +176,13 @@ func GenRelayInfoResponses(c *gin.Context, req *dto.OpenAIResponsesRequest) *Rel
 		}
 	}
 	info.IsStream = req.Stream
+	return info
+}
+
+func GenRelayInfoGemini(c *gin.Context) *RelayInfo {
+	info := GenRelayInfo(c)
+	info.RelayFormat = RelayFormatGemini
+	info.ShouldIncludeUsage = false
 	return info
 }
 

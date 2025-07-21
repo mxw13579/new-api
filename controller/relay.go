@@ -40,6 +40,8 @@ func relayHandler(c *gin.Context, relayMode int, channel *model.Channel) *dto.Op
 		err = relay.EmbeddingHelper(c)
 	case relayconstant.RelayModeResponses:
 		err = relay.ResponsesHelper(c)
+	case relayconstant.RelayModeGemini:
+		err = relay.GeminiHelper(c)
 	default:
 		err = relay.TextHelper(c, channel)
 	}
