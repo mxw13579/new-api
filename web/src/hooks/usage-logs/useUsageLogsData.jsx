@@ -78,6 +78,9 @@ export const useLogsData = () => {
   const STORAGE_KEY = isAdminUser
     ? 'logs-table-columns-admin'
     : 'logs-table-columns-user';
+  const BILLING_DISPLAY_MODE_STORAGE_KEY = isAdminUser
+    ? 'logs-billing-display-mode-admin'
+    : 'logs-billing-display-mode-user';
 
   // Statistics state
   const [stat, setStat] = useState({
@@ -94,56 +97,13 @@ export const useLogsData = () => {
     model_name: '',
     channel: '',
     group: '',
+    request_id: '',
     dateRange: [
       timestamp2string(getTodayStartTimestamp()),
       timestamp2string(now.getTime() / 1000 + 3600),
     ],
     logType: '0',
   };
-
-  // Column visibility state
-  const [visibleColumns, setVisibleColumns] = useState({});
-  const [showColumnSelector, setShowColumnSelector] = useState(false);
-
-  // Compact mode
-  const [compactMode, setCompactMode] = useTableCompactMode('logs');
-
-  // User info modal state
-  const [showUserInfo, setShowUserInfoModal] = useState(false);
-  const [userInfoData, setUserInfoData] = useState(null);
-
-  // Channel affinity usage cache stats modal state (admin only)
-  const [
-    showChannelAffinityUsageCacheModal,
-    setShowChannelAffinityUsageCacheModal,
-  ] = useState(false);
-  const [channelAffinityUsageCacheTarget, setChannelAffinityUsageCacheTarget] =
-    useState(null);
-
-  // Load saved column preferences from localStorage
-  useEffect(() => {
-    const savedColumns = localStorage.getItem(STORAGE_KEY);
-    if (savedColumns) {
-      try {
-        const parsed = JSON.parse(savedColumns);
-        const defaults = getDefaultColumnVisibility();
-        const merged = { ...defaults, ...parsed };
-
-        // For non-admin users, force-hide admin-only columns (does not touch admin settings)
-        if (!isAdminUser) {
-          merged[COLUMN_KEYS.CHANNEL] = false;
-          merged[COLUMN_KEYS.USERNAME] = false;
-          merged[COLUMN_KEYS.RETRY] = false;
-        }
-        setVisibleColumns(merged);
-      } catch (e) {
-        console.error('Failed to parse saved column preferences', e);
-        initDefaultColumns();
-      }
-    } else {
-      initDefaultColumns();
-    }
-  }, []);
 
   // Get default column visibility based on user role
   const getDefaultColumnVisibility = () => {
@@ -164,6 +124,63 @@ export const useLogsData = () => {
       [COLUMN_KEYS.DETAILS]: true,
     };
   };
+
+  const getInitialVisibleColumns = () => {
+    const defaults = getDefaultColumnVisibility();
+    const savedColumns = localStorage.getItem(STORAGE_KEY);
+
+    if (!savedColumns) {
+      return defaults;
+    }
+
+    try {
+      const parsed = JSON.parse(savedColumns);
+      const merged = { ...defaults, ...parsed };
+
+      if (!isAdminUser) {
+        merged[COLUMN_KEYS.CHANNEL] = false;
+        merged[COLUMN_KEYS.USERNAME] = false;
+        merged[COLUMN_KEYS.RETRY] = false;
+      }
+
+      return merged;
+    } catch (e) {
+      console.error('Failed to parse saved column preferences', e);
+      return defaults;
+    }
+  };
+
+  const getInitialBillingDisplayMode = () => {
+    const savedMode = localStorage.getItem(BILLING_DISPLAY_MODE_STORAGE_KEY);
+    if (savedMode === 'price' || savedMode === 'ratio') {
+      return savedMode;
+    }
+    return localStorage.getItem('quota_display_type') === 'TOKENS'
+      ? 'ratio'
+      : 'price';
+  };
+
+  // Column visibility state
+  const [visibleColumns, setVisibleColumns] = useState(getInitialVisibleColumns);
+  const [showColumnSelector, setShowColumnSelector] = useState(false);
+  const [billingDisplayMode, setBillingDisplayMode] = useState(
+    getInitialBillingDisplayMode,
+  );
+
+  // Compact mode
+  const [compactMode, setCompactMode] = useTableCompactMode('logs');
+
+  // User info modal state
+  const [showUserInfo, setShowUserInfoModal] = useState(false);
+  const [userInfoData, setUserInfoData] = useState(null);
+
+  // Channel affinity usage cache stats modal state (admin only)
+  const [
+    showChannelAffinityUsageCacheModal,
+    setShowChannelAffinityUsageCacheModal,
+  ] = useState(false);
+  const [channelAffinityUsageCacheTarget, setChannelAffinityUsageCacheTarget] =
+    useState(null);
 
   // Initialize default column visibility
   const initDefaultColumns = () => {
@@ -206,6 +223,10 @@ export const useLogsData = () => {
     }
   }, [visibleColumns]);
 
+  useEffect(() => {
+    localStorage.setItem(BILLING_DISPLAY_MODE_STORAGE_KEY, billingDisplayMode);
+  }, [BILLING_DISPLAY_MODE_STORAGE_KEY, billingDisplayMode]);
+
   // 获取表单值的辅助函数，确保所有值都是字符串
   const getFormValues = () => {
     const formValues = formApi ? formApi.getValues() : {};
@@ -230,6 +251,7 @@ export const useLogsData = () => {
       end_timestamp,
       channel: formValues.channel || '',
       group: formValues.group || '',
+      request_id: formValues.request_id || '',
       logType: formValues.logType ? parseInt(formValues.logType) : 0,
     };
   };
@@ -342,10 +364,16 @@ export const useLogsData = () => {
       let other = getLogOther(logs[i].other);
       let expandDataLocal = [];
 
-      if (isAdminUser && (logs[i].type === 0 || logs[i].type === 2)) {
+      if (isAdminUser && (logs[i].type === 0 || logs[i].type === 2 || logs[i].type === 6)) {
         expandDataLocal.push({
           key: t('渠道信息'),
           value: `${logs[i].channel} - ${logs[i].channel_name || '[未知]'}`,
+        });
+      }
+      if (logs[i].request_id) {
+        expandDataLocal.push({
+          key: t('Request ID'),
+          value: logs[i].request_id,
         });
       }
       if (other?.ws || other?.audio) {
@@ -398,6 +426,7 @@ export const useLogsData = () => {
                 other.cache_creation_ratio_1h ||
                   other.cache_creation_ratio ||
                   1.0,
+                billingDisplayMode,
               )
             : renderLogContent(
                 other?.model_ratio,
@@ -412,6 +441,7 @@ export const useLogsData = () => {
                 other.web_search_call_count || 0,
                 other.file_search || false,
                 other.file_search_call_count || 0,
+                billingDisplayMode,
               ),
         });
         if (logs[i]?.content) {
@@ -465,6 +495,7 @@ export const useLogsData = () => {
               other?.user_group_ratio,
               other?.cache_tokens || 0,
               other?.cache_ratio || 1.0,
+              billingDisplayMode,
             );
           } else if (other?.claude) {
             content = renderClaudeModelPrice(
@@ -487,6 +518,7 @@ export const useLogsData = () => {
               other.cache_creation_ratio_1h ||
                 other.cache_creation_ratio ||
                 1.0,
+              billingDisplayMode,
             );
           } else {
             content = renderModelPrice(
@@ -513,6 +545,7 @@ export const useLogsData = () => {
               other?.audio_input_price || 0,
               other?.image_generation_call || false,
               other?.image_generation_call_price || 0,
+              billingDisplayMode,
             );
           }
           expandDataLocal.push({
@@ -524,6 +557,24 @@ export const useLogsData = () => {
           expandDataLocal.push({
             key: t('Reasoning Effort'),
             value: other.reasoning_effort,
+          });
+        }
+      }
+      if (logs[i].type === 6) {
+        if (other?.task_id) {
+          expandDataLocal.push({
+            key: t('任务ID'),
+            value: other.task_id,
+          });
+        }
+        if (other?.reason) {
+          expandDataLocal.push({
+            key: t('失败原因'),
+            value: (
+              <div style={{ maxWidth: 600, whiteSpace: 'normal', wordBreak: 'break-word', lineHeight: 1.6 }}>
+                {other.reason}
+              </div>
+            ),
           });
         }
       }
@@ -582,13 +633,13 @@ export const useLogsData = () => {
           ),
         });
       }
-      if (isAdminUser) {
+      if (isAdminUser && logs[i].type !== 6) {
         expandDataLocal.push({
           key: t('请求转换'),
           value: requestConversionDisplayValue(other?.request_conversion),
         });
       }
-      if (isAdminUser) {
+      if (isAdminUser && logs[i].type !== 6) {
         let localCountMode = '';
         if (other?.admin_info?.local_count_tokens) {
           localCountMode = t('本地计费');
@@ -620,6 +671,7 @@ export const useLogsData = () => {
       end_timestamp,
       channel,
       group,
+      request_id,
       logType: formLogType,
     } = getFormValues();
 
@@ -633,9 +685,9 @@ export const useLogsData = () => {
     let localStartTimestamp = Date.parse(start_timestamp) / 1000;
     let localEndTimestamp = Date.parse(end_timestamp) / 1000;
     if (isAdminUser) {
-      url = `/api/log/?p=${startIdx}&page_size=${pageSize}&type=${currentLogType}&username=${username}&token_name=${token_name}&model_name=${model_name}&start_timestamp=${localStartTimestamp}&end_timestamp=${localEndTimestamp}&channel=${channel}&group=${group}`;
+      url = `/api/log/?p=${startIdx}&page_size=${pageSize}&type=${currentLogType}&username=${username}&token_name=${token_name}&model_name=${model_name}&start_timestamp=${localStartTimestamp}&end_timestamp=${localEndTimestamp}&channel=${channel}&group=${group}&request_id=${request_id}`;
     } else {
-      url = `/api/log/self/?p=${startIdx}&page_size=${pageSize}&type=${currentLogType}&token_name=${token_name}&model_name=${model_name}&start_timestamp=${localStartTimestamp}&end_timestamp=${localEndTimestamp}&group=${group}`;
+      url = `/api/log/self/?p=${startIdx}&page_size=${pageSize}&type=${currentLogType}&token_name=${token_name}&model_name=${model_name}&start_timestamp=${localStartTimestamp}&end_timestamp=${localEndTimestamp}&group=${group}&request_id=${request_id}`;
     }
     url = encodeURI(url);
     const res = await API.get(url);
@@ -737,6 +789,8 @@ export const useLogsData = () => {
     visibleColumns,
     showColumnSelector,
     setShowColumnSelector,
+    billingDisplayMode,
+    setBillingDisplayMode,
     handleColumnVisibilityChange,
     handleSelectAll,
     initDefaultColumns,
