@@ -41,6 +41,7 @@ export type PaymentResponse = ApiResponse<Record<string, unknown>> & {
 export type StripePaymentResponse = ApiResponse<{ pay_link: string }>
 export type AffiliateCodeResponse = ApiResponse<string>
 export type AffiliateTransferResponse = ApiResponse
+export type AffiliateLogsResponse = ApiResponse<AffiliateLogPage>
 export type CreemPaymentResponse = ApiResponse<{ checkout_url: string }>
 export type WaffoPaymentResponse = ApiResponse<
   { payment_url?: string } | string
@@ -156,6 +157,10 @@ export interface TopupInfo {
   payment_compliance_confirmed?: boolean
   /** Current compliance terms version */
   payment_compliance_terms_version?: string
+  /** Wallet top-up rebate ratio for inviters, in percent */
+  RechargeRebateRatioForInviter?: number
+  /** Wallet top-up rebate ratio for inviters, in percent */
+  recharge_rebate_ratio_for_inviter?: number
 }
 
 /**
@@ -218,6 +223,28 @@ export interface AmountRequest {
 export interface AffiliateTransferRequest {
   /** Quota amount to transfer */
   quota: number
+}
+
+export type AffiliateLogType = 'invite_reward' | 'topup_rebate'
+
+export interface AffiliateLogItem {
+  id: number
+  inviter_id: number
+  invitee_id: number
+  invitee_display_name?: string
+  invitee_username?: string
+  type: AffiliateLogType
+  reward_quota: number
+  base_quota: number
+  rebate_percent: number
+  created_at: number
+}
+
+export interface AffiliateLogPage {
+  items: AffiliateLogItem[]
+  total: number
+  page: number
+  page_size: number
 }
 
 /**

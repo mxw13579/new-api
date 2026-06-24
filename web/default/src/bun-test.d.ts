@@ -16,15 +16,16 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-// ============================================================================
-// Wallet Hooks Exports
-// ============================================================================
+declare module 'bun:test' {
+  type TestCallback = () => void | Promise<void>
 
-export * from './use-topup-info'
-export * from './use-payment'
-export * from './use-affiliate'
-export * from './use-affiliate-logs'
-export * from './use-redemption'
-export * from './use-creem-payment'
-export * from './use-waffo-payment'
-export * from './use-waffo-pancake-payment'
+  interface Matchers<T> {
+    toBe(expected: T): void
+    toContain(expected: string): void
+    toEqual(expected: unknown): void
+  }
+
+  export function describe(name: string, callback: TestCallback): void
+  export function expect<T>(actual: T): Matchers<T>
+  export function it(name: string, callback: TestCallback): void
+}

@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { api } from '@/lib/api'
+
 import type {
   RedemptionRequest,
   PaymentRequest,
@@ -30,6 +31,8 @@ import type {
   StripePaymentResponse,
   AffiliateCodeResponse,
   AffiliateTransferResponse,
+  AffiliateLogsResponse,
+  AffiliateLogType,
   BillingHistoryResponse,
   CompleteOrderRequest,
   CreemPaymentRequest,
@@ -183,6 +186,23 @@ export async function transferAffiliateQuota(
   request: AffiliateTransferRequest
 ): Promise<AffiliateTransferResponse> {
   const res = await api.post('/api/user/aff_transfer', request)
+  return res.data
+}
+
+/**
+ * Get affiliate invite/rebate logs for current user
+ */
+export async function getAffiliateLogs(
+  type: AffiliateLogType,
+  page: number,
+  pageSize: number
+): Promise<AffiliateLogsResponse> {
+  const params = new URLSearchParams({
+    type,
+    page: page.toString(),
+    page_size: pageSize.toString(),
+  })
+  const res = await api.get(`/api/user/affiliate/logs?${params.toString()}`)
   return res.data
 }
 

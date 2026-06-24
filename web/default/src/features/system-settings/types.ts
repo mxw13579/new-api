@@ -248,6 +248,7 @@ export type BillingSettings = {
   QuotaForNewUser: number
   PreConsumedQuota: number
   QuotaForInviter: number
+  RechargeRebateRatioForInviter: number
   QuotaForInvitee: number
   TopUpLink: string
   'general_setting.docs_link': string

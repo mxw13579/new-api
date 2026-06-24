@@ -250,6 +250,13 @@ export function Wallet(props: WalletProps) {
     return topupInfo?.discount?.[topupAmount] || DEFAULT_DISCOUNT_RATE
   }, [topupInfo, topupAmount])
 
+  const rechargeRebateRatioForInviter =
+    Number(
+      topupInfo?.RechargeRebateRatioForInviter ??
+        topupInfo?.recharge_rebate_ratio_for_inviter ??
+        0
+    ) || 0
+
   const handleSubscriptionAvailabilityChange = useCallback(
     (available: boolean) => {
       setShowSubscriptionPanel(available)
@@ -318,6 +325,7 @@ export function Wallet(props: WalletProps) {
               user={user}
               affiliateLink={affiliateLink}
               onTransfer={() => setTransferDialogOpen(true)}
+              rebateRatio={rechargeRebateRatioForInviter}
               complianceConfirmed={
                 topupInfo?.payment_compliance_confirmed !== false
               }

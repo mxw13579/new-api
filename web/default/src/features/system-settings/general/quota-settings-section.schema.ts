@@ -16,15 +16,21 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-// ============================================================================
-// Wallet Hooks Exports
-// ============================================================================
+import * as z from 'zod'
 
-export * from './use-topup-info'
-export * from './use-payment'
-export * from './use-affiliate'
-export * from './use-affiliate-logs'
-export * from './use-redemption'
-export * from './use-creem-payment'
-export * from './use-waffo-payment'
-export * from './use-waffo-pancake-payment'
+export const quotaSchema = z.object({
+  QuotaForNewUser: z.coerce.number().min(0),
+  PreConsumedQuota: z.coerce.number().min(0),
+  QuotaForInviter: z.coerce.number().min(0),
+  RechargeRebateRatioForInviter: z.coerce.number().min(0).max(100),
+  QuotaForInvitee: z.coerce.number().min(0),
+  TopUpLink: z.string(),
+  general_setting: z.object({
+    docs_link: z.string(),
+  }),
+  quota_setting: z.object({
+    enable_free_model_pre_consume: z.boolean(),
+  }),
+})
+
+export type QuotaFormValues = z.infer<typeof quotaSchema>
