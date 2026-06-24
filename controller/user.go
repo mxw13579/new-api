@@ -430,6 +430,69 @@ func GetAffCode(c *gin.Context) {
 	return
 }
 
+type affiliateLogResponse struct {
+	Id                 int     `json:"id"`
+	InviterId          int     `json:"inviter_id"`
+	InviteeId          int     `json:"invitee_id"`
+	InviteeUsername    string  `json:"invitee_username"`
+	InviteeDisplayName string  `json:"invitee_display_name"`
+	Type               string  `json:"type"`
+	RewardQuota        int     `json:"reward_quota"`
+	BaseQuota          int     `json:"base_quota"`
+	RebatePercent      float64 `json:"rebate_percent"`
+	CreatedAt          int64   `json:"created_at"`
+}
+
+type affiliateLogPageResponse struct {
+	Items    []affiliateLogResponse `json:"items"`
+	Total    int64                  `json:"total"`
+	Page     int                    `json:"page"`
+	PageSize int                    `json:"page_size"`
+}
+
+func GetAffiliateLogs(c *gin.Context) {
+	id := c.GetInt("id")
+	logType := strings.TrimSpace(c.Query("type"))
+	if logType != "" && !model.IsValidAffiliateLogType(logType) {
+		common.ApiErrorMsg(c, "invalid affiliate log type")
+		return
+	}
+
+	pageInfo := common.GetPageQuery(c)
+	if page, err := strconv.Atoi(c.Query("page")); err == nil && page > 0 {
+		pageInfo.Page = page
+	}
+
+	page, err := model.GetAffiliateLogsByInviter(id, logType, pageInfo)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+
+	items := make([]affiliateLogResponse, 0, len(page.Items))
+	for _, log := range page.Items {
+		items = append(items, affiliateLogResponse{
+			Id:                 log.Id,
+			InviterId:          log.InviterId,
+			InviteeId:          log.InviteeId,
+			InviteeUsername:    log.InviteeUsername,
+			InviteeDisplayName: log.InviteeDisplayName,
+			Type:               log.Type,
+			RewardQuota:        log.RewardQuota,
+			BaseQuota:          log.BaseQuota,
+			RebatePercent:      log.RebatePercent,
+			CreatedAt:          log.CreatedAt,
+		})
+	}
+
+	common.ApiSuccess(c, affiliateLogPageResponse{
+		Items:    items,
+		Total:    page.Total,
+		Page:     page.Page,
+		PageSize: page.PageSize,
+	})
+}
+
 func GetSelf(c *gin.Context) {
 	id := c.GetInt("id")
 	userRole := c.GetInt("role")

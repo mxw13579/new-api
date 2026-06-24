@@ -2,6 +2,7 @@ package controller
 
 import (
 	"fmt"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -40,6 +41,17 @@ func isPositiveOptionValue(value string) bool {
 	}
 	floatValue, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
 	return err == nil && floatValue > 0
+}
+
+func validateRechargeRebateRatioForInviter(value string) error {
+	ratio, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
+	if err != nil || math.IsNaN(ratio) || math.IsInf(ratio, 0) {
+		return fmt.Errorf("RechargeRebateRatioForInviter must be a number")
+	}
+	if ratio < 0 || ratio > 100 {
+		return fmt.Errorf("RechargeRebateRatioForInviter must be between 0 and 100")
+	}
+	return nil
 }
 
 func collectModelNamesFromOptionValue(raw string, modelNames map[string]struct{}) {
@@ -139,6 +151,15 @@ func UpdateOption(c *gin.Context) {
 	}
 	switch option.Key {
 	case "QuotaForInviter", "QuotaForInvitee":
+		if isPositiveOptionValue(option.Value.(string)) && !operation_setting.IsPaymentComplianceConfirmed() {
+			common.ApiErrorI18n(c, i18n.MsgPaymentComplianceRequired)
+			return
+		}
+	case "RechargeRebateRatioForInviter":
+		if err := validateRechargeRebateRatioForInviter(option.Value.(string)); err != nil {
+			common.ApiErrorMsg(c, err.Error())
+			return
+		}
 		if isPositiveOptionValue(option.Value.(string)) && !operation_setting.IsPaymentComplianceConfirmed() {
 			common.ApiErrorI18n(c, i18n.MsgPaymentComplianceRequired)
 			return

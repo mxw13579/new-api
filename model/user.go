@@ -15,6 +15,7 @@ import (
 
 	"github.com/bytedance/gopkg/util/gopool"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 const UserNameMaxLength = 20
@@ -336,15 +337,45 @@ func HardDeleteUserById(id int) error {
 	})
 }
 
-func inviteUser(inviterId int) (err error) {
-	user, err := GetUserById(inviterId, true)
-	if err != nil {
-		return err
-	}
-	user.AffCount++
-	user.AffQuota += common.QuotaForInviter
-	user.AffHistoryQuota += common.QuotaForInviter
-	return DB.Save(user).Error
+func inviteUser(inviterId int, inviteeId int, rewardQuota int) error {
+	return DB.Transaction(func(tx *gorm.DB) error {
+		var user User
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&user, inviterId).Error; err != nil {
+			return err
+		}
+
+		var existingLog AffiliateLog
+		err := lockAffiliateLogByKeyTx(tx, InviteRewardIdempotencyKey(inviterId, inviteeId), &existingLog)
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+
+		user.AffCount++
+		if rewardQuota > 0 {
+			user.AffQuota += rewardQuota
+			user.AffHistoryQuota += rewardQuota
+		}
+		if err := tx.Save(&user).Error; err != nil {
+			return err
+		}
+		inserted, err := createAffiliateLogIfNotExistsTx(tx, &AffiliateLog{
+			InviterId:      inviterId,
+			InviteeId:      inviteeId,
+			Type:           AffiliateLogTypeInviteReward,
+			IdempotencyKey: InviteRewardIdempotencyKey(inviterId, inviteeId),
+			RewardQuota:    rewardQuota,
+		})
+		if err != nil {
+			return err
+		}
+		if !inserted {
+			return ErrAffiliateLogConflict
+		}
+		return nil
+	})
 }
 
 func (user *User) TransferAffQuotaToQuota(quota int) error {
@@ -361,7 +392,7 @@ func (user *User) TransferAffQuotaToQuota(quota int) error {
 	defer tx.Rollback() // 确保在函数退出时事务能回滚
 
 	// 加锁查询用户以确保数据一致性
-	err := tx.Set("gorm:query_option", "FOR UPDATE").First(&user, user.Id).Error
+	err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&user, user.Id).Error
 	if err != nil {
 		return err
 	}
@@ -426,15 +457,23 @@ func (user *User) Insert(inviterId int) error {
 	if common.QuotaForNewUser > 0 {
 		RecordLog(user.Id, LogTypeSystem, fmt.Sprintf("新用户注册赠送 %s", logger.LogQuota(common.QuotaForNewUser)))
 	}
-	if inviterId != 0 && operation_setting.IsPaymentComplianceConfirmed() {
-		if common.QuotaForInvitee > 0 {
-			_ = IncreaseUserQuota(user.Id, common.QuotaForInvitee, true)
-			RecordLog(user.Id, LogTypeSystem, fmt.Sprintf("使用邀请码赠送 %s", logger.LogQuota(common.QuotaForInvitee)))
+	if inviterId != 0 {
+		rewardQuota := 0
+		if operation_setting.IsPaymentComplianceConfirmed() {
+			if common.QuotaForInvitee > 0 {
+				_ = IncreaseUserQuota(user.Id, common.QuotaForInvitee, true)
+				RecordLog(user.Id, LogTypeSystem, fmt.Sprintf("使用邀请码赠送 %s", logger.LogQuota(common.QuotaForInvitee)))
+			}
+			if common.QuotaForInviter > 0 {
+				rewardQuota = common.QuotaForInviter
+			}
 		}
-		if common.QuotaForInviter > 0 {
-			//_ = IncreaseUserQuota(inviterId, common.QuotaForInviter)
-			RecordLog(inviterId, LogTypeSystem, fmt.Sprintf("邀请用户赠送 %s", logger.LogQuota(common.QuotaForInviter)))
-			_ = inviteUser(inviterId)
+		if err := inviteUser(inviterId, user.Id, rewardQuota); err == nil {
+			if rewardQuota > 0 {
+				RecordLog(inviterId, LogTypeSystem, fmt.Sprintf("邀请用户赠送 %s", logger.LogQuota(common.QuotaForInviter)))
+			}
+		} else {
+			common.SysLog(fmt.Sprintf("failed to grant invite reward inviter_id=%d invitee_id=%d: %s", inviterId, user.Id, err.Error()))
 		}
 	}
 	return nil
@@ -487,14 +526,23 @@ func (user *User) FinalizeOAuthUserCreation(inviterId int) {
 	if common.QuotaForNewUser > 0 {
 		RecordLog(user.Id, LogTypeSystem, fmt.Sprintf("新用户注册赠送 %s", logger.LogQuota(common.QuotaForNewUser)))
 	}
-	if inviterId != 0 && operation_setting.IsPaymentComplianceConfirmed() {
-		if common.QuotaForInvitee > 0 {
-			_ = IncreaseUserQuota(user.Id, common.QuotaForInvitee, true)
-			RecordLog(user.Id, LogTypeSystem, fmt.Sprintf("使用邀请码赠送 %s", logger.LogQuota(common.QuotaForInvitee)))
+	if inviterId != 0 {
+		rewardQuota := 0
+		if operation_setting.IsPaymentComplianceConfirmed() {
+			if common.QuotaForInvitee > 0 {
+				_ = IncreaseUserQuota(user.Id, common.QuotaForInvitee, true)
+				RecordLog(user.Id, LogTypeSystem, fmt.Sprintf("使用邀请码赠送 %s", logger.LogQuota(common.QuotaForInvitee)))
+			}
+			if common.QuotaForInviter > 0 {
+				rewardQuota = common.QuotaForInviter
+			}
 		}
-		if common.QuotaForInviter > 0 {
-			RecordLog(inviterId, LogTypeSystem, fmt.Sprintf("邀请用户赠送 %s", logger.LogQuota(common.QuotaForInviter)))
-			_ = inviteUser(inviterId)
+		if err := inviteUser(inviterId, user.Id, rewardQuota); err == nil {
+			if rewardQuota > 0 {
+				RecordLog(inviterId, LogTypeSystem, fmt.Sprintf("邀请用户赠送 %s", logger.LogQuota(common.QuotaForInviter)))
+			}
+		} else {
+			common.SysLog(fmt.Sprintf("failed to grant invite reward inviter_id=%d invitee_id=%d: %s", inviterId, user.Id, err.Error()))
 		}
 	}
 }
