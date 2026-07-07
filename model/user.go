@@ -14,7 +14,6 @@ import (
 
 	"github.com/bytedance/gopkg/util/gopool"
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 )
 
 const UserNameMaxLength = 20
@@ -435,7 +434,7 @@ func HardDeleteUserById(id int) error {
 func inviteUser(inviterId int, inviteeId int, rewardQuota int) error {
 	return DB.Transaction(func(tx *gorm.DB) error {
 		var user User
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&user, inviterId).Error; err != nil {
+		if err := lockForUpdate(tx).First(&user, inviterId).Error; err != nil {
 			return err
 		}
 
@@ -487,7 +486,7 @@ func (user *User) TransferAffQuotaToQuota(quota int) error {
 	defer tx.Rollback() // 确保在函数退出时事务能回滚
 
 	// 加锁查询用户以确保数据一致性
-	err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&user, user.Id).Error
+	err := lockForUpdate(tx).First(&user, user.Id).Error
 	if err != nil {
 		return err
 	}

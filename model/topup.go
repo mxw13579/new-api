@@ -10,7 +10,6 @@ import (
 
 	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 )
 
 type TopUp struct {
@@ -182,7 +181,7 @@ func creditWalletTopUpTx(tx *gorm.DB, topUp *TopUp, quotaToAdd int, expectedProv
 	shouldGrantRebate := invitee.InviterId != 0 && invitee.InviterId != invitee.Id && rebateQuota > 0
 	if shouldGrantRebate {
 		var inviter User
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+		if err := lockForUpdate(tx).
 			Select("id").
 			Where("id = ?", invitee.InviterId).
 			First(&inviter).Error; err != nil {
@@ -301,7 +300,7 @@ func UpdatePendingTopUpStatus(tradeNo string, expectedPaymentProvider string, ta
 
 	return DB.Transaction(func(tx *gorm.DB) error {
 		topUp := &TopUp{}
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where(refCol+" = ?", tradeNo).First(topUp).Error; err != nil {
+		if err := lockForUpdate(tx).Where(refCol+" = ?", tradeNo).First(topUp).Error; err != nil {
 			return normalizeTopUpLookupError(err)
 		}
 		if expectedPaymentProvider != "" && topUp.PaymentProvider != expectedPaymentProvider {
@@ -329,7 +328,7 @@ func CompleteEpayWalletTopUp(tradeNo string, actualPaymentMethod string, callerI
 	var result *WalletTopUpCreditResult
 	err := DB.Transaction(func(tx *gorm.DB) error {
 		topUp := &TopUp{}
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where(refCol+" = ?", tradeNo).First(topUp).Error; err != nil {
+		if err := lockForUpdate(tx).Where(refCol+" = ?", tradeNo).First(topUp).Error; err != nil {
 			return normalizeTopUpLookupError(err)
 		}
 
@@ -377,7 +376,7 @@ func Recharge(referenceId string, customerId string, callerIp string) (err error
 	}
 
 	err = DB.Transaction(func(tx *gorm.DB) error {
-		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where(refCol+" = ?", referenceId).First(topUp).Error
+		err := lockForUpdate(tx).Where(refCol+" = ?", referenceId).First(topUp).Error
 		if err != nil {
 			return normalizeTopUpLookupError(err)
 		}
@@ -593,7 +592,7 @@ func ManualCompleteTopUp(tradeNo string, callerIp string) error {
 	var result *WalletTopUpCreditResult
 	err := DB.Transaction(func(tx *gorm.DB) error {
 		topUp := &TopUp{}
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where(refCol+" = ?", tradeNo).First(topUp).Error; err != nil {
+		if err := lockForUpdate(tx).Where(refCol+" = ?", tradeNo).First(topUp).Error; err != nil {
 			return normalizeTopUpLookupError(err)
 		}
 
@@ -638,7 +637,7 @@ func RechargeCreem(referenceId string, customerEmail string, customerName string
 	}
 
 	err = DB.Transaction(func(tx *gorm.DB) error {
-		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where(refCol+" = ?", referenceId).First(topUp).Error
+		err := lockForUpdate(tx).Where(refCol+" = ?", referenceId).First(topUp).Error
 		if err != nil {
 			return normalizeTopUpLookupError(err)
 		}
@@ -705,7 +704,7 @@ func RechargeWaffo(tradeNo string, callerIp string) (err error) {
 	}
 
 	err = DB.Transaction(func(tx *gorm.DB) error {
-		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where(refCol+" = ?", tradeNo).First(topUp).Error
+		err := lockForUpdate(tx).Where(refCol+" = ?", tradeNo).First(topUp).Error
 		if err != nil {
 			return normalizeTopUpLookupError(err)
 		}
@@ -755,7 +754,7 @@ func RechargeWaffoPancake(tradeNo string) (err error) {
 	}
 
 	err = DB.Transaction(func(tx *gorm.DB) error {
-		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where(refCol+" = ?", tradeNo).First(topUp).Error
+		err := lockForUpdate(tx).Where(refCol+" = ?", tradeNo).First(topUp).Error
 		if err != nil {
 			return normalizeTopUpLookupError(err)
 		}
