@@ -1,3 +1,4 @@
+import { useQueryClient } from '@tanstack/react-query'
 /*
 Copyright (C) 2023-2026 QuantumNous
 
@@ -47,6 +48,10 @@ import {
   getMinTopupAmount,
   isWaffoPancakePayment,
 } from './lib'
+import {
+  refreshWalletAfterConfirmedQuotaChange,
+  refreshWalletAfterOrderCreation,
+} from './lib/quota-refresh'
 import type {
   UserWalletData,
   PaymentMethod,
@@ -60,6 +65,7 @@ interface WalletProps {
 
 export function Wallet(props: WalletProps) {
   const { t } = useTranslation()
+  const queryClient = useQueryClient()
   const [user, setUser] = useState<UserWalletData | null>(null)
   const [userLoading, setUserLoading] = useState(true)
   const [topupAmount, setTopupAmount] = useState(0)
@@ -120,6 +126,16 @@ export function Wallet(props: WalletProps) {
       setUserLoading(false)
     }
   }, [])
+
+  const refreshAfterConfirmedQuotaChange = useCallback(
+    () => refreshWalletAfterConfirmedQuotaChange(queryClient, fetchUser),
+    [fetchUser, queryClient]
+  )
+
+  const refreshAfterOrderCreation = useCallback(
+    () => refreshWalletAfterOrderCreation(fetchUser),
+    [fetchUser]
+  )
 
   useEffect(() => {
     fetchUser()
@@ -194,7 +210,7 @@ export function Wallet(props: WalletProps) {
 
     if (success) {
       setConfirmDialogOpen(false)
-      await fetchUser()
+      await refreshAfterOrderCreation()
     }
   }
 
@@ -205,7 +221,7 @@ export function Wallet(props: WalletProps) {
     const success = await redeemCode(redemptionCode)
     if (success) {
       setRedemptionCode('')
-      await fetchUser()
+      await refreshAfterConfirmedQuotaChange()
     }
   }
 
@@ -213,7 +229,7 @@ export function Wallet(props: WalletProps) {
   const handleTransfer = async (amount: number) => {
     const success = await transferQuota(amount)
     if (success) {
-      await fetchUser()
+      await refreshAfterConfirmedQuotaChange()
     }
     return success
   }
@@ -232,7 +248,7 @@ export function Wallet(props: WalletProps) {
     if (success) {
       setCreemDialogOpen(false)
       setSelectedCreemProduct(null)
-      await fetchUser()
+      await refreshAfterOrderCreation()
     }
   }
 
@@ -319,7 +335,7 @@ export function Wallet(props: WalletProps) {
                 topupInfo={topupInfo}
                 onAvailabilityChange={handleSubscriptionAvailabilityChange}
                 userQuota={user?.quota}
-                onPurchaseSuccess={fetchUser}
+                onPurchaseSuccess={refreshAfterConfirmedQuotaChange}
               />
             </div>
 

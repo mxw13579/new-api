@@ -578,6 +578,23 @@ func GetSelf(c *gin.Context) {
 	return
 }
 
+// GetSelfQuota returns the authenticated user's current quota balance.
+func GetSelfQuota(c *gin.Context) {
+	id := c.GetInt("id")
+	if id <= 0 {
+		common.ApiErrorMsg(c, "invalid user id")
+		return
+	}
+	quota, err := model.GetUserQuota(id, false)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, gin.H{
+		"quota": quota,
+	})
+}
+
 // 计算用户权限的辅助函数
 func calculateUserPermissions(userRole int) map[string]interface{} {
 	permissions := map[string]interface{}{}

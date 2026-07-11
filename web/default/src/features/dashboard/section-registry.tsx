@@ -40,6 +40,11 @@ const DASHBOARD_SECTIONS = [
     build: () => null,
   },
   {
+    id: 'distribution',
+    titleKey: 'Distribution',
+    build: () => null,
+  },
+  {
     id: 'users',
     titleKey: 'User Analytics',
     adminOnly: true,
@@ -69,7 +74,10 @@ export function getDashboardSectionNavItems(
   t: TFunction,
   options?: { isAdmin?: boolean }
 ) {
-  const all = dashboardRegistry.getSectionNavItems(t)
+  const all = dashboardRegistry.getSectionNavItems(t).map((item, index) => ({
+    ...item,
+    id: DASHBOARD_SECTIONS[index].id,
+  }))
   if (options?.isAdmin) return all
   return all.filter(
     (_, idx) => !ADMIN_ONLY_SECTIONS.has(DASHBOARD_SECTIONS[idx].id)

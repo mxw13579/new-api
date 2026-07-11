@@ -48,6 +48,19 @@ export interface FlowQuotaDataItem {
   quota?: number
 }
 
+export type DistributionMetric = 'quota' | 'tokens' | 'requests'
+
+export type DistributionDimension = 'user' | 'key' | 'group'
+
+export interface DistributionEndpointRow {
+  dimension: DistributionDimension
+  id: string
+  label: string
+  quota: number
+  tokens: number
+  requests: number
+}
+
 export type FlowMetric = 'quota' | 'tokens' | 'requests'
 
 export type FlowOverflowMode = 'aggregate' | 'hide'

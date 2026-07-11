@@ -21,7 +21,6 @@ import { useState, useEffect, useCallback } from 'react'
 import { toast } from 'sonner'
 
 import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard'
-import { getSelf } from '@/lib/api'
 
 import { getAffiliateCode, transferAffiliateQuota } from '../api'
 import { generateAffiliateLink } from '../lib'
@@ -69,13 +68,12 @@ export function useAffiliate() {
 
       if (response.success) {
         toast.success(response.message || i18next.t('Transfer successful'))
-        await getSelf()
         return true
       }
 
       toast.error(response.message || i18next.t('Transfer failed'))
       return false
-    } catch (_error) {
+    } catch {
       toast.error(i18next.t('Transfer failed'))
       return false
     } finally {
