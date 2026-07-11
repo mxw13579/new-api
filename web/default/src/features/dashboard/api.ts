@@ -19,10 +19,25 @@ For commercial licensing, please contact support@quantumnous.com
 import { api } from '@/lib/api'
 
 import type {
+  DistributionDimension,
+  DistributionEndpointRow,
+  DistributionMetric,
   FlowQuotaDataItem,
   QuotaDataItem,
   UptimeGroupResult,
 } from './types'
+
+export interface SelfQuotaData {
+  quota: number
+}
+
+export interface DistributionDataParams {
+  start_timestamp: number
+  end_timestamp: number
+  metric: DistributionMetric
+  dimension: DistributionDimension
+  username?: string
+}
 
 // ============================================================================
 // Dashboard APIs
@@ -81,6 +96,24 @@ export async function getFlowQuotaDates(
     data?: FlowQuotaDataItem[]
     message?: string
   }>(endpoint, { params })
+  return res.data
+}
+
+export async function getDistributionData(params: DistributionDataParams) {
+  const res = await api.get<{
+    success: boolean
+    message?: string
+    data?: DistributionEndpointRow[]
+  }>('/api/data/distribution', { params })
+  return res.data
+}
+
+export async function getSelfQuota() {
+  const res = await api.get<{
+    success: boolean
+    message?: string
+    data?: SelfQuotaData
+  }>('/api/user/self/quota')
   return res.data
 }
 

@@ -28,6 +28,24 @@ func parseFlowQuotaTimeRange(c *gin.Context) (int64, int64, bool) {
 	return startTimestamp, endTimestamp, true
 }
 
+func parseDistributionQuotaTimeRange(c *gin.Context) (int64, int64, bool) {
+	startTimestamp, err := strconv.ParseInt(c.Query("start_timestamp"), 10, 64)
+	if err != nil || startTimestamp <= 0 {
+		common.ApiErrorMsg(c, "invalid start_timestamp")
+		return 0, 0, false
+	}
+	endTimestamp, err := strconv.ParseInt(c.Query("end_timestamp"), 10, 64)
+	if err != nil || endTimestamp <= 0 {
+		common.ApiErrorMsg(c, "invalid end_timestamp")
+		return 0, 0, false
+	}
+	if endTimestamp < startTimestamp {
+		common.ApiErrorMsg(c, "invalid time range")
+		return 0, 0, false
+	}
+	return startTimestamp, endTimestamp, true
+}
+
 func GetAllQuotaDates(c *gin.Context) {
 	startTimestamp, _ := strconv.ParseInt(c.Query("start_timestamp"), 10, 64)
 	endTimestamp, _ := strconv.ParseInt(c.Query("end_timestamp"), 10, 64)
@@ -128,4 +146,44 @@ func GetUserFlowQuotaDates(c *gin.Context) {
 		"data":    dates,
 	})
 	return
+}
+
+// GetQuotaDistribution returns role-scoped quota, token, and request distribution data.
+func GetQuotaDistribution(c *gin.Context) {
+	userID := c.GetInt("id")
+	if userID <= 0 {
+		common.ApiErrorMsg(c, "invalid user id")
+		return
+	}
+	startTimestamp, endTimestamp, ok := parseDistributionQuotaTimeRange(c)
+	if !ok {
+		return
+	}
+
+	metric := c.DefaultQuery("metric", model.QuotaDistributionMetricQuota)
+	if !model.IsValidQuotaDistributionMetric(metric) {
+		common.ApiErrorMsg(c, "invalid metric")
+		return
+	}
+
+	dimension := c.Query("dimension")
+	if !model.IsValidQuotaDistributionDimension(dimension) {
+		common.ApiErrorMsg(c, "invalid dimension")
+		return
+	}
+
+	rows, err := model.GetQuotaDistribution(model.QuotaDistributionQuery{
+		AuthUserID: userID,
+		Role:       c.GetInt("role"),
+		StartTime:  startTimestamp,
+		EndTime:    endTimestamp,
+		Metric:     metric,
+		Dimension:  dimension,
+		Username:   c.Query("username"),
+	})
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, rows)
 }

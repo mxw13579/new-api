@@ -18,7 +18,13 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
-import { ArrowRight, Flame, ShieldCheck, TrendingDown } from 'lucide-react'
+import {
+  ArrowRight,
+  Flame,
+  RefreshCw,
+  ShieldCheck,
+  TrendingDown,
+} from 'lucide-react'
 import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -26,6 +32,7 @@ import { StaggerContainer, StaggerItem } from '@/components/page-transition'
 import { Button } from '@/components/ui/button'
 import { getUserQuotaDates } from '@/features/dashboard/api'
 import { useSummaryCardsConfig } from '@/features/dashboard/hooks/use-dashboard-config'
+import { useSelfQuota } from '@/features/dashboard/hooks/use-self-quota'
 import type { QuotaDataItem } from '@/features/dashboard/types'
 import { useStatus } from '@/hooks/use-status'
 import { getCurrencyLabel, isCurrencyDisplayEnabled } from '@/lib/currency'
@@ -140,9 +147,11 @@ export function SummaryCards() {
   const { t } = useTranslation()
   const user = useAuthStore((state) => state.auth.user)
   const { status, loading } = useStatus()
+  const selfQuotaQuery = useSelfQuota()
 
   const summaryTimeRange = useMemo(() => computeTimeRange(1), [])
-  const remainQuota = Number(user?.quota ?? 0)
+  const hasQuotaData = selfQuotaQuery.data !== undefined
+  const remainQuota = hasQuotaData ? Number(selfQuotaQuery.data.quota) : 0
   const usedQuota = Number(user?.used_quota ?? 0)
   const requestCount = Number(user?.request_count ?? 0)
 
@@ -211,6 +220,7 @@ export function SummaryCards() {
   const runwayDays = getRunwayDays(remainQuota, recentUsage)
 
   const todayUsageDisplay = formatQuota(recentUsage)
+  const quotaDisplay = hasQuotaData ? formatQuota(remainQuota) : '--'
   let runwayDisplay: string
   if (runwayDays !== null) {
     if (runwayDays < 1) {
@@ -292,19 +302,48 @@ export function SummaryCards() {
                 {t('Credit remaining')}
               </span>
               <span className='flex items-center gap-1.5'>
-                <span
-                  className={cn('size-1.5 rounded-full', healthCfg.dotClass)}
-                  aria-hidden='true'
-                />
-                <span className='text-muted-foreground text-[11px] font-medium'>
-                  {t(healthCfg.labelKey)}
+                <Button
+                  type='button'
+                  variant='ghost'
+                  size='icon'
+                  className='size-6'
+                  disabled={selfQuotaQuery.isFetching}
+                  aria-label={t('Refresh quota')}
+                  onClick={() => {
+                    void selfQuotaQuery.refetch()
+                  }}
+                >
+                  <RefreshCw
+                    className={cn(
+                      'size-3.5',
+                      selfQuotaQuery.isFetching && 'animate-spin'
+                    )}
+                    aria-hidden='true'
+                  />
+                </Button>
+                <span className='flex items-center gap-1.5'>
+                  <span
+                    className={cn('size-1.5 rounded-full', healthCfg.dotClass)}
+                    aria-hidden='true'
+                  />
+                  <span className='text-muted-foreground text-[11px] font-medium'>
+                    {t(healthCfg.labelKey)}
+                  </span>
                 </span>
               </span>
             </div>
 
             <div className='font-mono text-xl font-semibold tracking-tight sm:text-2xl'>
-              {formatQuota(remainQuota)}
+              {quotaDisplay}
             </div>
+            {selfQuotaQuery.isError && hasQuotaData && (
+              <div
+                className='text-warning text-[11px] font-medium'
+                role='status'
+              >
+                {t('Quota refresh failed')}
+              </div>
+            )}
 
             <div className='grid grid-cols-2 gap-2'>
               <div className='bg-background/60 rounded-lg px-2.5 py-2'>

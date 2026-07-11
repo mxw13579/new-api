@@ -20,7 +20,6 @@ import i18next from 'i18next'
 import { useState, useCallback } from 'react'
 import { toast } from 'sonner'
 
-import { getSelf } from '@/lib/api'
 import { formatQuota } from '@/lib/format'
 
 import { redeemTopupCode } from '../api'
@@ -49,13 +48,12 @@ export function useRedemption() {
             quota: formatQuota(quotaAdded),
           })
         )
-        await getSelf()
         return true
       }
 
       toast.error(response.message || i18next.t('Redemption failed'))
       return false
-    } catch (_error) {
+    } catch {
       toast.error(i18next.t('Redemption failed'))
       return false
     } finally {
