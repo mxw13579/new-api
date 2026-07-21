@@ -3,6 +3,7 @@ package model
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 
@@ -129,6 +130,84 @@ func createInvoiceEvidenceApplyingRun(t *testing.T, topUps []TopUp) InvoicePayme
 func legacyBatchTopUp(id int, tradeNo string, money float64) TopUp {
 	return TopUp{Id: id, UserId: 1, Amount: 10, Money: money, TradeNo: tradeNo, PaymentMethod: "alipay",
 		PaymentProvider: PaymentProviderEpay, CompleteTime: 10, Status: common.TopUpStatusSuccess}
+}
+
+type invoiceEvidenceQueryShape struct {
+	subscriptionQueries int
+	maxTopUpRows        int64
+	maxItemRows         int64
+}
+
+func recordInvoiceEvidenceQueryShape(t *testing.T, callbackName string) *invoiceEvidenceQueryShape {
+	t.Helper()
+	shape := &invoiceEvidenceQueryShape{}
+	require.NoError(t, DB.Callback().Query().After("gorm:query").Register(callbackName, func(tx *gorm.DB) {
+		switch tx.Statement.Table {
+		case "subscription_orders":
+			shape.subscriptionQueries++
+		case "top_ups":
+			shape.maxTopUpRows = max(shape.maxTopUpRows, tx.RowsAffected)
+		case "invoice_payment_evidence_backfill_items":
+			shape.maxItemRows = max(shape.maxItemRows, tx.RowsAffected)
+		}
+	}))
+	t.Cleanup(func() {
+		require.NoError(t, DB.Callback().Query().Remove(callbackName))
+	})
+	return shape
+}
+
+func TestInvoiceEvidencePreviewGapUsesBoundedPrefetchQueries(t *testing.T) {
+	setupInvoiceEvidenceBatchTest(t)
+	require.NoError(t, DB.Exec("DELETE FROM top_ups").Error)
+	require.NoError(t, DB.Exec("DELETE FROM subscription_orders").Error)
+	topUps := make([]TopUp, 0, invoicePaymentEvidencePreviewBatchSize+1)
+	for i := 0; i < invoicePaymentEvidencePreviewBatchSize+1; i++ {
+		topUps = append(topUps, legacyBatchTopUp(7000+i, fmt.Sprintf("bounded-preview-%d", i), 1))
+	}
+	require.NoError(t, DB.CreateInBatches(&topUps, 100).Error)
+	shape := recordInvoiceEvidenceQueryShape(t, "test:invoice-evidence-preview-query-shape")
+
+	run, created, err := PreviewInvoicePaymentEvidenceBackfill(context.Background(), 1, InvoicePaymentEvidencePreviewAttestation{
+		DeploymentSHA: "0123456789abcdef0123456789abcdef01234567", ActiveInstanceCount: 1, MatchingInstanceCount: 1,
+	})
+	require.NoError(t, err)
+	require.True(t, created)
+	require.NotNil(t, run)
+	assert.Equal(t, int64(invoicePaymentEvidencePreviewBatchSize+1), run.PreviewCandidateCount)
+	assert.LessOrEqual(t, shape.maxTopUpRows, int64(invoicePaymentEvidencePreviewBatchSize))
+	assert.LessOrEqual(t, shape.maxItemRows, int64(invoicePaymentEvidencePreviewBatchSize))
+	assert.LessOrEqual(t, shape.subscriptionQueries, 4)
+}
+
+func TestInvoiceEvidenceTerminalReconciliationUsesBoundedPrefetchQueries(t *testing.T) {
+	setupInvoiceEvidenceBatchTest(t)
+	require.NoError(t, DB.Exec("DELETE FROM top_ups").Error)
+	require.NoError(t, DB.Exec("DELETE FROM subscription_orders").Error)
+	topUps := make([]TopUp, 0, invoicePaymentEvidencePreviewBatchSize+1)
+	for i := 0; i < invoicePaymentEvidencePreviewBatchSize+1; i++ {
+		topUps = append(topUps, legacyBatchTopUp(8000+i, fmt.Sprintf("bounded-terminal-%d", i), 1))
+	}
+	run := createInvoiceEvidenceApplyingRun(t, topUps)
+	for {
+		var result InvoicePaymentEvidenceApplyBatchResult
+		require.NoError(t, DB.Transaction(func(tx *gorm.DB) error {
+			var err error
+			result, err = ApplyInvoicePaymentEvidenceBatchTx(tx, run.ID)
+			return err
+		}))
+		if !result.HasMore {
+			break
+		}
+	}
+	shape := recordInvoiceEvidenceQueryShape(t, "test:invoice-evidence-terminal-query-shape")
+
+	require.NoError(t, DB.Transaction(func(tx *gorm.DB) error {
+		return ReconcileInvoicePaymentEvidenceBackfillTx(tx, run.ID)
+	}))
+	assert.LessOrEqual(t, shape.maxTopUpRows, int64(invoicePaymentEvidencePreviewBatchSize))
+	assert.LessOrEqual(t, shape.maxItemRows, int64(invoicePaymentEvidencePreviewBatchSize))
+	assert.LessOrEqual(t, shape.subscriptionQueries, 2)
 }
 
 func TestInvoiceEvidenceApplyBatchWritesLegacyFactsAndCursorAtomically(t *testing.T) {

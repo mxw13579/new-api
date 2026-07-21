@@ -197,7 +197,30 @@ func invoicePaymentEvidenceHasExistingEvidence(topUp *TopUp) bool {
 		topUp.PaymentProviderTradeNo != nil || topUp.PaymentProviderTradeKey != nil
 }
 
-func invoicePaymentEvidenceCandidate(tx *gorm.DB, topUp *TopUp) (string, string, int64, error) {
+func invoicePaymentEvidenceSubscriptionTradeSet(tx *gorm.DB, tradeNos []string) (map[string]struct{}, error) {
+	uniqueTradeNos := make(map[string]struct{}, len(tradeNos))
+	for _, tradeNo := range tradeNos {
+		uniqueTradeNos[tradeNo] = struct{}{}
+	}
+	if len(uniqueTradeNos) == 0 {
+		return uniqueTradeNos, nil
+	}
+	queryTradeNos := make([]string, 0, len(uniqueTradeNos))
+	for tradeNo := range uniqueTradeNos {
+		queryTradeNos = append(queryTradeNos, tradeNo)
+	}
+	var matchedTradeNos []string
+	if err := tx.Model(&SubscriptionOrder{}).Where("trade_no IN ?", queryTradeNos).Pluck("trade_no", &matchedTradeNos).Error; err != nil {
+		return nil, err
+	}
+	matched := make(map[string]struct{}, len(matchedTradeNos))
+	for _, tradeNo := range matchedTradeNos {
+		matched[tradeNo] = struct{}{}
+	}
+	return matched, nil
+}
+
+func invoicePaymentEvidenceCandidate(topUp *TopUp, subscriptionTrades map[string]struct{}) (string, string, int64, error) {
 	if invoicePaymentEvidenceHasExistingEvidence(topUp) {
 		return "existing_evidence", "", 0, nil
 	}
@@ -207,11 +230,7 @@ func invoicePaymentEvidenceCandidate(tx *gorm.DB, topUp *TopUp) (string, string,
 	if topUp.Status != common.TopUpStatusSuccess {
 		return "status_not_success", "", 0, nil
 	}
-	var subscriptionCount int64
-	if err := tx.Model(&SubscriptionOrder{}).Where("trade_no = ?", topUp.TradeNo).Count(&subscriptionCount).Error; err != nil {
-		return "", "", 0, err
-	}
-	if subscriptionCount != 0 {
+	if _, exists := subscriptionTrades[topUp.TradeNo]; exists {
 		return "subscription_trade_mirror", "", 0, nil
 	}
 	return invoicePaymentEvidencePostSubscriptionCandidate(topUp)

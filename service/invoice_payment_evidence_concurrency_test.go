@@ -123,7 +123,7 @@ func TestInvoiceEvidenceCancellationAfterPrivateItemRollsBack(t *testing.T) {
 	assert.Zero(t, items)
 }
 
-func TestInvoiceEvidencePreviewScans501CandidatesInTwoNonemptyBatches(t *testing.T) {
+func TestInvoiceEvidencePreviewAndGapScan501CandidatesInBoundedBatches(t *testing.T) {
 	db := setupInvoiceEvidenceServiceFileSQLite(t)
 	topUps := make([]model.TopUp, 0, 501)
 	for i := 0; i < 501; i++ {
@@ -152,7 +152,7 @@ func TestInvoiceEvidencePreviewScans501CandidatesInTwoNonemptyBatches(t *testing
 	assert.Equal(t, int64(501), response.CandidateCount)
 	assert.Equal(t, int64(50100), response.AmountMinor)
 	assert.Equal(t, topUps[len(topUps)-1].Id, response.CutoffMaxTopUpID)
-	assert.Equal(t, []int64{500, 1, 0}, batchRows)
+	assert.Equal(t, []int64{500, 1, 0, 500, 1, 0}, batchRows)
 	var run model.InvoicePaymentEvidenceBackfillRun
 	require.NoError(t, db.First(&run, response.RunID).Error)
 	assert.Zero(t, run.CursorTopUpID)

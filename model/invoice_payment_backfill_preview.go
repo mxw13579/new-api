@@ -16,7 +16,6 @@ const invoicePaymentEvidencePolicyVersionIndex = "idx_invoice_payment_evidence_b
 
 type invoicePaymentEvidencePreviewAccumulator struct {
 	exclusions     map[string]int64
-	itemIDs        map[int]struct{}
 	candidateCount int64
 	amountMinor    int64
 }
@@ -112,11 +111,11 @@ func previewInvoicePaymentEvidenceTx(ctx context.Context, tx *gorm.DB, actorID i
 		return err
 	}
 	run.CutoffMaxTopUpID = cutoff
-	accumulator := invoicePaymentEvidencePreviewAccumulator{exclusions: map[string]int64{}, itemIDs: map[int]struct{}{}}
+	accumulator := invoicePaymentEvidencePreviewAccumulator{exclusions: map[string]int64{}}
 	if err := scanInvoicePaymentEvidenceCandidates(ctx, tx, run, now, &accumulator); err != nil {
 		return err
 	}
-	gapCount, err := countInvoicePaymentEvidenceGap(tx, accumulator.itemIDs)
+	gapCount, err := countInvoicePaymentEvidenceGap(tx, run.ID)
 	if err != nil {
 		return err
 	}
@@ -155,8 +154,18 @@ func scanInvoicePaymentEvidenceCandidates(ctx context.Context, tx *gorm.DB, run 
 		if len(topUps) == 0 {
 			return nil
 		}
+		tradeNos := make([]string, 0, len(topUps))
 		for i := range topUps {
-			if err := addInvoicePaymentEvidencePreviewItem(tx, run.ID, &topUps[i], now, accumulator); err != nil {
+			if !invoicePaymentEvidenceHasExistingEvidence(&topUps[i]) && topUps[i].PaymentProvider == PaymentProviderEpay && topUps[i].Status == common.TopUpStatusSuccess {
+				tradeNos = append(tradeNos, topUps[i].TradeNo)
+			}
+		}
+		subscriptionTrades, err := invoicePaymentEvidenceSubscriptionTradeSet(tx, tradeNos)
+		if err != nil {
+			return err
+		}
+		for i := range topUps {
+			if err := addInvoicePaymentEvidencePreviewItem(tx, run.ID, &topUps[i], now, subscriptionTrades, accumulator); err != nil {
 				return err
 			}
 		}
@@ -164,8 +173,8 @@ func scanInvoicePaymentEvidenceCandidates(ctx context.Context, tx *gorm.DB, run 
 	}
 }
 
-func addInvoicePaymentEvidencePreviewItem(tx *gorm.DB, runID int64, topUp *TopUp, now int64, accumulator *invoicePaymentEvidencePreviewAccumulator) error {
-	reason, fingerprint, amount, err := invoicePaymentEvidenceCandidate(tx, topUp)
+func addInvoicePaymentEvidencePreviewItem(tx *gorm.DB, runID int64, topUp *TopUp, now int64, subscriptionTrades map[string]struct{}, accumulator *invoicePaymentEvidencePreviewAccumulator) error {
+	reason, fingerprint, amount, err := invoicePaymentEvidenceCandidate(topUp, subscriptionTrades)
 	if err != nil {
 		return err
 	}
@@ -185,29 +194,62 @@ func addInvoicePaymentEvidencePreviewItem(tx *gorm.DB, runID int64, topUp *TopUp
 	if err := tx.Create(&item).Error; err != nil {
 		return err
 	}
-	accumulator.itemIDs[topUp.Id] = struct{}{}
 	return nil
 }
 
-func countInvoicePaymentEvidenceGap(tx *gorm.DB, itemIDs map[int]struct{}) (int64, error) {
-	var topUps []TopUp
-	if err := tx.Order("id asc").Find(&topUps).Error; err != nil {
-		return 0, err
-	}
+func countInvoicePaymentEvidenceGap(tx *gorm.DB, runID int64) (int64, error) {
+	cursor := 0
 	var gapCount int64
-	for i := range topUps {
-		reason, _, _, err := invoicePaymentEvidenceCandidate(tx, &topUps[i])
+	for {
+		var topUps []TopUp
+		if err := tx.Where("id > ?", cursor).Order("id asc").Limit(invoicePaymentEvidencePreviewBatchSize).Find(&topUps).Error; err != nil {
+			return 0, err
+		}
+		if len(topUps) == 0 {
+			return gapCount, nil
+		}
+		tradeNos := make([]string, 0, len(topUps))
+		for i := range topUps {
+			if !invoicePaymentEvidenceHasExistingEvidence(&topUps[i]) && topUps[i].PaymentProvider == PaymentProviderEpay && topUps[i].Status == common.TopUpStatusSuccess {
+				tradeNos = append(tradeNos, topUps[i].TradeNo)
+			}
+		}
+		subscriptionTrades, err := invoicePaymentEvidenceSubscriptionTradeSet(tx, tradeNos)
 		if err != nil {
 			return 0, err
 		}
-		if _, represented := itemIDs[topUps[i].Id]; reason == "" && !represented {
+		candidateIDs := make([]int, 0, len(topUps))
+		for i := range topUps {
+			reason, _, _, candidateErr := invoicePaymentEvidenceCandidate(&topUps[i], subscriptionTrades)
+			if candidateErr != nil {
+				return 0, candidateErr
+			}
+			if reason == "" {
+				candidateIDs = append(candidateIDs, topUps[i].Id)
+			}
+		}
+		var representedIDs []int
+		if len(candidateIDs) != 0 {
+			if err := tx.Model(&InvoicePaymentEvidenceBackfillItem{}).Where("run_id = ? AND topup_id IN ?", runID, candidateIDs).
+				Pluck("topup_id", &representedIDs).Error; err != nil {
+				return 0, err
+			}
+		}
+		represented := make(map[int]struct{}, len(representedIDs))
+		for _, topUpID := range representedIDs {
+			represented[topUpID] = struct{}{}
+		}
+		for _, topUpID := range candidateIDs {
+			if _, exists := represented[topUpID]; exists {
+				continue
+			}
 			gapCount, err = checkedAddInt64(gapCount, 1)
 			if err != nil {
 				return 0, err
 			}
 		}
+		cursor = topUps[len(topUps)-1].Id
 	}
-	return gapCount, nil
 }
 
 func finalizeInvoicePaymentEvidencePreview(tx *gorm.DB, run *InvoicePaymentEvidenceBackfillRun, attestation InvoicePaymentEvidencePreviewAttestation, now int64, accumulator invoicePaymentEvidencePreviewAccumulator) error {
