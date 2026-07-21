@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"sort"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -25,6 +26,12 @@ type invoiceEvidenceRealDatabase struct {
 	test    *gorm.DB
 	name    string
 	dialect common.DatabaseType
+}
+
+type postgresInvoiceEvidenceIndexColumn struct {
+	IndexName  string `gorm:"column:index_name"`
+	ColumnName string `gorm:"column:column_name"`
+	KeyOrder   int    `gorm:"column:key_order"`
 }
 
 func invoiceEvidenceRealDatabaseEnv(t *testing.T, dsnEnv string, databaseEnv string) (string, string, bool) {
@@ -130,7 +137,9 @@ func runInvoiceEvidenceRealDatabaseContract(t *testing.T, database *invoiceEvide
 	database.install(t)
 	assertInvoiceEvidenceRealSchema(t, database)
 	runInvoiceEvidenceExpiredLockScenario(t)
+	resetInvoiceEvidenceRealScenario(t)
 	runInvoiceEvidencePreClaimScenario(t)
+	resetInvoiceEvidenceRealScenario(t)
 	runInvoiceEvidenceCrashRecoveryScenario(t)
 }
 
@@ -144,9 +153,21 @@ func assertInvoiceEvidenceRealSchema(t *testing.T, database *invoiceEvidenceReal
 		"idx_topups_invoice_application":     {"invoice_application_id"},
 		"uk_topups_provider_trade_key":       {"payment_provider_trade_key"},
 	}
+	postgresColumns := map[string][]string{}
+	if database.dialect == common.DatabaseTypePostgreSQL {
+		indexNames := make([]string, 0, len(wanted))
+		for name := range wanted {
+			indexNames = append(indexNames, name)
+		}
+		postgresColumns = postgresInvoiceEvidenceIndexColumns(t, "top_ups", indexNames)
+	}
 	for _, index := range indexes {
 		if columns, ok := wanted[index.Name()]; ok {
-			assert.Equal(t, columns, index.Columns(), index.Name())
+			actualColumns := index.Columns()
+			if database.dialect == common.DatabaseTypePostgreSQL {
+				actualColumns = postgresColumns[index.Name()]
+			}
+			assert.Equal(t, columns, actualColumns, index.Name())
 			delete(wanted, index.Name())
 		}
 	}
@@ -161,7 +182,11 @@ func assertInvoiceEvidenceRealSchema(t *testing.T, database *invoiceEvidenceReal
 	}
 	require.Len(t, custom, 1)
 	assert.Equal(t, "uk_invoice_evidence_items_run_topup", custom[0].Name())
-	assert.Equal(t, []string{"run_id", "topup_id"}, custom[0].Columns())
+	itemColumns := custom[0].Columns()
+	if database.dialect == common.DatabaseTypePostgreSQL {
+		itemColumns = postgresInvoiceEvidenceIndexColumns(t, "invoice_payment_evidence_backfill_items", []string{custom[0].Name()})[custom[0].Name()]
+	}
+	assert.Equal(t, []string{"run_id", "topup_id"}, itemColumns)
 	var foreignKeys int64
 	if database.dialect == common.DatabaseTypeMySQL {
 		require.NoError(t, DB.Raw("SELECT COUNT(*) FROM information_schema.table_constraints WHERE table_schema = DATABASE() AND table_name IN (?, ?) AND constraint_type = 'FOREIGN KEY'", "invoice_payment_evidence_backfill_runs", "invoice_payment_evidence_backfill_items").Scan(&foreignKeys).Error)
@@ -169,6 +194,46 @@ func assertInvoiceEvidenceRealSchema(t *testing.T, database *invoiceEvidenceReal
 		require.NoError(t, DB.Raw("SELECT COUNT(*) FROM information_schema.table_constraints WHERE table_catalog = current_database() AND table_name IN (?, ?) AND constraint_type = 'FOREIGN KEY'", "invoice_payment_evidence_backfill_runs", "invoice_payment_evidence_backfill_items").Scan(&foreignKeys).Error)
 	}
 	assert.Zero(t, foreignKeys)
+}
+
+func postgresInvoiceEvidenceIndexColumns(t *testing.T, table string, indexNames []string) map[string][]string {
+	t.Helper()
+	var rows []postgresInvoiceEvidenceIndexColumn
+	query := `SELECT idx.relname AS index_name, att.attname AS column_name, ord.key_order
+FROM pg_index AS pi
+JOIN pg_class AS tbl ON tbl.oid = pi.indrelid
+JOIN pg_namespace AS ns ON ns.oid = tbl.relnamespace
+JOIN pg_class AS idx ON idx.oid = pi.indexrelid
+JOIN LATERAL unnest(pi.indkey::smallint[]) WITH ORDINALITY AS ord(attnum, key_order) ON ord.key_order <= pi.indnatts
+JOIN pg_attribute AS att ON att.attrelid = tbl.oid AND att.attnum = ord.attnum
+WHERE ns.nspname = current_schema() AND tbl.relname = ? AND idx.relname IN ?
+ORDER BY idx.relname, ord.key_order`
+	require.NoError(t, DB.Raw(query, table, indexNames).Scan(&rows).Error)
+	return postgresInvoiceEvidenceIndexColumnsFromRows(rows)
+}
+
+func postgresInvoiceEvidenceIndexColumnsFromRows(rows []postgresInvoiceEvidenceIndexColumn) map[string][]string {
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].IndexName == rows[j].IndexName {
+			return rows[i].KeyOrder < rows[j].KeyOrder
+		}
+		return rows[i].IndexName < rows[j].IndexName
+	})
+	columns := make(map[string][]string)
+	for _, row := range rows {
+		columns[row.IndexName] = append(columns[row.IndexName], row.ColumnName)
+	}
+	return columns
+}
+
+func resetInvoiceEvidenceRealScenario(t *testing.T) {
+	t.Helper()
+	for _, table := range []string{
+		"invoice_payment_evidence_backfill_items", "invoice_payment_evidence_backfill_runs",
+		"system_task_locks", "system_tasks", "top_ups", "subscription_orders",
+	} {
+		require.NoError(t, DB.Exec("DELETE FROM "+table).Error, table)
+	}
 }
 
 func seedRealInvoiceEvidenceRun(t *testing.T, status SystemTaskStatus, runnerID string) (*InvoicePaymentEvidenceBackfillRun, *SystemTask) {
@@ -236,6 +301,37 @@ func runInvoiceEvidenceCrashRecoveryScenario(t *testing.T) {
 	require.NoError(t, ReconcileInvoicePaymentEvidenceBackfills(context.Background()))
 	require.NoError(t, DB.First(run, run.ID).Error)
 	assert.Equal(t, InvoicePaymentEvidenceRunStatusFailed, run.Status)
+}
+
+func TestPostgresInvoiceEvidenceIndexColumnsUsePhysicalKeyOrder(t *testing.T) {
+	rows := []postgresInvoiceEvidenceIndexColumn{
+		{IndexName: "idx_b", ColumnName: "second", KeyOrder: 2},
+		{IndexName: "idx_a", ColumnName: "only", KeyOrder: 1},
+		{IndexName: "idx_b", ColumnName: "first", KeyOrder: 1},
+	}
+	columns := postgresInvoiceEvidenceIndexColumnsFromRows(rows)
+	assert.Equal(t, []string{"only"}, columns["idx_a"])
+	assert.Equal(t, []string{"first", "second"}, columns["idx_b"])
+}
+
+func TestInvoiceEvidenceRealScenarioReset(t *testing.T) {
+	setupInvoiceEvidenceBatchTest(t)
+	run := &InvoicePaymentEvidenceBackfillRun{PolicyVersion: "reset", CanonicalPolicyJSON: "{}", PolicySHA256: "hash",
+		PreviewExclusionReasons: "{}", Status: InvoicePaymentEvidenceRunStatusPreviewed, ActorID: 1, CutoverAuditJSON: "{}", CreatedAt: 1}
+	require.NoError(t, DB.Create(run).Error)
+	require.NoError(t, DB.Create(&InvoicePaymentEvidenceBackfillItem{RunID: run.ID, TopUpID: 1, ExpectedAmountMinor: 1, SourceFingerprint: "fingerprint", CreatedAt: 1}).Error)
+	task := &SystemTask{TaskID: "reset-task", Type: constant.InvoicePaymentEvidenceTaskType, Status: SystemTaskStatusRunning, LockedBy: "reset-runner"}
+	require.NoError(t, DB.Create(task).Error)
+	require.NoError(t, DB.Create(&SystemTaskLock{Type: task.Type, TaskID: task.TaskID, LockedBy: task.LockedBy, LockedUntil: 1}).Error)
+	require.NoError(t, DB.Create(&TopUp{TradeNo: "reset-topup"}).Error)
+	require.NoError(t, DB.Create(&SubscriptionOrder{TradeNo: "reset-subscription"}).Error)
+
+	resetInvoiceEvidenceRealScenario(t)
+	for _, table := range []string{"invoice_payment_evidence_backfill_items", "invoice_payment_evidence_backfill_runs", "system_task_locks", "system_tasks", "top_ups", "subscription_orders"} {
+		var count int64
+		require.NoError(t, DB.Table(table).Count(&count).Error)
+		assert.Zero(t, count, table)
+	}
 }
 
 func TestInvoicePaymentEvidenceMySQL(t *testing.T) {
