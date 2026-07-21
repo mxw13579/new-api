@@ -658,6 +658,7 @@ func upsertSubscriptionTopUpTx(tx *gorm.DB, order *SubscriptionOrder) error {
 				CompleteTime:  now,
 				Status:        common.TopUpStatusSuccess,
 			}
+			writeIneligibleInvoiceEvidence(&topup)
 			return tx.Create(&topup).Error
 		}
 		return err
@@ -673,6 +674,7 @@ func upsertSubscriptionTopUpTx(tx *gorm.DB, order *SubscriptionOrder) error {
 	}
 	topup.CompleteTime = now
 	topup.Status = common.TopUpStatusSuccess
+	writeIneligibleInvoiceEvidence(&topup)
 	return tx.Save(&topup).Error
 }
 

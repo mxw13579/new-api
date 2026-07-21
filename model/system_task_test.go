@@ -1,13 +1,48 @@
 package model
 
 import (
+	"context"
+	"errors"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
+	gormlogger "gorm.io/gorm/logger"
 )
+
+type systemTaskSQLOrderRecorder struct {
+	sql []string
+}
+
+func (r *systemTaskSQLOrderRecorder) LogMode(gormlogger.LogLevel) gormlogger.Interface { return r }
+func (r *systemTaskSQLOrderRecorder) Info(context.Context, string, ...interface{})     {}
+func (r *systemTaskSQLOrderRecorder) Warn(context.Context, string, ...interface{})     {}
+func (r *systemTaskSQLOrderRecorder) Error(context.Context, string, ...interface{})    {}
+func (r *systemTaskSQLOrderRecorder) Trace(_ context.Context, _ time.Time, fc func() (string, int64), _ error) {
+	sql, _ := fc()
+	r.sql = append(r.sql, sql)
+}
+
+func systemTaskQueryOrder(sqlStatements []string) []string {
+	order := make([]string, 0, len(sqlStatements))
+	for _, statement := range sqlStatements {
+		if !strings.HasPrefix(statement, "SELECT") {
+			continue
+		}
+		switch {
+		case strings.Contains(statement, "FROM `system_tasks`"):
+			order = append(order, "task")
+		case strings.Contains(statement, "FROM `system_task_locks`"):
+			order = append(order, "lock")
+		}
+	}
+	return order
+}
 
 type testSystemTaskPayload struct {
 	TargetTimestamp int64 `json:"target_timestamp"`
@@ -113,7 +148,7 @@ func TestSystemTaskLockPreventsConcurrentClaim(t *testing.T) {
 	assert.Equal(t, SystemTaskStatusPending, reloadedSecond.Status)
 }
 
-func TestExpiredSystemTaskLockFailsOldRunAndClaimsLegacyPendingRun(t *testing.T) {
+func TestSystemTaskExpiredLockDoesNotDispatchReplacement(t *testing.T) {
 	truncateTables(t)
 
 	first, err := CreateSystemTask(SystemTaskTypeLogCleanup, nil, nil)
@@ -129,16 +164,25 @@ func TestExpiredSystemTaskLockFailsOldRunAndClaimsLegacyPendingRun(t *testing.T)
 	second := createLegacyPendingSystemTask(t, SystemTaskTypeLogCleanup)
 	claimedTask, claimed, err := ClaimSystemTask(second.ID, SystemTaskTypeLogCleanup, "runner-b", common.GetTimestamp()+60)
 	require.NoError(t, err)
-	require.True(t, claimed)
-	assert.Equal(t, second.TaskID, claimedTask.TaskID)
-	assert.Equal(t, "runner-b", claimedTask.LockedBy)
+	require.False(t, claimed)
+	assert.Nil(t, claimedTask)
 
 	reloadedFirst, err := GetSystemTaskByTaskID(first.TaskID)
 	require.NoError(t, err)
 	require.NotNil(t, reloadedFirst)
 	assert.Equal(t, SystemTaskStatusFailed, reloadedFirst.Status)
-	assert.Equal(t, "task lease expired", reloadedFirst.Error)
+	assert.Equal(t, "lease_expired", reloadedFirst.Error)
 	assert.Nil(t, reloadedFirst.ActiveKey)
+
+	reloadedSecond, err := GetSystemTaskByTaskID(second.TaskID)
+	require.NoError(t, err)
+	require.NotNil(t, reloadedSecond)
+	assert.Equal(t, SystemTaskStatusPending, reloadedSecond.Status)
+	assert.Empty(t, reloadedSecond.LockedBy)
+
+	var locks int64
+	require.NoError(t, DB.Model(&SystemTaskLock{}).Where("type = ?", SystemTaskTypeLogCleanup).Count(&locks).Error)
+	assert.Zero(t, locks)
 }
 
 func TestExpireStaleSystemTaskLockFailsOldRunAndAllowsNewRun(t *testing.T) {
@@ -160,7 +204,7 @@ func TestExpireStaleSystemTaskLockFailsOldRunAndAllowsNewRun(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, reloadedFirst)
 	assert.Equal(t, SystemTaskStatusFailed, reloadedFirst.Status)
-	assert.Equal(t, "task lease expired", reloadedFirst.Error)
+	assert.Equal(t, "lease_expired", reloadedFirst.Error)
 	assert.Nil(t, reloadedFirst.ActiveKey)
 
 	var lockCount int64
@@ -170,6 +214,42 @@ func TestExpireStaleSystemTaskLockFailsOldRunAndAllowsNewRun(t *testing.T) {
 	second, err := CreateSystemTask(SystemTaskTypeLogCleanup, nil, nil)
 	require.NoError(t, err)
 	require.NotEqual(t, first.TaskID, second.TaskID)
+}
+
+func TestExpireStaleSystemTaskLocksDeletesTerminalTaskLock(t *testing.T) {
+	truncateTables(t)
+	task, err := CreateSystemTask(SystemTaskTypeLogCleanup, nil, nil)
+	require.NoError(t, err)
+	_, claimed, err := ClaimSystemTask(task.ID, task.Type, "runner-terminal", common.GetTimestamp()+60)
+	require.NoError(t, err)
+	require.True(t, claimed)
+	require.NoError(t, DB.Model(&SystemTask{}).Where("task_id = ?", task.TaskID).
+		Updates(map[string]any{"status": SystemTaskStatusSucceeded, "active_key": nil}).Error)
+	require.NoError(t, DB.Model(&SystemTaskLock{}).Where("task_id = ?", task.TaskID).
+		Update("locked_until", common.GetTimestamp()-1).Error)
+
+	require.NoError(t, ExpireStaleSystemTaskLocks(common.GetTimestamp()))
+	var locks int64
+	require.NoError(t, DB.Model(&SystemTaskLock{}).Where("task_id = ?", task.TaskID).Count(&locks).Error)
+	assert.Zero(t, locks)
+}
+
+func TestExpireStaleSystemTaskLocksUsesTaskThenTypeLockOrder(t *testing.T) {
+	truncateTables(t)
+	task, err := CreateSystemTask(SystemTaskTypeLogCleanup, nil, nil)
+	require.NoError(t, err)
+	_, claimed, err := ClaimSystemTask(task.ID, task.Type, "runner-order", common.GetTimestamp()+60)
+	require.NoError(t, err)
+	require.True(t, claimed)
+	require.NoError(t, DB.Model(&SystemTaskLock{}).Where("task_id = ?", task.TaskID).
+		Update("locked_until", common.GetTimestamp()-1).Error)
+
+	recorder := &systemTaskSQLOrderRecorder{}
+	originalDB := DB
+	DB = DB.Session(&gorm.Session{Logger: recorder})
+	t.Cleanup(func() { DB = originalDB })
+	require.NoError(t, ExpireStaleSystemTaskLocks(common.GetTimestamp()))
+	assert.Equal(t, []string{"lock", "task", "lock"}, systemTaskQueryOrder(recorder.sql))
 }
 
 func TestFindEarliestPendingSystemTasks(t *testing.T) {
@@ -281,6 +361,49 @@ func TestRenewSystemTaskLock(t *testing.T) {
 	// After the task finishes it is no longer running, so renew fails.
 	require.NoError(t, FinishSystemTask(task.TaskID, runnerID, SystemTaskStatusSucceeded, nil, ""))
 	assert.ErrorIs(t, RenewSystemTaskLock(task.TaskID, runnerID, common.GetTimestamp()+600), ErrSystemTaskLockLost)
+}
+
+func TestRenewSystemTaskLockUsesTaskThenTypeLockOrder(t *testing.T) {
+	truncateTables(t)
+	task, err := CreateSystemTask(SystemTaskTypeLogCleanup, nil, nil)
+	require.NoError(t, err)
+	_, claimed, err := ClaimSystemTask(task.ID, task.Type, "runner-order", common.GetTimestamp()+60)
+	require.NoError(t, err)
+	require.True(t, claimed)
+
+	recorder := &systemTaskSQLOrderRecorder{}
+	originalDB := DB
+	DB = DB.Session(&gorm.Session{Logger: recorder})
+	t.Cleanup(func() { DB = originalDB })
+	require.NoError(t, RenewSystemTaskLock(task.TaskID, "runner-order", common.GetTimestamp()+120))
+	assert.Equal(t, []string{"task", "lock"}, systemTaskQueryOrder(recorder.sql))
+}
+
+func TestFinishSystemTaskRollsBackWhenExactLockDeleteFails(t *testing.T) {
+	truncateTables(t)
+	task, err := CreateSystemTask(SystemTaskTypeLogCleanup, nil, nil)
+	require.NoError(t, err)
+	_, claimed, err := ClaimSystemTask(task.ID, task.Type, "runner-finish", common.GetTimestamp()+60)
+	require.NoError(t, err)
+	require.True(t, claimed)
+
+	callbackName := "test:fail_system_task_lock_delete"
+	require.NoError(t, DB.Callback().Delete().Before("gorm:delete").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement.Table == "system_task_locks" {
+			tx.AddError(errors.New("injected lock delete failure"))
+		}
+	}))
+	t.Cleanup(func() { _ = DB.Callback().Delete().Remove(callbackName) })
+
+	require.Error(t, FinishSystemTask(task.TaskID, "runner-finish", SystemTaskStatusSucceeded, nil, ""))
+	reloaded, err := GetSystemTaskByTaskID(task.TaskID)
+	require.NoError(t, err)
+	require.NotNil(t, reloaded)
+	assert.Equal(t, SystemTaskStatusRunning, reloaded.Status)
+	require.NotNil(t, reloaded.ActiveKey)
+	var locks int64
+	require.NoError(t, DB.Model(&SystemTaskLock{}).Where("task_id = ?", task.TaskID).Count(&locks).Error)
+	assert.Equal(t, int64(1), locks)
 }
 
 func TestFinishSystemTaskRetainsExecutor(t *testing.T) {

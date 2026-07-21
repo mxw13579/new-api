@@ -1,8 +1,11 @@
 package router
 
 import (
+	"net/http"
+
 	"github.com/QuantumNous/new-api/controller"
 	"github.com/QuantumNous/new-api/middleware"
+	"github.com/QuantumNous/new-api/service/authz"
 
 	// Import oauth package to register providers via init()
 	_ "github.com/QuantumNous/new-api/oauth"
@@ -10,6 +13,36 @@ import (
 	"github.com/gin-contrib/gzip"
 	"github.com/gin-gonic/gin"
 )
+
+type invoicePaymentEvidenceRoute struct {
+	method            string
+	path              string
+	permission        authz.Permission
+	criticalRateLimit bool
+	disableCache      bool
+	handler           gin.HandlerFunc
+}
+
+var invoicePaymentEvidenceRoutes = []invoicePaymentEvidenceRoute{
+	{http.MethodPost, "/invoice-payment-evidence/backfill/preview", authz.InvoicePaymentEvidenceOperate, true, true, controller.PreviewInvoicePaymentEvidenceBackfill},
+	{http.MethodPost, "/invoice-payment-evidence/backfill/:run_id/apply", authz.InvoicePaymentEvidenceOperate, true, true, controller.ApplyInvoicePaymentEvidenceBackfill},
+	{http.MethodGet, "/invoice-payment-evidence/backfill/:run_id", authz.InvoicePaymentEvidenceRead, false, true, controller.GetInvoicePaymentEvidenceBackfill},
+	{http.MethodPost, "/invoice-payment-evidence/backfill/:run_id/stop", authz.InvoicePaymentEvidenceOperate, true, true, controller.StopInvoicePaymentEvidenceBackfill},
+}
+
+func registerInvoicePaymentEvidenceRoutes(group *gin.RouterGroup) {
+	for _, route := range invoicePaymentEvidenceRoutes {
+		handlers := []gin.HandlerFunc{middleware.RequirePermission(route.permission)}
+		if route.criticalRateLimit {
+			handlers = append(handlers, middleware.CriticalRateLimit())
+		}
+		if route.disableCache {
+			handlers = append(handlers, middleware.DisableCache())
+		}
+		handlers = append(handlers, route.handler)
+		group.Handle(route.method, route.path, handlers...)
+	}
+}
 
 func SetApiRouter(router *gin.Engine) {
 	apiRouter := router.Group("/api")
@@ -282,6 +315,7 @@ func SetApiRouter(router *gin.Engine) {
 		systemTaskRoute := apiRouter.Group("/system-task")
 		systemTaskRoute.Use(middleware.RootAuth())
 		{
+			registerInvoicePaymentEvidenceRoutes(systemTaskRoute)
 			systemTaskRoute.POST("/log-cleanup", controller.CreateLogCleanupSystemTask)
 			systemTaskRoute.GET("/list", controller.ListSystemTasks)
 			systemTaskRoute.GET("/current", controller.GetCurrentSystemTask)

@@ -36,6 +36,10 @@ type SystemTaskHandler interface {
 	Run(ctx context.Context, task *model.SystemTask, runnerID string)
 }
 
+type SystemTaskPreClaimReconciler interface {
+	ReconcileBeforeClaim(context.Context) error
+}
+
 // ScheduledSystemTaskHandler is a SystemTaskHandler that the scheduler also
 // creates periodically when enabled and the configured interval has elapsed
 // since the last run.
@@ -143,7 +147,7 @@ func StartSystemTaskRunner() {
 				if now.Sub(lastStaleLockCleanup) >= systemTaskStaleLockInterval {
 					lastStaleLockCleanup = now
 					if err := model.ExpireStaleSystemTaskLocks(common.GetTimestamp()); err != nil {
-						logger.LogWarn(context.Background(), fmt.Sprintf("system task stale lock cleanup failed: %v", err))
+						logger.LogWarn(context.Background(), "system task stale lock cleanup failed")
 					}
 				}
 				if now.Sub(lastScheduler) >= systemTaskSchedulerInterval {
@@ -223,14 +227,22 @@ func EnqueueSystemTask(taskType string, payload any) (*model.SystemTask, bool, e
 // and dispatches each claimed task in its own goroutine so a long-running
 // handler (e.g. channel test) never blocks another type (e.g. log cleanup).
 func runSystemTaskClaimPass(runnerID string) {
-	handlers := registeredSystemTaskHandlers()
-	taskTypes := make([]string, 0, len(handlers))
-	for _, handler := range handlers {
+	registeredHandlers := registeredSystemTaskHandlers()
+	handlers := make([]SystemTaskHandler, 0, len(registeredHandlers))
+	taskTypes := make([]string, 0, len(registeredHandlers))
+	for _, handler := range registeredHandlers {
+		if reconciler, ok := handler.(SystemTaskPreClaimReconciler); ok {
+			if err := reconciler.ReconcileBeforeClaim(context.Background()); err != nil {
+				logger.LogWarn(context.Background(), fmt.Sprintf("system task pre-claim reconciliation failed: type=%s", handler.Type()))
+				continue
+			}
+		}
+		handlers = append(handlers, handler)
 		taskTypes = append(taskTypes, handler.Type())
 	}
 	pendingTasks, err := model.FindEarliestPendingSystemTasks(taskTypes)
 	if err != nil {
-		logger.LogWarn(context.Background(), fmt.Sprintf("system task runner query failed: %v", err))
+		logger.LogWarn(context.Background(), "system task runner query failed")
 		return
 	}
 	for _, handler := range handlers {
@@ -240,20 +252,22 @@ func runSystemTaskClaimPass(runnerID string) {
 		}
 		claimedTask, claimed, err := model.ClaimSystemTask(task.ID, handler.Type(), runnerID, systemTaskLockUntil())
 		if err != nil {
-			logger.LogWarn(context.Background(), fmt.Sprintf("system task claim failed: %v", err))
+			logger.LogWarn(context.Background(), fmt.Sprintf("system task claim failed: type=%s", handler.Type()))
 			continue
 		}
 		if !claimed {
 			continue
 		}
-		dispatchHandler := handler
-		dispatchTask := claimedTask
-		gopool.Go(func() {
-			runWithLeaseHeartbeat(dispatchTask, runnerID, func(ctx context.Context) {
-				dispatchHandler.Run(ctx, dispatchTask, runnerID)
-			})
-		})
+		dispatchSystemTask(handler, claimedTask, runnerID)
 	}
+}
+
+func dispatchSystemTask(handler SystemTaskHandler, task *model.SystemTask, runnerID string) {
+	gopool.Go(func() {
+		runWithLeaseHeartbeat(task, runnerID, func(ctx context.Context) {
+			handler.Run(ctx, task, runnerID)
+		})
+	})
 }
 
 // runSystemTaskScheduler creates a new task row for each enabled scheduled

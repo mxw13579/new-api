@@ -307,6 +307,9 @@ func migrateDB() error {
 	if err != nil {
 		return err
 	}
+	if err := migrateInvoicePaymentEvidenceStructures(DB); err != nil {
+		return err
+	}
 	if err := InitializeUserAuthVersions(); err != nil {
 		return err
 	}
@@ -389,6 +392,9 @@ func migrateDBFast() error {
 			return err
 		}
 	}
+	if err := migrateInvoicePaymentEvidenceStructures(DB); err != nil {
+		return err
+	}
 	if err := InitializeUserAuthVersions(); err != nil {
 		return err
 	}
@@ -405,6 +411,42 @@ func migrateDBFast() error {
 		}
 	}
 	common.SysLog("database migrated")
+	return nil
+}
+
+type topUpInvoiceEvidenceIndexMigration struct {
+	ID                      int     `gorm:"column:id;index:idx_topups_evidence_run,priority:2;index:idx_topups_invoice_eligible_window,priority:4"`
+	UserID                  int     `gorm:"column:user_id;index:idx_topups_invoice_eligible_window,priority:1"`
+	CompleteTime            int64   `gorm:"column:complete_time;index:idx_topups_invoice_eligible_window,priority:3"`
+	InvoiceEligible         *bool   `gorm:"column:invoice_eligible;index:idx_topups_invoice_eligible_window,priority:2"`
+	InvoiceApplicationID    *int64  `gorm:"column:invoice_application_id;index:idx_topups_invoice_application"`
+	PaymentEvidenceRunID    *int64  `gorm:"column:payment_evidence_run_id;index:idx_topups_evidence_run,priority:1"`
+	PaymentProviderTradeKey *string `gorm:"column:payment_provider_trade_key;uniqueIndex:uk_topups_provider_trade_key"`
+}
+
+func (topUpInvoiceEvidenceIndexMigration) TableName() string { return "top_ups" }
+
+func migrateInvoicePaymentEvidenceStructures(db *gorm.DB) error {
+	if db == nil {
+		return fmt.Errorf("invoice payment evidence migration requires database")
+	}
+	if err := db.AutoMigrate(&InvoicePaymentEvidenceBackfillRun{}, &InvoicePaymentEvidenceBackfillItem{}); err != nil {
+		return err
+	}
+	indexes := []string{
+		"idx_topups_evidence_run",
+		"idx_topups_invoice_eligible_window",
+		"idx_topups_invoice_application",
+		"uk_topups_provider_trade_key",
+	}
+	for _, index := range indexes {
+		if db.Migrator().HasIndex(&topUpInvoiceEvidenceIndexMigration{}, index) {
+			continue
+		}
+		if err := db.Migrator().CreateIndex(&topUpInvoiceEvidenceIndexMigration{}, index); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

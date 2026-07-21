@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -41,6 +42,18 @@ type stubSystemTaskRunResult struct {
 	taskID   string
 	taskType string
 	err      error
+}
+
+type stubPreClaimHandler struct {
+	stubScheduledHandler
+	reconcile func() error
+}
+
+func (h *stubPreClaimHandler) ReconcileBeforeClaim(context.Context) error {
+	if h.reconcile == nil {
+		return nil
+	}
+	return h.reconcile()
 }
 
 func (h *stubScheduledHandler) Type() string { return h.taskType }
@@ -141,6 +154,31 @@ func TestSystemTaskClaimPassDispatchesByType(t *testing.T) {
 		latest, err := model.GetLatestSystemTask(handler.taskType)
 		return err == nil && latest != nil && latest.Status == model.SystemTaskStatusSucceeded
 	}, 2*time.Second, 20*time.Millisecond)
+}
+
+func TestSystemTaskPreClaimErrorSkipsDiscoveryAndDispatch(t *testing.T) {
+	truncate(t)
+
+	reconciled := 0
+	handler := &stubPreClaimHandler{
+		stubScheduledHandler: stubScheduledHandler{
+			taskType: "test_preclaim",
+		},
+		reconcile: func() error {
+			reconciled++
+			return errors.New("reconciliation failed")
+		},
+	}
+	withSystemTaskRegistry(t, handler)
+	task, err := model.CreateSystemTask(handler.Type(), nil, nil)
+	require.NoError(t, err)
+
+	runSystemTaskClaimPass("runner-preclaim")
+	assert.Equal(t, 1, reconciled)
+	reloaded, err := model.GetSystemTaskByTaskID(task.TaskID)
+	require.NoError(t, err)
+	require.NotNil(t, reloaded)
+	assert.Equal(t, model.SystemTaskStatusPending, reloaded.Status)
 }
 
 func TestSystemTaskClaimPassDispatchesEarliestPendingByType(t *testing.T) {
