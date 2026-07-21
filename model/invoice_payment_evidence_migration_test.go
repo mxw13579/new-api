@@ -4,6 +4,7 @@ import (
 	"sort"
 	"testing"
 
+	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -57,6 +58,26 @@ func sqliteInvoiceEvidenceTableColumns(t *testing.T, table string) map[string]sq
 		columns[row.Name] = row
 	}
 	return columns
+}
+
+func TestLegacySQLiteTopUpsMigrationAddsProviderTradeKeyIndex(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:legacy_topups_migration?mode=memory&cache=shared"), &gorm.Config{})
+	require.NoError(t, err)
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, sqlDB.Close()) })
+
+	require.NoError(t, db.Exec(`CREATE TABLE top_ups (
+		id integer PRIMARY KEY AUTOINCREMENT,
+		trade_no varchar(255) UNIQUE
+	)`).Error)
+	require.NoError(t, db.AutoMigrate(&TopUp{}))
+	require.NoError(t, migrateInvoicePaymentEvidenceStructures(db))
+
+	assert.True(t, db.Migrator().HasColumn(&TopUp{}, "payment_provider_trade_key"))
+	assert.True(t, db.Migrator().HasIndex(&topUpInvoiceEvidenceIndexMigration{}, "uk_topups_provider_trade_key"))
+	require.NoError(t, db.Exec("INSERT INTO top_ups (payment_provider_trade_key) VALUES (?)", "provider-trade-key").Error)
+	assert.Error(t, db.Exec("INSERT INTO top_ups (payment_provider_trade_key) VALUES (?)", "provider-trade-key").Error)
 }
 
 func TestInvoicePaymentEvidenceRoadmapDAG(t *testing.T) {

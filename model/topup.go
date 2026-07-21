@@ -34,7 +34,7 @@ type TopUp struct {
 	PaymentEvidenceSource   *string `json:"payment_evidence_source" gorm:"type:varchar(32)"`
 	PaymentEvidenceRunID    *int64  `json:"payment_evidence_run_id"`
 	PaymentProviderTradeNo  *string `json:"-" gorm:"type:varchar(191)"`
-	PaymentProviderTradeKey *string `json:"-" gorm:"type:char(64);uniqueIndex:uk_topups_provider_trade_key"`
+	PaymentProviderTradeKey *string `json:"-" gorm:"type:char(64)"`
 }
 
 const (
