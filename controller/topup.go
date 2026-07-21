@@ -17,7 +17,6 @@ import (
 
 	"github.com/Calcium-Ion/go-epay/epay"
 	"github.com/gin-gonic/gin"
-	"github.com/samber/lo"
 	"github.com/shopspring/decimal"
 )
 
@@ -236,7 +235,7 @@ func RequestEpay(c *gin.Context) {
 		ReturnUrl:      returnUrl,
 	})
 	if err != nil {
-		logger.LogError(c.Request.Context(), fmt.Sprintf("易支付 拉起支付失败 user_id=%d trade_no=%s payment_method=%s amount=%d error=%q", id, tradeNo, req.PaymentMethod, req.Amount, err.Error()))
+		logger.LogError(c.Request.Context(), fmt.Sprintf("Epay purchase failed actor_id=%d code=purchase_failed", id))
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "拉起支付失败"})
 		return
 	}
@@ -258,11 +257,11 @@ func RequestEpay(c *gin.Context) {
 	}
 	err = topUp.Insert()
 	if err != nil {
-		logger.LogError(c.Request.Context(), fmt.Sprintf("易支付 创建充值订单失败 user_id=%d trade_no=%s payment_method=%s amount=%d error=%q", id, tradeNo, req.PaymentMethod, req.Amount, err.Error()))
+		logger.LogError(c.Request.Context(), fmt.Sprintf("Epay order persistence failed actor_id=%d code=order_persist_failed", id))
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "创建订单失败"})
 		return
 	}
-	logger.LogInfo(c.Request.Context(), fmt.Sprintf("易支付 充值订单创建成功 user_id=%d trade_no=%s payment_method=%s amount=%d money=%.2f uri=%q params=%q", id, tradeNo, req.PaymentMethod, req.Amount, payMoney, uri, common.GetJsonString(params)))
+	logger.LogInfo(c.Request.Context(), fmt.Sprintf("Epay order created actor_id=%d", id))
 	c.JSON(http.StatusOK, gin.H{"message": "success", "data": params, "url": uri})
 }
 
@@ -310,101 +309,15 @@ func UnlockOrder(tradeNo string) {
 
 func EpayNotify(c *gin.Context) {
 	if !isEpayWebhookEnabled() {
-		logger.LogWarn(c.Request.Context(), fmt.Sprintf("易支付 webhook 被拒绝 reason=webhook_disabled path=%q client_ip=%s", c.Request.RequestURI, c.ClientIP()))
 		_, _ = c.Writer.Write([]byte("fail"))
 		return
 	}
-
-	var params map[string]string
-
-	if c.Request.Method == "POST" {
-		// POST 请求：从 POST body 解析参数
-		if err := c.Request.ParseForm(); err != nil {
-			logger.LogError(c.Request.Context(), fmt.Sprintf("易支付 webhook POST 表单解析失败 path=%q client_ip=%s error=%q", c.Request.RequestURI, c.ClientIP(), err.Error()))
-			_, _ = c.Writer.Write([]byte("fail"))
-			return
-		}
-		params = lo.Reduce(lo.Keys(c.Request.PostForm), func(r map[string]string, t string, i int) map[string]string {
-			r[t] = c.Request.PostForm.Get(t)
-			return r
-		}, map[string]string{})
-	} else {
-		// GET 请求：从 URL Query 解析参数
-		params = lo.Reduce(lo.Keys(c.Request.URL.Query()), func(r map[string]string, t string, i int) map[string]string {
-			r[t] = c.Request.URL.Query().Get(t)
-			return r
-		}, map[string]string{})
-	}
-	logger.LogInfo(c.Request.Context(), fmt.Sprintf("易支付 webhook 收到请求 path=%q client_ip=%s method=%s params=%q", c.Request.RequestURI, c.ClientIP(), c.Request.Method, common.GetJsonString(params)))
-
-	if len(params) == 0 {
-		logger.LogWarn(c.Request.Context(), fmt.Sprintf("易支付 webhook 参数为空 path=%q client_ip=%s", c.Request.RequestURI, c.ClientIP()))
+	completion, ok := verifiedEpayCompletion(c.Request)
+	if !ok || model.CompleteVerifiedEpayWalletTopUp(completion) != nil {
 		_, _ = c.Writer.Write([]byte("fail"))
 		return
 	}
-	client := GetEpayClient()
-	if client == nil {
-		logger.LogError(c.Request.Context(), fmt.Sprintf("易支付 client 未初始化 path=%q client_ip=%s", c.Request.RequestURI, c.ClientIP()))
-		_, err := c.Writer.Write([]byte("fail"))
-		if err != nil {
-			logger.LogError(c.Request.Context(), fmt.Sprintf("易支付 webhook 响应写入失败 path=%q client_ip=%s error=%q", c.Request.RequestURI, c.ClientIP(), err.Error()))
-		}
-		return
-	}
-	verifyInfo, err := client.Verify(params)
-	if err != nil || !verifyInfo.VerifyStatus {
-		_, writeErr := c.Writer.Write([]byte("fail"))
-		if writeErr != nil {
-			logger.LogError(c.Request.Context(), fmt.Sprintf("Epay webhook response write failed path=%q client_ip=%s error=%q", c.Request.RequestURI, c.ClientIP(), writeErr.Error()))
-		}
-		if err != nil {
-			logger.LogWarn(c.Request.Context(), fmt.Sprintf("Epay webhook verification failed path=%q client_ip=%s verify_error=%q", c.Request.RequestURI, c.ClientIP(), err.Error()))
-		} else {
-			logger.LogWarn(c.Request.Context(), fmt.Sprintf("Epay webhook verification failed path=%q client_ip=%s verify_status=false", c.Request.RequestURI, c.ClientIP()))
-		}
-		return
-	}
-
-	logger.LogInfo(c.Request.Context(), fmt.Sprintf("Epay webhook verified trade_no=%s callback_type=%s trade_status=%s client_ip=%s verify_info=%q", verifyInfo.ServiceTradeNo, verifyInfo.Type, verifyInfo.TradeStatus, c.ClientIP(), common.GetJsonString(verifyInfo)))
-
-	if verifyInfo.TradeStatus == epay.StatusTradeSuccess {
-		LockOrder(verifyInfo.ServiceTradeNo)
-		defer UnlockOrder(verifyInfo.ServiceTradeNo)
-
-		topUp := model.GetTopUpByTradeNo(verifyInfo.ServiceTradeNo)
-		if topUp == nil {
-			logger.LogWarn(c.Request.Context(), fmt.Sprintf("Epay callback topup not found trade_no=%s callback_type=%s client_ip=%s", verifyInfo.ServiceTradeNo, verifyInfo.Type, c.ClientIP()))
-			_, writeErr := c.Writer.Write([]byte("fail"))
-			if writeErr != nil {
-				logger.LogError(c.Request.Context(), fmt.Sprintf("Epay webhook response write failed trade_no=%s client_ip=%s error=%q", verifyInfo.ServiceTradeNo, c.ClientIP(), writeErr.Error()))
-			}
-			return
-		}
-		if topUp.PaymentProvider != model.PaymentProviderEpay {
-			logger.LogWarn(c.Request.Context(), fmt.Sprintf("Epay callback payment provider mismatch trade_no=%s order_provider=%s callback_type=%s client_ip=%s", verifyInfo.ServiceTradeNo, topUp.PaymentProvider, verifyInfo.Type, c.ClientIP()))
-			_, writeErr := c.Writer.Write([]byte("fail"))
-			if writeErr != nil {
-				logger.LogError(c.Request.Context(), fmt.Sprintf("Epay webhook response write failed trade_no=%s client_ip=%s error=%q", verifyInfo.ServiceTradeNo, c.ClientIP(), writeErr.Error()))
-			}
-			return
-		}
-
-		if err := model.CompleteEpayWalletTopUp(verifyInfo.ServiceTradeNo, verifyInfo.Type, c.ClientIP()); err != nil {
-			logger.LogError(c.Request.Context(), fmt.Sprintf("Epay wallet topup accounting failed trade_no=%s callback_type=%s client_ip=%s error=%q", verifyInfo.ServiceTradeNo, verifyInfo.Type, c.ClientIP(), err.Error()))
-			_, writeErr := c.Writer.Write([]byte("fail"))
-			if writeErr != nil {
-				logger.LogError(c.Request.Context(), fmt.Sprintf("Epay webhook response write failed trade_no=%s client_ip=%s error=%q", verifyInfo.ServiceTradeNo, c.ClientIP(), writeErr.Error()))
-			}
-			return
-		}
-	} else {
-		logger.LogInfo(c.Request.Context(), fmt.Sprintf("Epay webhook ignored event trade_no=%s callback_type=%s trade_status=%s client_ip=%s verify_info=%q", verifyInfo.ServiceTradeNo, verifyInfo.Type, verifyInfo.TradeStatus, c.ClientIP(), common.GetJsonString(verifyInfo)))
-	}
-
-	_, err = c.Writer.Write([]byte("success"))
-	if err != nil {
-		logger.LogError(c.Request.Context(), fmt.Sprintf("Epay webhook response write failed trade_no=%s client_ip=%s error=%q", verifyInfo.ServiceTradeNo, c.ClientIP(), err.Error()))
-	}
+	_, _ = c.Writer.Write([]byte("success"))
 }
 
 func RequestAmount(c *gin.Context) {

@@ -13,16 +13,28 @@ import (
 )
 
 type TopUp struct {
-	Id              int     `json:"id"`
-	UserId          int     `json:"user_id" gorm:"index"`
-	Amount          int64   `json:"amount"`
-	Money           float64 `json:"money"`
-	TradeNo         string  `json:"trade_no" gorm:"unique;type:varchar(255);index"`
-	PaymentMethod   string  `json:"payment_method" gorm:"type:varchar(50)"`
-	PaymentProvider string  `json:"payment_provider" gorm:"type:varchar(50);default:''"`
-	CreateTime      int64   `json:"create_time"`
-	CompleteTime    int64   `json:"complete_time"`
-	Status          string  `json:"status"`
+	Id                      int     `json:"id"`
+	UserId                  int     `json:"user_id" gorm:"index"`
+	Amount                  int64   `json:"amount"`
+	Money                   float64 `json:"money"`
+	TradeNo                 string  `json:"trade_no" gorm:"unique;type:varchar(255);index"`
+	PaymentMethod           string  `json:"payment_method" gorm:"type:varchar(50)"`
+	PaymentProvider         string  `json:"payment_provider" gorm:"type:varchar(50);default:''"`
+	CreateTime              int64   `json:"create_time"`
+	CompleteTime            int64   `json:"complete_time"`
+	Status                  string  `json:"status"`
+	PaidAmountMinor         *int64  `json:"paid_amount_minor"`
+	Currency                *string `json:"currency" gorm:"type:varchar(3)"`
+	InvoiceEligible         *bool   `json:"invoice_eligible"`
+	InvoiceApplicationID    *int64  `json:"invoice_application_id"`
+	PaymentState            *string `json:"payment_state" gorm:"type:varchar(32)"`
+	RefundedAmountMinor     *int64  `json:"refunded_amount_minor"`
+	PaymentVersion          *int64  `json:"payment_version"`
+	ProductSnapshot         *string `json:"product_snapshot" gorm:"type:text"`
+	PaymentEvidenceSource   *string `json:"payment_evidence_source" gorm:"type:varchar(32)"`
+	PaymentEvidenceRunID    *int64  `json:"payment_evidence_run_id"`
+	PaymentProviderTradeNo  *string `json:"-" gorm:"type:varchar(191)"`
+	PaymentProviderTradeKey *string `json:"-" gorm:"type:char(64);uniqueIndex:uk_topups_provider_trade_key"`
 }
 
 const (
@@ -43,10 +55,12 @@ const (
 )
 
 var (
-	ErrPaymentMethodMismatch = errors.New("payment method mismatch")
-	ErrTopUpNotFound         = errors.New("topup not found")
-	ErrTopUpStatusInvalid    = errors.New("topup status invalid")
-	ErrTopUpRebateConflict   = errors.New("topup rebate idempotency conflict")
+	ErrPaymentMethodMismatch          = errors.New("payment method mismatch")
+	ErrTopUpNotFound                  = errors.New("topup not found")
+	ErrTopUpStatusInvalid             = errors.New("topup status invalid")
+	ErrTopUpRebateConflict            = errors.New("topup rebate idempotency conflict")
+	ErrVerifiedEpayCompletionInvalid  = errors.New("verified epay completion invalid")
+	ErrVerifiedEpayCompletionConflict = errors.New("verified epay completion conflict")
 )
 
 type WalletTopUpCreditResult struct {
@@ -78,11 +92,23 @@ func calculateWalletTopUpQuota(topUp *TopUp) (int, error) {
 	}
 	switch topUp.PaymentProvider {
 	case PaymentProviderStripe:
-		return int(decimal.NewFromFloat(topUp.Money).Mul(decimal.NewFromFloat(common.QuotaPerUnit)).IntPart()), nil
+		quota, clamp := common.QuotaFromDecimalChecked(decimal.NewFromFloat(topUp.Money).Mul(decimal.NewFromFloat(common.QuotaPerUnit)).Truncate(0))
+		if clamp != nil {
+			return 0, clamp
+		}
+		return quota, nil
 	case PaymentProviderCreem:
-		return int(topUp.Amount), nil
+		quota, clamp := common.QuotaFromDecimalChecked(decimal.NewFromInt(topUp.Amount))
+		if clamp != nil {
+			return 0, clamp
+		}
+		return quota, nil
 	case PaymentProviderEpay, PaymentProviderWaffo, PaymentProviderWaffoPancake:
-		return int(decimal.NewFromInt(topUp.Amount).Mul(decimal.NewFromFloat(common.QuotaPerUnit)).IntPart()), nil
+		quota, clamp := common.QuotaFromDecimalChecked(decimal.NewFromInt(topUp.Amount).Mul(decimal.NewFromFloat(common.QuotaPerUnit)).Truncate(0))
+		if clamp != nil {
+			return 0, clamp
+		}
+		return quota, nil
 	default:
 		return 0, ErrPaymentMethodMismatch
 	}
@@ -92,10 +118,10 @@ func calculateWalletTopUpRebate(quotaToAdd int) int {
 	if quotaToAdd <= 0 || common.RechargeRebateRatioForInviter <= 0 {
 		return 0
 	}
-	return int(decimal.NewFromInt(int64(quotaToAdd)).
+	return common.QuotaFromDecimal(decimal.NewFromInt(int64(quotaToAdd)).
 		Mul(decimal.NewFromFloat(common.RechargeRebateRatioForInviter)).
 		Div(decimal.NewFromInt(100)).
-		IntPart())
+		Truncate(0))
 }
 
 func topUpRebateLogMatches(existing *AffiliateLog, expected *AffiliateLog) bool {
@@ -210,6 +236,7 @@ func creditWalletTopUpTx(tx *gorm.DB, topUp *TopUp, quotaToAdd int, expectedProv
 
 	topUp.CompleteTime = common.GetTimestamp()
 	topUp.Status = common.TopUpStatusSuccess
+	writeIneligibleInvoiceEvidence(topUp)
 	if err := tx.Save(topUp).Error; err != nil {
 		return nil, err
 	}
