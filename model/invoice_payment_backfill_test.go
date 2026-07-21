@@ -3,6 +3,7 @@ package model
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -33,6 +34,60 @@ func TestInvoiceEvidenceRetryClassification(t *testing.T) {
 			assert.Equal(t, tc.want, isInvoicePaymentEvidenceRetryable(tc.err))
 		})
 	}
+}
+
+func TestInvoiceEvidencePreviewWinnerRecoveryClassification(t *testing.T) {
+	const policyIndex = "idx_invoice_payment_evidence_backfill_runs_policy_version"
+	testCases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "postgres policy conflict", err: &pgconn.PgError{Code: "23505", ConstraintName: policyIndex}, want: true},
+		{name: "postgres unrelated unique conflict", err: &pgconn.PgError{Code: "23505", ConstraintName: "uk_other"}, want: false},
+		{name: "mysql policy conflict", err: &mysqlDriver.MySQLError{Number: 1062, Message: "Duplicate entry 'legacy_backfill_v1' for key 'invoice_payment_evidence_backfill_runs." + policyIndex + "'"}, want: true},
+		{name: "mysql unrelated unique conflict", err: &mysqlDriver.MySQLError{Number: 1062, Message: "Duplicate entry 'x' for key 'uk_other'"}, want: false},
+		{name: "sqlite policy conflict", err: errors.New("constraint failed: UNIQUE constraint failed: invoice_payment_evidence_backfill_runs.policy_version (2067)"), want: true},
+		{name: "sqlite unrelated unique conflict", err: errors.New("constraint failed: UNIQUE constraint failed: invoice_payment_evidence_backfill_items.run_id, invoice_payment_evidence_backfill_items.topup_id (2067)"), want: false},
+		{name: "cancellation", err: context.Canceled, want: false},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			assert.Equal(t, testCase.want, isInvoicePaymentEvidencePolicyVersionConflict(testCase.err))
+		})
+	}
+}
+
+func TestInvoiceEvidencePreviewDoesNotMaskUnrelatedFailureWithConcurrentWinner(t *testing.T) {
+	db := setupInvoiceEvidenceFileSQLite(t)
+	require.NoError(t, db.AutoMigrate(&TopUp{}, &SubscriptionOrder{}))
+	sentinel := errors.New("preview scan failed")
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	var once sync.Once
+	require.NoError(t, db.Callback().Create().Before("gorm:create").Register("test:preview-unrelated-error", func(tx *gorm.DB) {
+		if tx.Statement.Table != "invoice_payment_evidence_backfill_runs" {
+			return
+		}
+		once.Do(func() {
+			_, insertErr := sqlDB.Exec(`INSERT INTO invoice_payment_evidence_backfill_runs
+(policy_version, canonical_policy_json, policy_sha256, cutoff_max_top_up_id, preview_candidate_count,
+preview_amount_minor, preview_exclusion_reasons, status, cursor_top_up_id, attempt, actor_id,
+cutover_audit_json, created_at)
+VALUES (?, ?, ?, 0, 0, 0, '{}', ?, 0, 0, 1, '{}', 1)`,
+				constant.InvoicePaymentEvidencePolicyVersion, constant.InvoicePaymentEvidenceCanonicalPolicyJSON,
+				constant.InvoicePaymentEvidencePolicySHA256, InvoicePaymentEvidenceRunStatusPreviewed)
+			require.NoError(t, insertErr)
+			tx.AddError(sentinel)
+		})
+	}))
+
+	run, created, err := PreviewInvoicePaymentEvidenceBackfill(context.Background(), 1, InvoicePaymentEvidencePreviewAttestation{
+		DeploymentSHA: "0123456789abcdef0123456789abcdef01234567", ActiveInstanceCount: 1, MatchingInstanceCount: 1,
+	})
+	require.ErrorIs(t, err, sentinel)
+	assert.Nil(t, run)
+	assert.False(t, created)
 }
 
 func setupInvoiceEvidenceBatchTest(t *testing.T) {

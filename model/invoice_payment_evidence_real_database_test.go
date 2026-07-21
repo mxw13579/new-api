@@ -141,6 +141,18 @@ func runInvoiceEvidenceRealDatabaseContract(t *testing.T, database *invoiceEvide
 	runInvoiceEvidencePreClaimScenario(t)
 	resetInvoiceEvidenceRealScenario(t)
 	runInvoiceEvidenceCrashRecoveryScenario(t)
+	resetInvoiceEvidenceRealScenario(t)
+	runInvoiceEvidenceStopScenario(t, SystemTaskStatusPending)
+	resetInvoiceEvidenceRealScenario(t)
+	runInvoiceEvidenceStopScenario(t, SystemTaskStatusRunning)
+	resetInvoiceEvidenceRealScenario(t)
+	runInvoiceEvidenceLiveFailureScenario(t)
+	resetInvoiceEvidenceRealScenario(t)
+	runInvoiceEvidenceTerminalCompletionScenario(t)
+	resetInvoiceEvidenceRealScenario(t)
+	runInvoiceEvidenceResumeScenario(t)
+	resetInvoiceEvidenceRealScenario(t)
+	runTopUpInvoicePaymentSourceAcceptanceMatrix(t)
 }
 
 func assertInvoiceEvidenceRealSchema(t *testing.T, database *invoiceEvidenceRealDatabase) {
@@ -303,6 +315,63 @@ func runInvoiceEvidenceCrashRecoveryScenario(t *testing.T) {
 	assert.Equal(t, InvoicePaymentEvidenceRunStatusFailed, run.Status)
 }
 
+func runInvoiceEvidenceStopScenario(t *testing.T, status SystemTaskStatus) {
+	t.Helper()
+	run, task, _ := createBoundInvoiceEvidenceTask(t, status, 1)
+	result, err := StopInvoicePaymentEvidenceBackfill(context.Background(), run.ID)
+	require.NoError(t, err)
+	assert.Equal(t, InvoicePaymentEvidenceRunStatusFailed, result.Status)
+	assert.Equal(t, "operator_stopped", result.Reason)
+	require.NoError(t, DB.First(&task, task.ID).Error)
+	assert.Equal(t, SystemTaskStatusFailed, task.Status)
+	assert.Nil(t, task.ActiveKey)
+}
+
+func runInvoiceEvidenceLiveFailureScenario(t *testing.T) {
+	t.Helper()
+	run, task, lock := createBoundInvoiceEvidenceTask(t, SystemTaskStatusRunning, 1)
+	require.NotNil(t, lock)
+	require.NoError(t, FailInvoicePaymentEvidenceApply(context.Background(), run.ID, task.TaskID, task.LockedBy, run.Attempt, "apply_failed", "apply failed"))
+	require.NoError(t, DB.First(&run, run.ID).Error)
+	require.NoError(t, DB.First(&task, task.ID).Error)
+	assert.Equal(t, InvoicePaymentEvidenceRunStatusFailed, run.Status)
+	assert.Equal(t, SystemTaskStatusFailed, task.Status)
+	assert.Nil(t, run.ActiveTaskID)
+	assert.Nil(t, task.ActiveKey)
+}
+
+func runInvoiceEvidenceTerminalCompletionScenario(t *testing.T) {
+	t.Helper()
+	run, task, lock := createBoundInvoiceEvidenceTask(t, SystemTaskStatusRunning, 1)
+	require.NotNil(t, lock)
+	require.NoError(t, CompleteInvoicePaymentEvidenceApply(context.Background(), run.ID, task.TaskID, task.LockedBy, run.Attempt))
+	require.NoError(t, DB.First(&run, run.ID).Error)
+	require.NoError(t, DB.First(&task, task.ID).Error)
+	assert.Equal(t, InvoicePaymentEvidenceRunStatusCompleted, run.Status)
+	assert.Equal(t, SystemTaskStatusSucceeded, task.Status)
+	assert.Nil(t, run.ActiveTaskID)
+	assert.Nil(t, task.ActiveKey)
+}
+
+func runInvoiceEvidenceResumeScenario(t *testing.T) {
+	t.Helper()
+	run, oldTask, lock := createBoundInvoiceEvidenceTask(t, SystemTaskStatusRunning, 1)
+	require.NotNil(t, lock)
+	require.NoError(t, FailInvoicePaymentEvidenceApply(context.Background(), run.ID, oldTask.TaskID, oldTask.LockedBy, run.Attempt, "apply_failed", "apply failed"))
+	resumedRun, newTask, created, err := EnqueueInvoicePaymentEvidenceApply(context.Background(), run.ID, run.PolicySHA256)
+	require.NoError(t, err)
+	require.True(t, created)
+	require.NotNil(t, resumedRun)
+	require.NotNil(t, newTask)
+	assert.Equal(t, InvoicePaymentEvidenceRunStatusApplying, resumedRun.Status)
+	assert.Equal(t, int64(2), resumedRun.Attempt)
+	assert.Equal(t, SystemTaskStatusPending, newTask.Status)
+	require.NotNil(t, resumedRun.LastTaskID)
+	assert.Equal(t, oldTask.TaskID, *resumedRun.LastTaskID)
+	require.NotNil(t, resumedRun.ActiveTaskID)
+	assert.Equal(t, newTask.TaskID, *resumedRun.ActiveTaskID)
+}
+
 func TestPostgresInvoiceEvidenceIndexColumnsUsePhysicalKeyOrder(t *testing.T) {
 	rows := []postgresInvoiceEvidenceIndexColumn{
 		{IndexName: "idx_b", ColumnName: "second", KeyOrder: 2},
@@ -332,6 +401,21 @@ func TestInvoiceEvidenceRealScenarioReset(t *testing.T) {
 		require.NoError(t, DB.Table(table).Count(&count).Error)
 		assert.Zero(t, count, table)
 	}
+}
+
+func TestInvoiceEvidenceExtendedTransitionScenariosSQLite(t *testing.T) {
+	db := setupInvoiceEvidenceFileSQLite(t)
+	require.NoError(t, db.AutoMigrate(&TopUp{}, &SubscriptionOrder{}))
+
+	runInvoiceEvidenceStopScenario(t, SystemTaskStatusPending)
+	resetInvoiceEvidenceRealScenario(t)
+	runInvoiceEvidenceStopScenario(t, SystemTaskStatusRunning)
+	resetInvoiceEvidenceRealScenario(t)
+	runInvoiceEvidenceLiveFailureScenario(t)
+	resetInvoiceEvidenceRealScenario(t)
+	runInvoiceEvidenceTerminalCompletionScenario(t)
+	resetInvoiceEvidenceRealScenario(t)
+	runInvoiceEvidenceResumeScenario(t)
 }
 
 func TestInvoicePaymentEvidenceMySQL(t *testing.T) {

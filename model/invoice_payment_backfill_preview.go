@@ -3,11 +3,16 @@ package model
 import (
 	"context"
 	"errors"
+	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	mysqlDriver "github.com/go-sql-driver/mysql"
+	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/gorm"
 )
+
+const invoicePaymentEvidencePolicyVersionIndex = "idx_invoice_payment_evidence_backfill_runs_policy_version"
 
 type invoicePaymentEvidencePreviewAccumulator struct {
 	exclusions     map[string]int64
@@ -49,6 +54,22 @@ func findInvoicePaymentEvidenceRunByPolicy(db *gorm.DB) (*InvoicePaymentEvidence
 	return &run, nil
 }
 
+func isInvoicePaymentEvidencePolicyVersionConflict(err error) bool {
+	if err == nil {
+		return false
+	}
+	var postgresErr *pgconn.PgError
+	if errors.As(err, &postgresErr) {
+		return postgresErr.Code == "23505" && postgresErr.ConstraintName == invoicePaymentEvidencePolicyVersionIndex
+	}
+	var mysqlErr *mysqlDriver.MySQLError
+	if errors.As(err, &mysqlErr) {
+		return mysqlErr.Number == 1062 && strings.Contains(strings.ToLower(mysqlErr.Message), invoicePaymentEvidencePolicyVersionIndex)
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "unique constraint failed: invoice_payment_evidence_backfill_runs.policy_version")
+}
+
 func PreviewInvoicePaymentEvidenceBackfill(ctx context.Context, actorID int, attestation InvoicePaymentEvidencePreviewAttestation) (*InvoicePaymentEvidenceBackfillRun, bool, error) {
 	if ctx == nil || actorID <= 0 || !validInvoicePaymentEvidenceAttestation(attestation) {
 		return nil, false, ErrInvoicePaymentEvidenceInvalidRequest
@@ -65,6 +86,9 @@ func PreviewInvoicePaymentEvidenceBackfill(ctx context.Context, actorID int, att
 	})
 	if err == nil {
 		return createdRun, true, nil
+	}
+	if !isInvoicePaymentEvidencePolicyVersionConflict(err) {
+		return nil, false, err
 	}
 	winner, loadErr := findInvoicePaymentEvidenceRunByPolicy(DB.WithContext(ctx))
 	if loadErr != nil || winner != nil {
