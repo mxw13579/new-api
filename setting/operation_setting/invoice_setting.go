@@ -18,6 +18,7 @@ type InvoiceSetting struct {
 	PDFRetentionDays      int   `json:"pdf_retention_days"`
 }
 
+// DefaultInvoiceSetting returns the disabled-by-default invoice policy used before persisted options load.
 func DefaultInvoiceSetting() InvoiceSetting {
 	return InvoiceSetting{
 		PersonalEnabled:       false,
@@ -35,10 +36,12 @@ func init() {
 	config.GlobalConfig.Register("invoice_setting", &invoiceSetting)
 }
 
+// GetInvoiceSetting returns the process-wide invoice policy populated by the option registry.
 func GetInvoiceSetting() *InvoiceSetting {
 	return &invoiceSetting
 }
 
+// Validate rejects invoice policies with unsafe windows, retention, minimums, or quota fees.
 func (setting InvoiceSetting) Validate() error {
 	if setting.ApplicationWindowDays <= 0 {
 		return errors.New("invoice application window must be positive")

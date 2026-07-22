@@ -10,10 +10,12 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// GetInvoiceSetting returns the mutable invoice policy to authorized option administrators.
 func GetInvoiceSetting(c *gin.Context) {
 	writeInvoiceSuccess(c, http.StatusOK, operation_setting.GetInvoiceSetting())
 }
 
+// UpdateInvoiceSetting validates and atomically persists the complete invoice policy.
 func UpdateInvoiceSetting(c *gin.Context) {
 	var setting operation_setting.InvoiceSetting
 	if err := common.DecodeStrictJSONObject(c.Request.Body, &setting, false); err != nil || setting.Validate() != nil {

@@ -1,5 +1,6 @@
 package dto
 
+// InvoiceConfig exposes the active invoice policy and fixed settlement currency.
 type InvoiceConfig struct {
 	PersonalEnabled       bool   `json:"personal_enabled"`
 	CompanyEnabled        bool   `json:"company_enabled"`
@@ -10,6 +11,7 @@ type InvoiceConfig struct {
 	Currency              string `json:"currency"`
 }
 
+// InvoiceProfile represents a versioned personal or company invoicing identity.
 type InvoiceProfile struct {
 	ID        int64  `json:"id"`
 	Type      string `json:"type"`
@@ -21,6 +23,7 @@ type InvoiceProfile struct {
 	UpdatedAt int64  `json:"updated_at"`
 }
 
+// CreateInvoiceProfileRequest carries the identity fields for a new invoice profile.
 type CreateInvoiceProfileRequest struct {
 	Type      string `json:"type"`
 	Title     string `json:"title"`
@@ -28,6 +31,7 @@ type CreateInvoiceProfileRequest struct {
 	IsDefault bool   `json:"is_default"`
 }
 
+// UpdateInvoiceProfileRequest carries an optimistic-concurrency update for an invoice profile.
 type UpdateInvoiceProfileRequest struct {
 	ID              int64  `json:"id"`
 	ExpectedVersion int64  `json:"expected_version"`
@@ -36,11 +40,13 @@ type UpdateInvoiceProfileRequest struct {
 	IsDefault       bool   `json:"is_default"`
 }
 
+// DeleteInvoiceProfileRequest identifies the profile version to remove.
 type DeleteInvoiceProfileRequest struct {
 	ID              int64 `json:"id"`
 	ExpectedVersion int64 `json:"expected_version"`
 }
 
+// EligibleInvoiceOrder describes one fully paid order available for invoice selection.
 type EligibleInvoiceOrder struct {
 	TopUpID            int    `json:"topup_id"`
 	OrderNo            string `json:"order_no"`
@@ -50,6 +56,7 @@ type EligibleInvoiceOrder struct {
 	PaidAt             int64  `json:"paid_at"`
 }
 
+// EligibleInvoiceOrderPage is a paginated collection of invoiceable orders.
 type EligibleInvoiceOrderPage struct {
 	Items    []EligibleInvoiceOrder `json:"items"`
 	Page     int                    `json:"page"`
@@ -57,6 +64,7 @@ type EligibleInvoiceOrderPage struct {
 	Total    int64                  `json:"total"`
 }
 
+// CreateInvoiceApplicationRequest selects a profile version and owned orders for idempotent submission.
 type CreateInvoiceApplicationRequest struct {
 	RequestID      string `json:"request_id"`
 	ProfileID      int64  `json:"profile_id"`
@@ -64,6 +72,7 @@ type CreateInvoiceApplicationRequest struct {
 	TopUpIDs       []int  `json:"topup_ids"`
 }
 
+// InvoiceApplicationSummary exposes invoice, fee, payment-review, and document lifecycle state.
 type InvoiceApplicationSummary struct {
 	ID                  int64  `json:"id"`
 	ApplicationNo       string `json:"application_no"`
@@ -86,6 +95,7 @@ type InvoiceApplicationSummary struct {
 	CanDownload         bool   `json:"can_download"`
 }
 
+// InvoiceApplicationPage is a paginated collection of invoice application summaries.
 type InvoiceApplicationPage struct {
 	Items    []InvoiceApplicationSummary `json:"items"`
 	Page     int                         `json:"page"`
@@ -93,6 +103,7 @@ type InvoiceApplicationPage struct {
 	Total    int64                       `json:"total"`
 }
 
+// InvoiceProfileSnapshot preserves the buyer identity used when an application was submitted.
 type InvoiceProfileSnapshot struct {
 	Type      string `json:"type"`
 	Title     string `json:"title"`
@@ -100,6 +111,7 @@ type InvoiceProfileSnapshot struct {
 	Version   int64  `json:"version"`
 }
 
+// InvoicePolicySnapshot preserves the business policy applied to an invoice application.
 type InvoicePolicySnapshot struct {
 	ApplicationWindowDays int   `json:"application_window_days"`
 	MinimumAmountMinor    int64 `json:"minimum_amount_minor"`
@@ -107,6 +119,7 @@ type InvoicePolicySnapshot struct {
 	PDFRetentionDays      int   `json:"pdf_retention_days"`
 }
 
+// InvoiceApplicationItem preserves immutable paid-order evidence attached to an application.
 type InvoiceApplicationItem struct {
 	TopUpID            int    `json:"topup_id"`
 	OrderNo            string `json:"order_no"`
@@ -116,6 +129,7 @@ type InvoiceApplicationItem struct {
 	PaidAt             int64  `json:"paid_at"`
 }
 
+// InvoiceIssuanceMetadata exposes immutable tax-document issuance facts.
 type InvoiceIssuanceMetadata struct {
 	ID              int64  `json:"id"`
 	InvoiceNumber   string `json:"invoice_number"`
@@ -125,6 +139,7 @@ type InvoiceIssuanceMetadata struct {
 	Currency        string `json:"currency"`
 }
 
+// InvoiceDocumentMetadata exposes the active PDF lifecycle without private object coordinates.
 type InvoiceDocumentMetadata struct {
 	ID        int64  `json:"id"`
 	Status    string `json:"status"`
@@ -132,6 +147,7 @@ type InvoiceDocumentMetadata struct {
 	DeletedAt *int64 `json:"deleted_at"`
 }
 
+// InvoiceApplicationDetail combines an application summary with its immutable snapshots and artifacts.
 type InvoiceApplicationDetail struct {
 	InvoiceApplicationSummary
 	ProfileSnapshot InvoiceProfileSnapshot   `json:"profile_snapshot"`
@@ -141,16 +157,19 @@ type InvoiceApplicationDetail struct {
 	Document        *InvoiceDocumentMetadata `json:"document"`
 }
 
+// ReviewInvoiceApplicationRequest requests an optimistic review-state transition.
 type ReviewInvoiceApplicationRequest struct {
 	Action         string `json:"action"`
 	ExpectedStatus string `json:"expected_status"`
 }
 
+// RejectInvoiceApplicationRequest carries the expected state and required rejection reason.
 type RejectInvoiceApplicationRequest struct {
 	ExpectedStatus string `json:"expected_status"`
 	Reason         string `json:"reason"`
 }
 
+// InvoiceDocumentUploadRequest carries administrator-attested issuance facts for a PDF upload.
 type InvoiceDocumentUploadRequest struct {
 	ExpectedStatus   string `json:"expected_status"`
 	InvoiceNumber    string `json:"invoice_number"`

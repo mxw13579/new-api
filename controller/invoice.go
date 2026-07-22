@@ -84,10 +84,12 @@ func invoicePage(c *gin.Context) (int, int, error) {
 	return page, pageSize, nil
 }
 
+// GetInvoiceConfig returns the current user-visible invoice policy and currency.
 func GetInvoiceConfig(c *gin.Context) {
 	writeInvoiceSuccess(c, http.StatusOK, service.GetInvoiceConfig())
 }
 
+// ListInvoiceProfiles returns invoice identities owned by the authenticated user.
 func ListInvoiceProfiles(c *gin.Context) {
 	profiles, err := service.ListInvoiceProfiles(c.GetInt("id"))
 	if err != nil {
@@ -97,6 +99,7 @@ func ListInvoiceProfiles(c *gin.Context) {
 	writeInvoiceSuccess(c, http.StatusOK, profiles)
 }
 
+// CreateInvoiceProfile creates a personal or company invoice identity for the authenticated user.
 func CreateInvoiceProfile(c *gin.Context) {
 	var request dto.CreateInvoiceProfileRequest
 	if err := common.DecodeStrictJSONObject(c.Request.Body, &request, false); err != nil {
@@ -111,6 +114,7 @@ func CreateInvoiceProfile(c *gin.Context) {
 	writeInvoiceSuccess(c, http.StatusCreated, profile)
 }
 
+// UpdateInvoiceProfile conditionally updates an owned invoice identity at its expected version.
 func UpdateInvoiceProfile(c *gin.Context) {
 	var request dto.UpdateInvoiceProfileRequest
 	if err := common.DecodeStrictJSONObject(c.Request.Body, &request, false); err != nil {
@@ -125,6 +129,7 @@ func UpdateInvoiceProfile(c *gin.Context) {
 	writeInvoiceSuccess(c, http.StatusOK, profile)
 }
 
+// DeleteInvoiceProfile conditionally removes an owned invoice identity at its expected version.
 func DeleteInvoiceProfile(c *gin.Context) {
 	var request dto.DeleteInvoiceProfileRequest
 	if err := common.DecodeStrictJSONObject(c.Request.Body, &request, false); err != nil {
@@ -138,6 +143,7 @@ func DeleteInvoiceProfile(c *gin.Context) {
 	writeInvoiceSuccess(c, http.StatusOK, nil)
 }
 
+// ListEligibleInvoiceOrders returns the authenticated user's paid orders that remain invoiceable.
 func ListEligibleInvoiceOrders(c *gin.Context) {
 	page, pageSize, err := invoicePage(c)
 	if err != nil {
@@ -152,6 +158,7 @@ func ListEligibleInvoiceOrders(c *gin.Context) {
 	writeInvoiceSuccess(c, http.StatusOK, result)
 }
 
+// CreateInvoiceApplication submits an idempotent invoice request for owned eligible orders.
 func CreateInvoiceApplication(c *gin.Context) {
 	var request dto.CreateInvoiceApplicationRequest
 	if err := common.DecodeStrictJSONObject(c.Request.Body, &request, false); err != nil {
@@ -166,6 +173,7 @@ func CreateInvoiceApplication(c *gin.Context) {
 	writeInvoiceSuccess(c, http.StatusCreated, detail)
 }
 
+// ListInvoiceApplications returns paginated invoice applications owned by the authenticated user.
 func ListInvoiceApplications(c *gin.Context) {
 	page, pageSize, err := invoicePage(c)
 	if err != nil {
@@ -181,6 +189,7 @@ func ListInvoiceApplications(c *gin.Context) {
 	writeInvoiceSuccess(c, http.StatusOK, result)
 }
 
+// GetInvoiceApplication returns an owned invoice application with immutable item and lifecycle details.
 func GetInvoiceApplication(c *gin.Context) {
 	id, err := invoiceApplicationID(c)
 	if err != nil {
@@ -196,6 +205,7 @@ func GetInvoiceApplication(c *gin.Context) {
 	writeInvoiceSuccess(c, http.StatusOK, detail)
 }
 
+// DownloadInvoiceDocument redirects an eligible owner to a short-lived private invoice document URL.
 func DownloadInvoiceDocument(c *gin.Context) {
 	id, err := invoiceApplicationID(c)
 	if err != nil {
@@ -210,6 +220,7 @@ func DownloadInvoiceDocument(c *gin.Context) {
 	c.Redirect(http.StatusFound, url)
 }
 
+// CancelInvoiceApplication cancels an owned submitted invoice application and returns its updated detail.
 func CancelInvoiceApplication(c *gin.Context) {
 	id, err := invoiceApplicationID(c)
 	if err != nil {
@@ -224,6 +235,7 @@ func CancelInvoiceApplication(c *gin.Context) {
 	writeInvoiceSuccess(c, http.StatusOK, detail)
 }
 
+// AdminListInvoiceApplications returns invoice applications across users for authorized review.
 func AdminListInvoiceApplications(c *gin.Context) {
 	page, pageSize, err := invoicePage(c)
 	if err != nil {
@@ -238,6 +250,7 @@ func AdminListInvoiceApplications(c *gin.Context) {
 	writeInvoiceSuccess(c, http.StatusOK, result)
 }
 
+// AdminGetInvoiceApplication returns an invoice application with tax data gated by sensitive-read permission.
 func AdminGetInvoiceApplication(c *gin.Context) {
 	id, err := invoiceApplicationID(c)
 	if err != nil {
@@ -253,6 +266,7 @@ func AdminGetInvoiceApplication(c *gin.Context) {
 	writeInvoiceSuccess(c, http.StatusOK, detail)
 }
 
+// AdminReviewInvoiceApplication advances an invoice through the authorized review state transition.
 func AdminReviewInvoiceApplication(c *gin.Context) {
 	id, err := invoiceApplicationID(c)
 	if err != nil {
@@ -278,6 +292,7 @@ func AdminReviewInvoiceApplication(c *gin.Context) {
 	writeInvoiceSuccess(c, http.StatusOK, detail)
 }
 
+// AdminRejectInvoiceApplication rejects an invoice at its expected state with an operator reason.
 func AdminRejectInvoiceApplication(c *gin.Context) {
 	id, err := invoiceApplicationID(c)
 	if err != nil {
@@ -303,6 +318,7 @@ func AdminRejectInvoiceApplication(c *gin.Context) {
 	writeInvoiceSuccess(c, http.StatusOK, detail)
 }
 
+// AdminUploadInvoiceDocument validates and attaches an attested PDF to an approved or issued invoice.
 func AdminUploadInvoiceDocument(c *gin.Context) {
 	id, err := invoiceApplicationID(c)
 	if err != nil {
