@@ -19,7 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import { InvoiceIcon } from '@hugeicons/core-free-icons'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -108,6 +108,7 @@ export function ApplicationPanel(props: ApplicationPanelProps) {
   const [selectedProfileId, setSelectedProfileId] = useState<number>(0)
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [liveMessageKey, setLiveMessageKey] = useState('')
+  const reviewButtonRef = useRef<HTMLButtonElement>(null)
   const orders = props.orders || []
   const profiles = props.profiles || []
   const selectedProfile = profiles.find(
@@ -353,6 +354,7 @@ export function ApplicationPanel(props: ApplicationPanelProps) {
             </p>
           </div>
           <Button
+            ref={reviewButtonRef}
             onClick={() => setConfirmOpen(true)}
             disabled={
               !selectedProfile ||
@@ -372,7 +374,15 @@ export function ApplicationPanel(props: ApplicationPanelProps) {
       </Card>
 
       {isMobile ? (
-        <Drawer open={confirmOpen} onOpenChange={setConfirmOpen}>
+        <Drawer
+          open={confirmOpen}
+          onOpenChange={(open) => {
+            setConfirmOpen(open)
+            if (!open) {
+              requestAnimationFrame(() => reviewButtonRef.current?.focus())
+            }
+          }}
+        >
           <DrawerContent>
             <DrawerHeader>
               <DrawerTitle>{t('Confirm invoice application')}</DrawerTitle>
@@ -385,6 +395,7 @@ export function ApplicationPanel(props: ApplicationPanelProps) {
             {confirmation}
             <DrawerFooter>
               <Button
+                autoFocus
                 onClick={() => createMutation.mutate()}
                 disabled={createMutation.isPending}
               >
