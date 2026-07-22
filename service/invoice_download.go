@@ -56,5 +56,8 @@ func GetInvoiceDocumentDownload(ctx context.Context, userID int, applicationID i
 	if err != nil {
 		return "", err
 	}
+	if !invoiceObjectStoreMatchesBucket(store, document.R2Bucket) {
+		return "", ErrInvoiceObjectTerminal
+	}
 	return store.PresignGet(ctx, *document.ObjectKey, ttl)
 }

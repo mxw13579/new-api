@@ -15,10 +15,14 @@ import (
 )
 
 type invoiceDownloadStoreStub struct {
-	url string
-	ttl time.Duration
-	err error
+	url          string
+	ttl          time.Duration
+	err          error
+	bucket       string
+	presignCalls int
 }
+
+func (s *invoiceDownloadStoreStub) Bucket() string { return s.bucket }
 
 func (s *invoiceDownloadStoreStub) Put(context.Context, string, io.Reader, int64, string) error {
 	return nil
@@ -29,6 +33,7 @@ func (s *invoiceDownloadStoreStub) Head(context.Context, string) (InvoiceObjectH
 }
 func (s *invoiceDownloadStoreStub) Delete(context.Context, string) error { return nil }
 func (s *invoiceDownloadStoreStub) PresignGet(_ context.Context, _ string, ttl time.Duration) (string, error) {
+	s.presignCalls++
 	s.ttl = ttl
 	return s.url, s.err
 }
@@ -51,7 +56,7 @@ func setupInvoiceDownloadTest(t *testing.T, application *model.InvoiceApplicatio
 	previousNow := invoiceDownloadNow
 	previousFactory := newInvoiceDownloadStore
 	model.DB = db
-	store := &invoiceDownloadStoreStub{url: "https://signed.example.test/private-token"}
+	store := &invoiceDownloadStoreStub{url: "https://signed.example.test/private-token", bucket: "private"}
 	invoiceDownloadNow = func() time.Time { return time.Unix(1_000, 0) }
 	newInvoiceDownloadStore = func() (InvoiceObjectStore, error) { return store, nil }
 	t.Cleanup(func() {
@@ -73,9 +78,20 @@ func downloadableInvoiceFixture() (model.InvoiceApplication, *model.InvoiceDocum
 	}
 	document := &model.InvoiceDocument{
 		ContentType: model.InvoicePDFContentType, Status: model.InvoiceDocumentStatusAvailable,
-		ObjectKey: &objectKey, ExpiresAt: &expiresAt, OperationToken: "token", UploadedBy: 1,
+		R2Bucket: "private", ObjectKey: &objectKey, ExpiresAt: &expiresAt, OperationToken: "token", UploadedBy: 1,
 	}
 	return application, document
+}
+
+func TestGetInvoiceDocumentDownloadRejectsConfiguredBucketMismatch(t *testing.T) {
+	application, document := downloadableInvoiceFixture()
+	store := setupInvoiceDownloadTest(t, &application, document)
+	store.bucket = "wrong-private-bucket"
+
+	_, err := GetInvoiceDocumentDownload(context.Background(), 11, application.ID)
+
+	require.ErrorIs(t, err, ErrInvoiceObjectTerminal)
+	assert.Zero(t, store.presignCalls)
 }
 
 func TestGetInvoiceDocumentDownloadEnforcesOwnerAndLifecycle(t *testing.T) {

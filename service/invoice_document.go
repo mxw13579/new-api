@@ -75,19 +75,29 @@ func NewInvoiceDocumentLifecycle(db *gorm.DB, store InvoiceObjectStore, applicat
 	return lifecycle
 }
 
-func runInvoiceDocumentTransaction(db *gorm.DB, operation func(*gorm.DB) error, commit func(*gorm.DB) error) error {
+func runInvoiceDocumentTransaction(db *gorm.DB, operation func(*gorm.DB) error, commit func(*gorm.DB) error) (err error) {
 	tx := db.Begin()
 	if tx.Error != nil {
 		return tx.Error
 	}
-	if err := operation(tx); err != nil {
-		_ = tx.Rollback().Error
+	completed := false
+	defer func() {
+		if !completed {
+			_ = tx.Rollback().Error
+		}
+		if recovered := recover(); recovered != nil {
+			panic(recovered)
+		}
+	}()
+	if err = operation(tx); err != nil {
 		return err
 	}
 	if commit == nil {
 		commit = func(tx *gorm.DB) error { return tx.Commit().Error }
 	}
-	if err := commit(tx); err != nil {
+	err = commit(tx)
+	completed = true
+	if err != nil {
 		return fmt.Errorf("%w: %v", ErrInvoiceCommitAmbiguous, err)
 	}
 	return nil

@@ -72,6 +72,22 @@ func TestCleanupInvoiceDocumentsCancellationStopsBeforeClaim(t *testing.T) {
 	assert.Empty(t, store.deletedKeys)
 }
 
+func TestCleanupInvoiceDocumentsRejectsPersistedBucketMismatch(t *testing.T) {
+	db := openInvoiceDocumentServiceTestDB(t)
+	store := newInvoiceObjectStoreStub()
+	document := seedCleanupDocument(t, db, model.InvoiceDocumentStatusSuperseded, "old", nil, 1)
+	require.NoError(t, db.Model(&model.InvoiceDocument{}).Where("id = ?", document.ID).Update("r2_bucket", "other-private").Error)
+	store.objects["old"] = []byte("pdf")
+
+	_, err := CleanupInvoiceDocuments(context.Background(), db, store, 100, 50, 10)
+
+	require.ErrorIs(t, err, ErrInvoiceObjectTerminal)
+	assert.Empty(t, store.deletedKeys)
+	var current model.InvoiceDocument
+	require.NoError(t, db.First(&current, document.ID).Error)
+	assert.Equal(t, model.InvoiceDocumentStatusSuperseded, current.Status)
+}
+
 type invoiceCleanupLeaseLossStore struct {
 	*invoiceObjectStoreStub
 	db         *gorm.DB
@@ -135,6 +151,48 @@ func TestInvoiceCleanupHandlerTerminalizesSystemTask(t *testing.T) {
 	handler := invoiceDocumentCleanupHandler{db: db, store: store, now: common.GetTimestamp}
 	handler.Run(context.Background(), claimed, "runner")
 
+	finished, err := model.GetSystemTaskByTaskID(task.TaskID)
+	require.NoError(t, err)
+	assert.Equal(t, model.SystemTaskStatusSucceeded, finished.Status)
+}
+
+func TestInvoiceCleanupHandlerReconcilesStaleUploadOperationsWithinBudget(t *testing.T) {
+	db := openInvoiceDocumentServiceTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.SystemTask{}, &model.SystemTaskLock{}))
+	previousDB := model.DB
+	model.DB = db
+	t.Cleanup(func() { model.DB = previousDB })
+	store := newInvoiceObjectStoreStub()
+	seedInvoiceDocumentApplication(t, db, 1, "approved", nil)
+	crashAfterCopy := createPromotedInvoiceDocument(t, db, store, 100)
+	require.NoError(t, db.Model(&model.InvoiceDocument{}).Where("id = ?", crashAfterCopy.ID).Update("operation_started_at", 1).Error)
+	missingKey := "invoices/missing.pdf"
+	missing := seedCleanupDocument(t, db, model.InvoiceDocumentStatusValidating, missingKey, nil, 1)
+	stagingKey := "tmp/invoices/missing.pdf"
+	uploading := model.InvoiceDocument{
+		ApplicationID: 3, R2Bucket: "private", StagingObjectKey: &stagingKey, ContentType: model.InvoicePDFContentType,
+		Status: model.InvoiceDocumentStatusUploading, OperationToken: "expired-token", OperationStartedAt: 1,
+		UploadedBy: 1, UploadedAt: 1, CreatedAt: 1, UpdatedAt: 1,
+	}
+	require.NoError(t, db.Create(&uploading).Error)
+	task, err := model.CreateSystemTask(model.InvoiceDocumentCleanupTaskType, nil, nil)
+	require.NoError(t, err)
+	claimed, ok, err := model.ClaimSystemTask(task.ID, task.Type, "runner", common.GetTimestamp()+60)
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	handler := invoiceDocumentCleanupHandler{db: db, store: store, now: common.GetTimestamp}
+	handler.Run(context.Background(), claimed, "runner")
+
+	for id, expected := range map[int64]string{
+		crashAfterCopy.ID: model.InvoiceDocumentStatusUploadFailed,
+		missing.ID:        model.InvoiceDocumentStatusMissing,
+		uploading.ID:      model.InvoiceDocumentStatusMissing,
+	} {
+		var current model.InvoiceDocument
+		require.NoError(t, db.First(&current, id).Error)
+		assert.Equal(t, expected, current.Status)
+	}
 	finished, err := model.GetSystemTaskByTaskID(task.TaskID)
 	require.NoError(t, err)
 	assert.Equal(t, model.SystemTaskStatusSucceeded, finished.Status)

@@ -22,11 +22,14 @@ type invoiceObjectStoreStub struct {
 	objects      map[string][]byte
 	deleteErrors map[string]error
 	deletedKeys  []string
+	bucket       string
 }
 
 func newInvoiceObjectStoreStub() *invoiceObjectStoreStub {
-	return &invoiceObjectStoreStub{objects: map[string][]byte{}, deleteErrors: map[string]error{}}
+	return &invoiceObjectStoreStub{objects: map[string][]byte{}, deleteErrors: map[string]error{}, bucket: "private"}
 }
+
+func (s *invoiceObjectStoreStub) Bucket() string { return s.bucket }
 
 func (s *invoiceObjectStoreStub) Put(_ context.Context, key string, body io.Reader, _ int64, _ string) error {
 	data, err := io.ReadAll(body)
@@ -380,4 +383,26 @@ func TestInvoiceTransactionRunnerClassifiesCommitErrorAsAmbiguous(t *testing.T) 
 	assert.True(t, bodyCalled)
 	var committed model.InvoiceIssuance
 	require.NoError(t, db.Where("application_id = ?", 999).First(&committed).Error)
+}
+
+func TestInvoiceTransactionRunnerRollsBackPanicAndRepanics(t *testing.T) {
+	db := openInvoiceDocumentServiceTestDB(t)
+	panicValue := "invoice transaction panic"
+	func() {
+		defer func() { assert.Equal(t, panicValue, recover()) }()
+		_ = runInvoiceDocumentTransaction(db, func(tx *gorm.DB) error {
+			require.NoError(t, tx.Create(&model.InvoiceIssuance{
+				ApplicationID: 777, InvoiceNumber: "PANIC-ROLLBACK", InvoiceDate: 1, FaceAmountMinor: 1,
+				Currency: "CNY", CreatedBy: 1, CreatedAt: 1, UpdatedAt: 1,
+			}).Error)
+			panic(panicValue)
+		}, nil)
+	}()
+	var count int64
+	require.NoError(t, db.Model(&model.InvoiceIssuance{}).Where("application_id = ?", 777).Count(&count).Error)
+	assert.Zero(t, count)
+	require.NoError(t, db.Create(&model.InvoiceIssuance{
+		ApplicationID: 778, InvoiceNumber: "AFTER-PANIC", InvoiceDate: 1, FaceAmountMinor: 1,
+		Currency: "CNY", CreatedBy: 1, CreatedAt: 1, UpdatedAt: 1,
+	}).Error)
 }

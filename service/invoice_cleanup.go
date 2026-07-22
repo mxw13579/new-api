@@ -15,9 +15,10 @@ const (
 )
 
 type InvoiceDocumentCleanupResult struct {
-	Processed int `json:"processed"`
-	Deleted   int `json:"deleted"`
-	Failed    int `json:"failed"`
+	Reconciled int `json:"reconciled"`
+	Processed  int `json:"processed"`
+	Deleted    int `json:"deleted"`
+	Failed     int `json:"failed"`
 }
 
 type invoiceDocumentCleanupHandler struct {
@@ -48,7 +49,16 @@ func (handler *invoiceDocumentCleanupHandler) Run(ctx context.Context, task *mod
 		store = configured
 	}
 	now := handler.now()
-	result, err := CleanupInvoiceDocuments(ctx, handler.db, store, now, now-int64(invoiceCleanupLeaseAge.Seconds()), invoiceCleanupBatchSize)
+	staleBefore := now - int64(invoiceCleanupLeaseAge.Seconds())
+	reconciled, err := ReconcileStaleInvoiceDocuments(ctx, handler.db, store, now, staleBefore, invoiceCleanupBatchSize)
+	result := InvoiceDocumentCleanupResult{Reconciled: reconciled}
+	if err == nil && reconciled < invoiceCleanupBatchSize {
+		cleanupResult, cleanupErr := CleanupInvoiceDocuments(ctx, handler.db, store, now, staleBefore, invoiceCleanupBatchSize-reconciled)
+		result.Processed = cleanupResult.Processed
+		result.Deleted = cleanupResult.Deleted
+		result.Failed = cleanupResult.Failed
+		err = cleanupErr
+	}
 	if err != nil {
 		if ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, model.ErrSystemTaskLockLost) {
 			return
@@ -57,6 +67,32 @@ func (handler *invoiceDocumentCleanupHandler) Run(ctx context.Context, task *mod
 		return
 	}
 	_ = model.FinishSystemTask(task.TaskID, runnerID, model.SystemTaskStatusSucceeded, result, "")
+}
+
+func ReconcileStaleInvoiceDocuments(ctx context.Context, db *gorm.DB, store InvoiceObjectStore, now, staleBefore int64, limit int) (int, error) {
+	if db == nil || store == nil || now <= 0 || staleBefore <= 0 || limit <= 0 {
+		return 0, model.ErrInvoiceDocumentConflict
+	}
+	var documents []model.InvoiceDocument
+	if err := db.Where("status IN ? AND operation_started_at <= ?", []string{
+		model.InvoiceDocumentStatusUploading, model.InvoiceDocumentStatusValidating,
+	}, staleBefore).Order("id asc").Limit(limit).Find(&documents).Error; err != nil {
+		return 0, err
+	}
+	processed := 0
+	for _, document := range documents {
+		if err := ctx.Err(); err != nil {
+			return processed, err
+		}
+		if !invoiceObjectStoreMatchesBucket(store, document.R2Bucket) {
+			return processed, ErrInvoiceObjectTerminal
+		}
+		if _, err := ReconcileInvoiceDocument(ctx, db, store, document.ID, now, staleBefore); err != nil {
+			return processed, err
+		}
+		processed++
+	}
+	return processed, nil
 }
 
 func CleanupInvoiceDocuments(ctx context.Context, db *gorm.DB, store InvoiceObjectStore, now, staleBefore int64, limit int) (InvoiceDocumentCleanupResult, error) {
@@ -77,6 +113,9 @@ func CleanupInvoiceDocuments(ctx context.Context, db *gorm.DB, store InvoiceObje
 	for _, document := range documents {
 		if err := ctx.Err(); err != nil {
 			return result, err
+		}
+		if !invoiceObjectStoreMatchesBucket(store, document.R2Bucket) {
+			return result, ErrInvoiceObjectTerminal
 		}
 		token, err := generateInvoiceOperationToken()
 		if err != nil {
