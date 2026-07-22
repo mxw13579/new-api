@@ -16,6 +16,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { InvoiceIcon } from '@hugeicons/core-free-icons'
+import { HugeiconsIcon } from '@hugeicons/react'
 import { useNavigate } from '@tanstack/react-router'
 import { User, Wallet, LogOut, Settings } from 'lucide-react'
 import { useMemo } from 'react'
@@ -48,6 +50,7 @@ export function ProfileDropdown() {
   const { displayName, roleLabel } = useUserDisplay(user)
   const isSuperAdmin = user?.role === ROLE.SUPER_ADMIN
   const isWalletVisible = useIsSidebarModuleVisible('/wallet')
+  const isInvoicesVisible = useIsSidebarModuleVisible('/invoices')
   const avatarName = user?.username || displayName
   const avatarFallback = getUserAvatarFallback(avatarName)
   const avatarFallbackStyle = useMemo(
@@ -111,6 +114,13 @@ export function ProfileDropdown() {
             <DropdownMenuItem onClick={() => navigate({ to: '/wallet' })}>
               <Wallet className='size-4' />
               {t('Wallet')}
+            </DropdownMenuItem>
+          )}
+
+          {isInvoicesVisible && (
+            <DropdownMenuItem onClick={() => navigate({ to: '/invoices' })}>
+              <HugeiconsIcon icon={InvoiceIcon} strokeWidth={2} />
+              {t('Invoices')}
             </DropdownMenuItem>
           )}
 
