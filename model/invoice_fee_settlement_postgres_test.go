@@ -11,6 +11,7 @@ import (
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 func TestInvoiceFeeSettlementPostgreSQLCoreRaceContract(t *testing.T) {
@@ -116,5 +117,45 @@ func TestInvoiceFeeSettlementPostgreSQLCoreRaceContract(t *testing.T) {
 		assert.Equal(t, common.MaxQuota, persisted.Quota)
 		assert.Equal(t, int64(1), personalInvoicePostgreSQLCountWhere(t, &InvoiceFeeLedgerEntry{},
 			"application_id = ? AND entry_type = ?", application.ID, InvoiceFeeEntryTypeRefund))
+	})
+
+	t.Run("ledger_write_failure_rolls_back_quota_and_financial_state", func(t *testing.T) {
+		user, profile := personalInvoicePostgreSQLUserAndProfile(t, "fee-ledger-rollback", 100)
+		personalInvoicePostgreSQLTopUp(t, 7401, user.Id, "fee-ledger-rollback", 100)
+		application, err := CreateInvoiceApplication(user.Id,
+			createInvoiceApplicationRequest("pg-fee-ledger-rollback", profile, 7401), nil)
+		require.NoError(t, err)
+		require.NoError(t, DB.Model(&User{}).Where("id = ?", user.Id).Update("quota", common.MaxQuota).Error)
+		application, err = RejectInvoiceApplication(900, application.ID,
+			constant.InvoiceApplicationStatusSubmitted, "invalid buyer facts")
+		require.NoError(t, err)
+		require.NoError(t, DB.Model(&User{}).Where("id = ?", user.Id).Update("quota", common.MaxQuota-20).Error)
+
+		var applicationBefore InvoiceApplication
+		require.NoError(t, DB.First(&applicationBefore, application.ID).Error)
+		var refundBefore InvoiceFeeLedgerEntry
+		require.NoError(t, DB.First(&refundBefore, *application.FeeRefundEntryID).Error)
+		fault := errors.New("injected PostgreSQL invoice fee ledger write failure")
+		callbackName := "test:postgres-invoice-fee-ledger-fault"
+		require.NoError(t, DB.Callback().Update().Before("gorm:update").Register(callbackName, func(tx *gorm.DB) {
+			if tx.Statement.Table == "invoice_fee_ledger_entries" {
+				tx.AddError(fault)
+			}
+		}))
+		t.Cleanup(func() { _ = DB.Callback().Update().Remove(callbackName) })
+
+		applied, err := ApplyPendingInvoiceFeeRefund(application.ID)
+
+		assert.False(t, applied)
+		assert.ErrorIs(t, err, fault)
+		var persistedUser User
+		require.NoError(t, DB.First(&persistedUser, user.Id).Error)
+		assert.Equal(t, common.MaxQuota-20, persistedUser.Quota)
+		var applicationAfter InvoiceApplication
+		require.NoError(t, DB.First(&applicationAfter, application.ID).Error)
+		assert.Equal(t, applicationBefore, applicationAfter)
+		var refundAfter InvoiceFeeLedgerEntry
+		require.NoError(t, DB.First(&refundAfter, refundBefore.ID).Error)
+		assert.Equal(t, refundBefore, refundAfter)
 	})
 }

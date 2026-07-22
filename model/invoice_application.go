@@ -32,6 +32,8 @@ const (
 	InvoiceFeeEntryStatusPending = "pending"
 )
 
+var invoiceFeeCacheInvalidator = invalidateUserCache
+
 // InvoiceApplication is the aggregate root for an invoice request, its review state, and fee settlement links.
 type InvoiceApplication struct {
 	ID                  int64  `json:"id"`
@@ -323,7 +325,7 @@ func CreateInvoiceApplication(userID int, request dto.CreateInvoiceApplicationRe
 		return nil, err
 	}
 	if feeQuota > 0 {
-		if cacheErr := invalidateUserCache(userID); cacheErr != nil {
+		if cacheErr := invoiceFeeCacheInvalidator(userID); cacheErr != nil {
 			common.SysError("failed to invalidate invoice fee quota cache: " + cacheErr.Error())
 		}
 	}
@@ -386,6 +388,54 @@ func loadInvoiceFeeEntryByID(tx *gorm.DB, entryID int64) (*InvoiceFeeLedgerEntry
 		return nil, err
 	}
 	return &entry, nil
+}
+
+func validateTerminalInvoiceFeeTx(tx *gorm.DB, application *InvoiceApplication) error {
+	if application.FeeMethod != InvoiceFeeMethodWalletQuota {
+		return ErrInvoiceStateConflict
+	}
+	if application.FeeQuota == 0 {
+		if application.FeeStatus != constant.InvoiceFeeStatusNotRequired ||
+			application.FeeChargeEntryID != nil || application.FeeRefundEntryID != nil {
+			return ErrInvoiceStateConflict
+		}
+		var ledgerCount int64
+		if err := tx.Model(&InvoiceFeeLedgerEntry{}).Where("application_id = ?", application.ID).Count(&ledgerCount).Error; err != nil {
+			return err
+		}
+		if ledgerCount != 0 {
+			return ErrInvoiceStateConflict
+		}
+		return nil
+	}
+	if application.FeeQuota < 0 || application.FeeQuota > common.MaxQuota ||
+		application.FeeChargeEntryID == nil || application.FeeRefundEntryID == nil {
+		return ErrInvoiceStateConflict
+	}
+	charge, err := loadInvoiceFeeEntryByID(tx, *application.FeeChargeEntryID)
+	if err != nil {
+		return err
+	}
+	if !validAppliedInvoiceFeeEntry(charge, application, InvoiceFeeEntryTypeCharge) {
+		return ErrInvoiceStateConflict
+	}
+	refund, err := loadInvoiceFeeEntryByID(tx, *application.FeeRefundEntryID)
+	if err != nil {
+		return err
+	}
+	switch application.FeeStatus {
+	case constant.InvoiceFeeStatusRefundPending:
+		if !validPendingInvoiceFeeRefund(refund, application) {
+			return ErrInvoiceStateConflict
+		}
+	case constant.InvoiceFeeStatusRefunded:
+		if !validAppliedInvoiceFeeEntry(refund, application, InvoiceFeeEntryTypeRefund) {
+			return ErrInvoiceStateConflict
+		}
+	default:
+		return ErrInvoiceStateConflict
+	}
+	return nil
 }
 
 func refundInvoiceFeeTx(tx *gorm.DB, application *InvoiceApplication) (bool, error) {
@@ -505,7 +555,7 @@ func settleInvoiceApplication(applicationID int64, ownerID *int, actorID int, ex
 			return err
 		}
 		if settled.Status == targetStatus {
-			return nil
+			return validateTerminalInvoiceFeeTx(tx, &settled)
 		}
 		if settled.Status == constant.InvoiceApplicationStatusIssued || settled.Status != expectedStatus {
 			return ErrInvoiceStateConflict
@@ -550,7 +600,7 @@ func settleInvoiceApplication(applicationID int64, ownerID *int, actorID int, ex
 		return nil, err
 	}
 	if quotaChanged {
-		if cacheErr := invalidateUserCache(settled.UserID); cacheErr != nil {
+		if cacheErr := invoiceFeeCacheInvalidator(settled.UserID); cacheErr != nil {
 			common.SysError("failed to invalidate invoice refund quota cache: " + cacheErr.Error())
 		}
 	}
@@ -600,7 +650,7 @@ func ApplyPendingInvoiceFeeRefund(applicationID int64) (bool, error) {
 		return false, err
 	}
 	if applied {
-		if cacheErr := invalidateUserCache(userID); cacheErr != nil {
+		if cacheErr := invoiceFeeCacheInvalidator(userID); cacheErr != nil {
 			common.SysError("failed to invalidate pending invoice refund cache: " + cacheErr.Error())
 		}
 	}
