@@ -44,6 +44,7 @@ var personalInvoiceDeclaredIndexes = map[string]map[string]personalInvoiceIndexE
 		"idx_invoice_fee_ledger_entries_user_id":         {Columns: []string{"user_id"}},
 		"idx_invoice_fee_ledger_entries_idempotency_key": {Columns: []string{"idempotency_key"}, Unique: true},
 		"idx_invoice_fee_ledger_entries_status":          {Columns: []string{"status"}},
+		"idx_invoice_fee_refund_settlement":              {Columns: []string{"entry_type", "status", "last_attempt_at", "id"}},
 	},
 	"invoice_issuances": {
 		"uk_invoice_issuances_application": {Columns: []string{"application_id"}, Unique: true},

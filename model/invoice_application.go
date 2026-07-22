@@ -77,15 +77,18 @@ type InvoiceItem struct {
 
 // InvoiceFeeLedgerEntry records an idempotent invoice fee charge or refund and its balance transition.
 type InvoiceFeeLedgerEntry struct {
-	ID             int64  `json:"id"`
+	ID             int64  `json:"id" gorm:"index:idx_invoice_fee_refund_settlement,priority:4"`
 	ApplicationID  int64  `json:"application_id" gorm:"not null;uniqueIndex:uidx_invoice_fee_app_type,priority:1;index"`
 	UserID         int    `json:"user_id" gorm:"not null;index"`
-	EntryType      string `json:"entry_type" gorm:"type:varchar(16);not null;uniqueIndex:uidx_invoice_fee_app_type,priority:2"`
+	EntryType      string `json:"entry_type" gorm:"type:varchar(16);not null;uniqueIndex:uidx_invoice_fee_app_type,priority:2;index:idx_invoice_fee_refund_settlement,priority:1"`
 	Quota          int    `json:"quota" gorm:"not null"`
 	IdempotencyKey string `json:"idempotency_key" gorm:"type:varchar(128);not null;uniqueIndex"`
 	BalanceBefore  *int   `json:"balance_before"`
 	BalanceAfter   *int   `json:"balance_after"`
-	Status         string `json:"status" gorm:"type:varchar(16);not null;index"`
+	Status         string `json:"status" gorm:"type:varchar(16);not null;index;index:idx_invoice_fee_refund_settlement,priority:2"`
+	LastAttemptAt  int64  `json:"-" gorm:"not null;default:0;index:idx_invoice_fee_refund_settlement,priority:3"`
+	AttemptCount   int    `json:"-" gorm:"not null;default:0"`
+	LastError      string `json:"-" gorm:"type:varchar(128);not null;default:''"`
 	CreatedAt      int64  `json:"created_at" gorm:"autoCreateTime"`
 	AppliedAt      *int64 `json:"applied_at"`
 }

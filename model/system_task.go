@@ -21,6 +21,9 @@ const (
 	SystemTaskTypeModelUpdate    = "model_update"
 	SystemTaskTypeMidjourneyPoll = "midjourney_poll"
 	SystemTaskTypeAsyncTaskPoll  = "async_task_poll"
+
+	// InvoiceFeeRefundSettlementTaskType identifies scheduled pending invoice fee reconciliation.
+	InvoiceFeeRefundSettlementTaskType = "invoice_fee_refund_settlement"
 )
 
 var ErrSystemTaskLockLost = errors.New("system task lock lost")
