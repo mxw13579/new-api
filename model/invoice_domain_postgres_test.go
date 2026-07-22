@@ -241,7 +241,12 @@ func runPersonalInvoicePostgreSQLDomainContract(t *testing.T) {
 
 func personalInvoicePostgreSQLUser(t *testing.T, suffix string, quota int) *User {
 	t.Helper()
-	user := &User{Username: "invoice-pg-" + suffix, Password: "password", Quota: quota}
+	user := &User{
+		Username: "invoice-pg-" + suffix,
+		Password: "password",
+		Quota:    quota,
+		AffCode:  "invoice-pg-" + suffix,
+	}
 	require.NoError(t, DB.Create(user).Error)
 	return user
 }
