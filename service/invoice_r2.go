@@ -20,12 +20,16 @@ import (
 	"github.com/aws/smithy-go"
 )
 
+// InvoicePDFContentType is the fixed media type used for all persisted and downloaded invoice PDFs.
 const InvoicePDFContentType = model.InvoicePDFContentType
 
 var (
-	ErrInvoiceObjectNotFound  = errors.New("invoice object not found")
+	// ErrInvoiceObjectNotFound classifies a trusted object-store response that proves the requested key is absent.
+	ErrInvoiceObjectNotFound = errors.New("invoice object not found")
+	// ErrInvoiceObjectRetryable classifies transient object-store or transport failures.
 	ErrInvoiceObjectRetryable = errors.New("invoice object operation retryable")
-	ErrInvoiceObjectTerminal  = errors.New("invoice object operation terminal")
+	// ErrInvoiceObjectTerminal classifies invalid configuration, unsafe inputs, or non-retryable provider failures.
+	ErrInvoiceObjectTerminal = errors.New("invoice object operation terminal")
 )
 
 type invoiceR2Client interface {
@@ -39,17 +43,20 @@ type invoiceR2Presigner interface {
 	PresignGetObject(context.Context, *s3.GetObjectInput, ...func(*s3.PresignOptions)) (*v4.PresignedHTTPRequest, error)
 }
 
+// InvoiceObjectHead contains the durable size and checksum facts used to verify a promoted PDF object.
 type InvoiceObjectHead struct {
 	SizeBytes      int64
 	ChecksumSHA256 string
 }
 
+// InvoiceR2Store implements the private invoice object contract for one trusted R2 bucket.
 type InvoiceR2Store struct {
 	client    invoiceR2Client
 	presigner invoiceR2Presigner
 	bucket    string
 }
 
+// NewInvoiceR2Store validates dependencies and creates a store restricted to the supplied private bucket.
 func NewInvoiceR2Store(client invoiceR2Client, presigner invoiceR2Presigner, bucket string) (*InvoiceR2Store, error) {
 	if client == nil || presigner == nil || strings.TrimSpace(bucket) == "" {
 		return nil, ErrInvoiceObjectTerminal
@@ -57,6 +64,7 @@ func NewInvoiceR2Store(client invoiceR2Client, presigner invoiceR2Presigner, buc
 	return &InvoiceR2Store{client: client, presigner: presigner, bucket: bucket}, nil
 }
 
+// NewInvoiceR2StoreFromEnvironment creates the trusted invoice store from validated HTTPS R2 configuration.
 func NewInvoiceR2StoreFromEnvironment() (*InvoiceR2Store, error) {
 	endpoint := strings.TrimSpace(os.Getenv("INVOICE_R2_ENDPOINT"))
 	bucket := strings.TrimSpace(os.Getenv("INVOICE_R2_BUCKET"))
@@ -76,6 +84,7 @@ func NewInvoiceR2StoreFromEnvironment() (*InvoiceR2Store, error) {
 	return NewInvoiceR2Store(client, s3.NewPresignClient(client), bucket)
 }
 
+// Bucket returns the trusted R2 bucket bound to this store instance.
 func (s *InvoiceR2Store) Bucket() string {
 	if s == nil {
 		return ""
@@ -88,6 +97,7 @@ func invoiceObjectStoreMatchesBucket(store InvoiceObjectStore, persistedBucket s
 	return ok && strings.TrimSpace(persistedBucket) != "" && bucketStore.Bucket() == persistedBucket
 }
 
+// Put streams a bounded PDF staging object with its expected SHA-256 checksum.
 func (s *InvoiceR2Store) Put(ctx context.Context, key string, body io.Reader, size int64, checksumSHA256 string) error {
 	if err := validateInvoiceObjectKey(key); err != nil || body == nil || size <= 0 || size > InvoicePDFMaxBytes {
 		return ErrInvoiceObjectTerminal
@@ -100,6 +110,7 @@ func (s *InvoiceR2Store) Put(ctx context.Context, key string, body io.Reader, si
 	return classifyInvoiceObjectError(err)
 }
 
+// Copy promotes a persisted staging key to a persisted final key within the trusted bucket.
 func (s *InvoiceR2Store) Copy(ctx context.Context, sourceKey, destinationKey string) error {
 	if validateInvoiceObjectKey(sourceKey) != nil || validateInvoiceObjectKey(destinationKey) != nil {
 		return ErrInvoiceObjectTerminal
@@ -113,6 +124,7 @@ func (s *InvoiceR2Store) Copy(ctx context.Context, sourceKey, destinationKey str
 	return classifyInvoiceObjectError(err)
 }
 
+// Head returns the stored size and checksum used to prove final-object integrity.
 func (s *InvoiceR2Store) Head(ctx context.Context, key string) (InvoiceObjectHead, error) {
 	if validateInvoiceObjectKey(key) != nil {
 		return InvoiceObjectHead{}, ErrInvoiceObjectTerminal
@@ -126,6 +138,7 @@ func (s *InvoiceR2Store) Head(ctx context.Context, key string) (InvoiceObjectHea
 	return InvoiceObjectHead{SizeBytes: aws.ToInt64(output.ContentLength), ChecksumSHA256: aws.ToString(output.ChecksumSHA256)}, nil
 }
 
+// Delete removes a validated persisted key from the trusted private bucket.
 func (s *InvoiceR2Store) Delete(ctx context.Context, key string) error {
 	if validateInvoiceObjectKey(key) != nil {
 		return ErrInvoiceObjectTerminal
@@ -134,6 +147,7 @@ func (s *InvoiceR2Store) Delete(ctx context.Context, key string) error {
 	return classifyInvoiceObjectError(err)
 }
 
+// PresignGet creates a bounded attachment URL for a validated final invoice key.
 func (s *InvoiceR2Store) PresignGet(ctx context.Context, key string, ttl time.Duration) (string, error) {
 	if validateInvoiceObjectKey(key) != nil || ttl <= 0 || ttl > 5*time.Minute {
 		return "", ErrInvoiceObjectTerminal

@@ -13,6 +13,7 @@ import (
 	"gorm.io/gorm"
 )
 
+// UploadInvoiceDocument validates and promotes an administrator-attested PDF for initial issuance or replacement.
 func UploadInvoiceDocument(ctx context.Context, actorID int, applicationID int64, request dto.InvoiceDocumentUploadRequest, reader io.Reader) error {
 	if actorID <= 0 || applicationID <= 0 || reader == nil || !validInvoiceDocumentUploadRequest(request) {
 		return model.ErrInvoiceDocumentConflict

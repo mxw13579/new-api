@@ -15,6 +15,7 @@ const (
 )
 
 var (
+	// ErrInvoiceDocumentUnavailable indicates that lifecycle or retention state currently forbids a download URL.
 	ErrInvoiceDocumentUnavailable = errors.New("invoice document unavailable")
 	invoiceDownloadNow            = time.Now
 	newInvoiceDownloadStore       = func() (InvoiceObjectStore, error) { return NewInvoiceR2StoreFromEnvironment() }
@@ -39,6 +40,7 @@ func invoiceDocumentDownloadTTL(application *model.InvoiceApplication, document 
 	return remaining, nil
 }
 
+// GetInvoiceDocumentDownload returns a short-lived signed URL only for the owner's active downloadable document.
 func GetInvoiceDocumentDownload(ctx context.Context, userID int, applicationID int64) (string, error) {
 	application, err := model.GetInvoiceApplication(applicationID, &userID)
 	if err != nil {

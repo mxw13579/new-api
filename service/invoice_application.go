@@ -7,6 +7,7 @@ import (
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 )
 
+// GetInvoiceConfig returns the effective personal-invoice policy exposed to authenticated users.
 func GetInvoiceConfig() dto.InvoiceConfig {
 	setting := operation_setting.GetInvoiceSetting()
 	return dto.InvoiceConfig{
@@ -26,6 +27,7 @@ func invoiceProfileDTO(profile *model.InvoiceProfile) *dto.InvoiceProfile {
 	}
 }
 
+// CreateInvoiceProfile creates an owner-scoped invoice identity profile and returns its API representation.
 func CreateInvoiceProfile(userID int, request dto.CreateInvoiceProfileRequest) (*dto.InvoiceProfile, error) {
 	profile, err := model.CreateInvoiceProfile(userID, request)
 	if err != nil {
@@ -34,6 +36,7 @@ func CreateInvoiceProfile(userID int, request dto.CreateInvoiceProfileRequest) (
 	return invoiceProfileDTO(profile), nil
 }
 
+// UpdateInvoiceProfile applies an optimistic-versioned change to an owner-scoped invoice profile.
 func UpdateInvoiceProfile(userID int, request dto.UpdateInvoiceProfileRequest) (*dto.InvoiceProfile, error) {
 	profile, err := model.UpdateInvoiceProfile(userID, request)
 	if err != nil {
@@ -42,10 +45,12 @@ func UpdateInvoiceProfile(userID int, request dto.UpdateInvoiceProfileRequest) (
 	return invoiceProfileDTO(profile), nil
 }
 
+// DeleteInvoiceProfile removes an owner-scoped invoice profile at the caller's expected version.
 func DeleteInvoiceProfile(userID int, request dto.DeleteInvoiceProfileRequest) error {
 	return model.DeleteInvoiceProfile(userID, request)
 }
 
+// ListInvoiceProfiles returns all invoice profiles owned by the authenticated user.
 func ListInvoiceProfiles(userID int) ([]dto.InvoiceProfile, error) {
 	profiles, err := model.ListInvoiceProfiles(userID)
 	if err != nil {
@@ -58,14 +63,17 @@ func ListInvoiceProfiles(userID int) ([]dto.InvoiceProfile, error) {
 	return result, nil
 }
 
+// CreateInvoiceApplication creates an idempotent invoice application using the production payment-evidence source.
 func CreateInvoiceApplication(userID int, request dto.CreateInvoiceApplicationRequest) (*model.InvoiceApplication, error) {
 	return model.CreateInvoiceApplication(userID, request, model.NewTopUpInvoicePaymentSource())
 }
 
+// CancelInvoiceApplication cancels an owner-scoped application when its lifecycle permits cancellation.
 func CancelInvoiceApplication(userID int, applicationID int64) (*model.InvoiceApplication, error) {
 	return model.CancelInvoiceApplication(userID, applicationID)
 }
 
+// ReviewInvoiceApplication advances an application through the authorized administrative review states.
 func ReviewInvoiceApplication(actorID int, applicationID int64, request dto.ReviewInvoiceApplicationRequest) (*model.InvoiceApplication, error) {
 	targetStatus := constant.InvoiceApplicationStatusReviewing
 	if request.Action == "approve" {
@@ -76,6 +84,7 @@ func ReviewInvoiceApplication(actorID int, applicationID int64, request dto.Revi
 	return model.TransitionInvoiceApplicationReview(actorID, applicationID, request.ExpectedStatus, targetStatus)
 }
 
+// RejectInvoiceApplication records an authorized administrative rejection and its required reason.
 func RejectInvoiceApplication(actorID int, applicationID int64, request dto.RejectInvoiceApplicationRequest) (*model.InvoiceApplication, error) {
 	return model.RejectInvoiceApplication(actorID, applicationID, request.ExpectedStatus, request.Reason)
 }

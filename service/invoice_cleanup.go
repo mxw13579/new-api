@@ -14,6 +14,7 @@ const (
 	invoiceCleanupLeaseAge  = 15 * time.Minute
 )
 
+// InvoiceDocumentCleanupResult summarizes bounded reconciliation and object-deletion work for one scheduled run.
 type InvoiceDocumentCleanupResult struct {
 	Reconciled int `json:"reconciled"`
 	Processed  int `json:"processed"`
@@ -29,15 +30,24 @@ type invoiceDocumentCleanupHandler struct {
 
 var _ ScheduledSystemTaskHandler = (*invoiceDocumentCleanupHandler)(nil)
 
+// NewInvoiceDocumentCleanupHandler creates the hourly handler that reconciles stale uploads and expires stored PDFs.
 func NewInvoiceDocumentCleanupHandler() SystemTaskHandler {
 	return &invoiceDocumentCleanupHandler{db: model.DB, now: func() int64 { return time.Now().Unix() }}
 }
 
-func (*invoiceDocumentCleanupHandler) Type() string            { return model.InvoiceDocumentCleanupTaskType }
-func (*invoiceDocumentCleanupHandler) Enabled() bool           { return true }
-func (*invoiceDocumentCleanupHandler) Interval() time.Duration { return time.Hour }
-func (*invoiceDocumentCleanupHandler) NewPayload() any         { return nil }
+// Type identifies invoice document cleanup tasks in the shared system-task registry.
+func (*invoiceDocumentCleanupHandler) Type() string { return model.InvoiceDocumentCleanupTaskType }
 
+// Enabled keeps invoice retention enforcement active on the system-task scheduler.
+func (*invoiceDocumentCleanupHandler) Enabled() bool { return true }
+
+// Interval returns the hourly cadence required by the invoice retention contract.
+func (*invoiceDocumentCleanupHandler) Interval() time.Duration { return time.Hour }
+
+// NewPayload returns the empty payload used by periodic invoice cleanup runs.
+func (*invoiceDocumentCleanupHandler) NewPayload() any { return nil }
+
+// Run reconciles and cleans a bounded invoice-document batch, then terminalizes the owning system task.
 func (handler *invoiceDocumentCleanupHandler) Run(ctx context.Context, task *model.SystemTask, runnerID string) {
 	store := handler.store
 	if store == nil {
@@ -69,6 +79,7 @@ func (handler *invoiceDocumentCleanupHandler) Run(ctx context.Context, task *mod
 	_ = model.FinishSystemTask(task.TaskID, runnerID, model.SystemTaskStatusSucceeded, result, "")
 }
 
+// ReconcileStaleInvoiceDocuments converges a bounded batch of expired upload leases without guessing object keys.
 func ReconcileStaleInvoiceDocuments(ctx context.Context, db *gorm.DB, store InvoiceObjectStore, now, staleBefore int64, limit int) (int, error) {
 	if db == nil || store == nil || now <= 0 || staleBefore <= 0 || limit <= 0 {
 		return 0, model.ErrInvoiceDocumentConflict
@@ -95,6 +106,7 @@ func ReconcileStaleInvoiceDocuments(ctx context.Context, db *gorm.DB, store Invo
 	return processed, nil
 }
 
+// CleanupInvoiceDocuments claims and deletes a bounded batch of expired or superseded objects while retaining database records.
 func CleanupInvoiceDocuments(ctx context.Context, db *gorm.DB, store InvoiceObjectStore, now, staleBefore int64, limit int) (InvoiceDocumentCleanupResult, error) {
 	result := InvoiceDocumentCleanupResult{}
 	if db == nil || store == nil || now <= 0 || staleBefore <= 0 || limit <= 0 {

@@ -19,10 +19,13 @@ import (
 )
 
 var (
-	ErrInvoiceCommitAmbiguous   = errors.New("invoice document commit outcome is ambiguous")
+	// ErrInvoiceCommitAmbiguous indicates that document activation may have committed despite a lost commit response.
+	ErrInvoiceCommitAmbiguous = errors.New("invoice document commit outcome is ambiguous")
+	// ErrInvoiceDocumentRetryable indicates that durable state must be reread or reconciled before retrying the operation.
 	ErrInvoiceDocumentRetryable = errors.New("invoice document operation is retryable")
 )
 
+// InvoiceObjectStore defines the private object operations required by invoice document lifecycle services.
 type InvoiceObjectStore interface {
 	Put(context.Context, string, io.Reader, int64, string) error
 	Copy(context.Context, string, string) error
@@ -31,6 +34,7 @@ type InvoiceObjectStore interface {
 	PresignGet(context.Context, string, time.Duration) (string, error)
 }
 
+// FinalizeInvoiceDocumentOperation carries the exact CAS, issuance, and attestation facts for initial activation.
 type FinalizeInvoiceDocumentOperation struct {
 	ApplicationID               int64
 	DocumentID                  int64
@@ -44,6 +48,7 @@ type FinalizeInvoiceDocumentOperation struct {
 	Now                         int64
 }
 
+// ReplaceInvoiceDocumentOperation carries the exact active-document CAS and fresh attestation for replacement.
 type ReplaceInvoiceDocumentOperation struct {
 	ApplicationID               int64
 	NewDocumentID               int64
@@ -57,6 +62,7 @@ type ReplaceInvoiceDocumentOperation struct {
 	Now                         int64
 }
 
+// InvoiceDocumentLifecycle coordinates durable document state with private object-store side effects.
 type InvoiceDocumentLifecycle struct {
 	db             *gorm.DB
 	store          InvoiceObjectStore
@@ -65,6 +71,7 @@ type InvoiceDocumentLifecycle struct {
 	runTransaction func(*gorm.DB, func(*gorm.DB) error) error
 }
 
+// NewInvoiceDocumentLifecycle creates a document lifecycle bound to its database, object store, and retention policy.
 func NewInvoiceDocumentLifecycle(db *gorm.DB, store InvoiceObjectStore, application model.InvoiceDocumentApplicationContract, retentionDays int) *InvoiceDocumentLifecycle {
 	lifecycle := &InvoiceDocumentLifecycle{
 		db: db, store: store, application: application, retentionDays: retentionDays,
@@ -103,6 +110,7 @@ func runInvoiceDocumentTransaction(db *gorm.DB, operation func(*gorm.DB) error, 
 	return nil
 }
 
+// CreateInvoiceDocumentUpload persists a new uploading lease with random non-PII staging and operation identifiers.
 func CreateInvoiceDocumentUpload(db *gorm.DB, bucket string, applicationID int64, uploadedBy int, now int64) (*model.InvoiceDocument, error) {
 	if db == nil || bucket == "" || applicationID <= 0 || uploadedBy <= 0 || now <= 0 {
 		return nil, model.ErrInvoiceDocumentConflict
@@ -127,6 +135,7 @@ func CreateInvoiceDocumentUpload(db *gorm.DB, bucket string, applicationID int64
 	return document, nil
 }
 
+// PromoteInvoiceDocument validates and hashes PDF bytes before copying them from staging to a persisted final key.
 func PromoteInvoiceDocument(ctx context.Context, db *gorm.DB, store InvoiceObjectStore, documentID int64, operationToken string, reader io.Reader, now int64) (*model.InvoiceDocument, error) {
 	if db == nil || store == nil || documentID <= 0 || operationToken == "" || reader == nil || now <= 0 {
 		return nil, model.ErrInvoiceDocumentConflict
@@ -195,6 +204,7 @@ func PromoteInvoiceDocument(ctx context.Context, db *gorm.DB, store InvoiceObjec
 	return &document, nil
 }
 
+// Finalize atomically creates immutable issuance facts and activates the first attested document version.
 func (lifecycle *InvoiceDocumentLifecycle) Finalize(ctx context.Context, operation FinalizeInvoiceDocumentOperation) (*model.InvoiceDocument, error) {
 	if !validInvoiceAttestation(operation.PDFFactsAttested, operation.AttestedBy, operation.Now) || !validInvoiceIssuanceFacts(operation.Issuance) {
 		return nil, model.ErrInvoiceDocumentConflict
@@ -241,6 +251,7 @@ func (lifecycle *InvoiceDocumentLifecycle) Finalize(ctx context.Context, operati
 	return lifecycle.resolveFinalizeFailure(ctx, document, operation.OperationToken, err)
 }
 
+// Replace atomically supersedes the active document and activates a newly attested version against exact CAS facts.
 func (lifecycle *InvoiceDocumentLifecycle) Replace(ctx context.Context, operation ReplaceInvoiceDocumentOperation) (*model.InvoiceDocument, error) {
 	if !validInvoiceAttestation(operation.PDFFactsAttested, operation.AttestedBy, operation.Now) || operation.ExpectedActiveDocumentID <= 0 || operation.ExpectedIssuanceID <= 0 {
 		return nil, model.ErrInvoiceDocumentConflict
@@ -301,6 +312,7 @@ func (lifecycle *InvoiceDocumentLifecycle) Replace(ctx context.Context, operatio
 	return lifecycle.resolveFinalizeFailure(ctx, document, operation.OperationToken, err)
 }
 
+// ReconcileInvoiceDocument claims an expired upload lease and deterministically converges its persisted object state.
 func ReconcileInvoiceDocument(ctx context.Context, db *gorm.DB, store InvoiceObjectStore, documentID int64, now, staleBefore int64) (*model.InvoiceDocument, error) {
 	if db == nil || store == nil || documentID <= 0 || now <= 0 || staleBefore <= 0 {
 		return nil, model.ErrInvoiceDocumentConflict

@@ -10,6 +10,7 @@ import (
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 )
 
+// ListEligibleInvoiceOrders returns a bounded page of the user's paid orders that remain eligible for invoicing.
 func ListEligibleInvoiceOrders(userID, page, pageSize int) (dto.EligibleInvoiceOrderPage, error) {
 	setting := operation_setting.GetInvoiceSetting()
 	cutoff := time.Now().Unix() - int64(setting.ApplicationWindowDays)*86400
@@ -61,6 +62,7 @@ func invoiceApplicationSummaryAt(application *model.InvoiceApplication, document
 	}
 }
 
+// ListInvoiceApplicationPage returns a bounded owner-scoped or administrative page of invoice summaries.
 func ListInvoiceApplicationPage(ownerID *int, page, pageSize int) (dto.InvoiceApplicationPage, error) {
 	applications, total, err := model.ListInvoiceApplications(ownerID, (page-1)*pageSize, pageSize)
 	if err != nil {
@@ -77,6 +79,7 @@ func ListInvoiceApplicationPage(ownerID *int, page, pageSize int) (dto.InvoiceAp
 	return dto.InvoiceApplicationPage{Items: items, Page: page, PageSize: pageSize, Total: total}, nil
 }
 
+// GetInvoiceApplicationDetail returns immutable invoice facts while masking sensitive profile data unless authorized.
 func GetInvoiceApplicationDetail(applicationID int64, ownerID *int, includeSensitive bool) (*dto.InvoiceApplicationDetail, error) {
 	application, err := model.GetInvoiceApplication(applicationID, ownerID)
 	if err != nil {
@@ -129,6 +132,7 @@ func GetInvoiceApplicationDetail(applicationID int64, ownerID *int, includeSensi
 	return detail, nil
 }
 
+// CreateInvoiceApplicationDetail creates an application and returns its owner-visible detail projection.
 func CreateInvoiceApplicationDetail(userID int, request dto.CreateInvoiceApplicationRequest) (*dto.InvoiceApplicationDetail, error) {
 	application, err := CreateInvoiceApplication(userID, request)
 	if err != nil {
@@ -137,6 +141,7 @@ func CreateInvoiceApplicationDetail(userID int, request dto.CreateInvoiceApplica
 	return GetInvoiceApplicationDetail(application.ID, &userID, true)
 }
 
+// CancelInvoiceApplicationDetail cancels an application and returns its resulting owner-visible detail projection.
 func CancelInvoiceApplicationDetail(userID int, applicationID int64) (*dto.InvoiceApplicationDetail, error) {
 	application, err := CancelInvoiceApplication(userID, applicationID)
 	if err != nil {

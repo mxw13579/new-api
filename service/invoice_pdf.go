@@ -14,20 +14,27 @@ import (
 	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/types"
 )
 
+// InvoicePDFMaxBytes is the maximum PDF upload size accepted by the invoice document pipeline.
 const InvoicePDFMaxBytes int64 = 10 << 20
 
 var (
-	ErrInvoicePDFTooLarge      = errors.New("invoice pdf exceeds size limit")
-	ErrInvoicePDFInvalid       = errors.New("invoice pdf is invalid")
-	ErrInvoicePDFEncrypted     = errors.New("encrypted invoice pdf is not allowed")
+	// ErrInvoicePDFTooLarge indicates that an uploaded PDF exceeds InvoicePDFMaxBytes.
+	ErrInvoicePDFTooLarge = errors.New("invoice pdf exceeds size limit")
+	// ErrInvoicePDFInvalid indicates that uploaded bytes are not a structurally valid PDF.
+	ErrInvoicePDFInvalid = errors.New("invoice pdf is invalid")
+	// ErrInvoicePDFEncrypted indicates that encrypted PDFs are rejected because their content cannot be safely inspected.
+	ErrInvoicePDFEncrypted = errors.New("encrypted invoice pdf is not allowed")
+	// ErrInvoicePDFActiveContent indicates that a PDF contains executable or embedded active content.
 	ErrInvoicePDFActiveContent = errors.New("active invoice pdf content is not allowed")
 )
 
+// InvoicePDFValidation contains the bounded size and SHA-256 identity of a structurally safe PDF.
 type InvoicePDFValidation struct {
 	SizeBytes int64
 	SHA256    string
 }
 
+// ValidateInvoicePDF parses bounded PDF bytes and rejects encryption, active actions, and embedded content.
 func ValidateInvoicePDF(reader io.Reader) (InvoicePDFValidation, error) {
 	if reader == nil {
 		return InvoicePDFValidation{}, ErrInvoicePDFInvalid
