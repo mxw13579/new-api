@@ -4,8 +4,13 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/setting/config"
 	"github.com/stretchr/testify/assert"
 )
+
+func TestInvoiceSettingIsRegistered(t *testing.T) {
+	assert.Same(t, GetInvoiceSetting(), config.GlobalConfig.Get("invoice_setting"))
+}
 
 func TestInvoiceSettingDefaultsAndValidation(t *testing.T) {
 	setting := DefaultInvoiceSetting()

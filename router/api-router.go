@@ -115,6 +115,7 @@ func SetApiRouter(router *gin.Engine) {
 			selfRoute := userRoute.Group("/")
 			selfRoute.Use(middleware.UserAuth())
 			{
+				registerInvoiceRoutes(selfRoute, invoiceUserRoutes)
 				selfRoute.GET("/sessions", middleware.DisableCache(), controller.GetLoginSessions)
 				selfRoute.DELETE("/sessions/:sid", middleware.DisableCache(), controller.DeleteLoginSession)
 				selfRoute.POST("/sessions/revoke-others", middleware.DisableCache(), controller.RevokeOtherLoginSessions)
@@ -185,6 +186,11 @@ func SetApiRouter(router *gin.Engine) {
 				adminRoute.GET("/2fa/stats", controller.Admin2FAStats)
 				adminRoute.DELETE("/:id/2fa", controller.AdminDisable2FA)
 			}
+		}
+		invoiceAdminRoute := apiRouter.Group("/admin")
+		invoiceAdminRoute.Use(middleware.AdminAuth())
+		{
+			registerInvoiceRoutes(invoiceAdminRoute, invoiceAdminRoutes)
 		}
 
 		// Subscription billing (plans, purchase, admin management)

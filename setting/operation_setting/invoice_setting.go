@@ -4,6 +4,7 @@ import (
 	"errors"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/setting/config"
 )
 
 // InvoiceSetting contains only the business policy snapshotted by the invoice
@@ -29,6 +30,10 @@ func DefaultInvoiceSetting() InvoiceSetting {
 }
 
 var invoiceSetting = DefaultInvoiceSetting()
+
+func init() {
+	config.GlobalConfig.Register("invoice_setting", &invoiceSetting)
+}
 
 func GetInvoiceSetting() *InvoiceSetting {
 	return &invoiceSetting

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/aws/signer/v4"
+	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
@@ -53,6 +55,32 @@ func NewInvoiceR2Store(client invoiceR2Client, presigner invoiceR2Presigner, buc
 		return nil, ErrInvoiceObjectTerminal
 	}
 	return &InvoiceR2Store{client: client, presigner: presigner, bucket: bucket}, nil
+}
+
+func NewInvoiceR2StoreFromEnvironment() (*InvoiceR2Store, error) {
+	endpoint := strings.TrimSpace(os.Getenv("INVOICE_R2_ENDPOINT"))
+	bucket := strings.TrimSpace(os.Getenv("INVOICE_R2_BUCKET"))
+	accessKeyID := strings.TrimSpace(os.Getenv("INVOICE_R2_ACCESS_KEY_ID"))
+	secretAccessKey := strings.TrimSpace(os.Getenv("INVOICE_R2_SECRET_ACCESS_KEY"))
+	if endpoint == "" || bucket == "" || accessKeyID == "" || secretAccessKey == "" {
+		return nil, ErrInvoiceObjectTerminal
+	}
+	if parsed, err := url.Parse(endpoint); err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil {
+		return nil, ErrInvoiceObjectTerminal
+	}
+	config := aws.Config{
+		Region: "auto", BaseEndpoint: aws.String(strings.TrimRight(endpoint, "/")),
+		Credentials: aws.NewCredentialsCache(credentials.NewStaticCredentialsProvider(accessKeyID, secretAccessKey, "")),
+	}
+	client := s3.NewFromConfig(config)
+	return NewInvoiceR2Store(client, s3.NewPresignClient(client), bucket)
+}
+
+func (s *InvoiceR2Store) Bucket() string {
+	if s == nil {
+		return ""
+	}
+	return s.bucket
 }
 
 func (s *InvoiceR2Store) Put(ctx context.Context, key string, body io.Reader, size int64, checksumSHA256 string) error {

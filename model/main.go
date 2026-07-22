@@ -310,6 +310,9 @@ func migrateDB() error {
 	if err := migrateInvoicePaymentEvidenceStructures(DB); err != nil {
 		return err
 	}
+	if err := migratePersonalInvoiceStructures(DB); err != nil {
+		return err
+	}
 	if err := InitializeUserAuthVersions(); err != nil {
 		return err
 	}
@@ -395,6 +398,9 @@ func migrateDBFast() error {
 	if err := migrateInvoicePaymentEvidenceStructures(DB); err != nil {
 		return err
 	}
+	if err := migratePersonalInvoiceStructures(DB); err != nil {
+		return err
+	}
 	if err := InitializeUserAuthVersions(); err != nil {
 		return err
 	}
@@ -448,6 +454,20 @@ func migrateInvoicePaymentEvidenceStructures(db *gorm.DB) error {
 		}
 	}
 	return nil
+}
+
+func migratePersonalInvoiceStructures(db *gorm.DB) error {
+	if db == nil {
+		return fmt.Errorf("personal invoice migration requires database")
+	}
+	return db.AutoMigrate(
+		&InvoiceProfile{},
+		&InvoiceApplication{},
+		&InvoiceItem{},
+		&InvoiceFeeLedgerEntry{},
+		&InvoiceIssuance{},
+		&InvoiceDocument{},
+	)
 }
 
 func migrateLOGDB() error {
