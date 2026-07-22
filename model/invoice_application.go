@@ -352,6 +352,42 @@ func invoiceReleaseExpectations(tx *gorm.DB, application *InvoiceApplication) ([
 	return expectations, nil
 }
 
+func validAppliedInvoiceFeeEntry(entry *InvoiceFeeLedgerEntry, application *InvoiceApplication, entryType string) bool {
+	if entry.ApplicationID != application.ID || entry.UserID != application.UserID || entry.EntryType != entryType ||
+		entry.Quota != application.FeeQuota || entry.Status != InvoiceFeeEntryStatusApplied ||
+		entry.IdempotencyKey != "invoice_fee:"+entryType+":"+application.ApplicationNo ||
+		entry.BalanceBefore == nil || entry.BalanceAfter == nil || entry.AppliedAt == nil || *entry.AppliedAt <= 0 {
+		return false
+	}
+	before, after := *entry.BalanceBefore, *entry.BalanceAfter
+	if before < 0 || before > common.MaxQuota || after < 0 || after > common.MaxQuota {
+		return false
+	}
+	if entryType == InvoiceFeeEntryTypeCharge {
+		return before >= after && before-after == entry.Quota
+	}
+	return after >= before && after-before == entry.Quota
+}
+
+func validPendingInvoiceFeeRefund(entry *InvoiceFeeLedgerEntry, application *InvoiceApplication) bool {
+	return entry.ApplicationID == application.ID && entry.UserID == application.UserID &&
+		entry.EntryType == InvoiceFeeEntryTypeRefund && entry.Quota == application.FeeQuota &&
+		entry.IdempotencyKey == "invoice_fee:refund:"+application.ApplicationNo &&
+		entry.Status == InvoiceFeeEntryStatusPending && entry.BalanceBefore == nil &&
+		entry.BalanceAfter == nil && entry.AppliedAt == nil
+}
+
+func loadInvoiceFeeEntryByID(tx *gorm.DB, entryID int64) (*InvoiceFeeLedgerEntry, error) {
+	var entry InvoiceFeeLedgerEntry
+	if err := lockForUpdate(tx).First(&entry, entryID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrInvoiceStateConflict
+		}
+		return nil, err
+	}
+	return &entry, nil
+}
+
 func refundInvoiceFeeTx(tx *gorm.DB, application *InvoiceApplication) (bool, error) {
 	if application.FeeQuota == 0 {
 		if application.FeeChargeEntryID != nil || application.FeeRefundEntryID != nil ||
@@ -369,29 +405,53 @@ func refundInvoiceFeeTx(tx *gorm.DB, application *InvoiceApplication) (bool, err
 		application.FeeStatus != constant.InvoiceFeeStatusRefunded {
 		return false, ErrInvoiceStateConflict
 	}
-	var refund InvoiceFeeLedgerEntry
-	err := lockForUpdate(tx).Where("application_id = ? AND entry_type = ?", application.ID, InvoiceFeeEntryTypeRefund).First(&refund).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		refund = InvoiceFeeLedgerEntry{
+	charge, err := loadInvoiceFeeEntryByID(tx, *application.FeeChargeEntryID)
+	if err != nil {
+		return false, err
+	}
+	if !validAppliedInvoiceFeeEntry(charge, application, InvoiceFeeEntryTypeCharge) {
+		return false, ErrInvoiceStateConflict
+	}
+
+	var refund *InvoiceFeeLedgerEntry
+	if application.FeeStatus == constant.InvoiceFeeStatusPaid {
+		if application.FeeRefundEntryID != nil {
+			return false, ErrInvoiceStateConflict
+		}
+		var existing InvoiceFeeLedgerEntry
+		err := lockForUpdate(tx).Where("application_id = ? AND entry_type = ?", application.ID, InvoiceFeeEntryTypeRefund).First(&existing).Error
+		if err == nil {
+			return false, ErrInvoiceStateConflict
+		}
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return false, err
+		}
+		created := InvoiceFeeLedgerEntry{
 			ApplicationID: application.ID, UserID: application.UserID, EntryType: InvoiceFeeEntryTypeRefund,
 			Quota: application.FeeQuota, IdempotencyKey: "invoice_fee:refund:" + application.ApplicationNo,
 			Status: InvoiceFeeEntryStatusPending,
 		}
-		if err := tx.Create(&refund).Error; err != nil {
+		if err := tx.Create(&created).Error; err != nil {
 			return false, err
 		}
-	} else if err != nil {
-		return false, err
+		application.FeeRefundEntryID = &created.ID
+		refund = &created
+	} else {
+		if application.FeeRefundEntryID == nil {
+			return false, ErrInvoiceStateConflict
+		}
+		refund, err = loadInvoiceFeeEntryByID(tx, *application.FeeRefundEntryID)
+		if err != nil {
+			return false, err
+		}
 	}
-	if refund.Quota != application.FeeQuota || refund.UserID != application.UserID {
-		return false, ErrInvoiceStateConflict
-	}
-	application.FeeRefundEntryID = &refund.ID
-	if refund.Status == InvoiceFeeEntryStatusApplied {
-		application.FeeStatus = constant.InvoiceFeeStatusRefunded
+	if application.FeeStatus == constant.InvoiceFeeStatusRefunded {
+		if !validAppliedInvoiceFeeEntry(refund, application, InvoiceFeeEntryTypeRefund) {
+			return false, ErrInvoiceStateConflict
+		}
 		return false, nil
 	}
-	if refund.Status != InvoiceFeeEntryStatusPending {
+	if !validPendingInvoiceFeeRefund(refund, application) {
 		return false, ErrInvoiceStateConflict
 	}
 	var user User
@@ -523,10 +583,10 @@ func ApplyPendingInvoiceFeeRefund(applicationID int64) (bool, error) {
 			return err
 		}
 		userID = application.UserID
-		if application.FeeStatus == constant.InvoiceFeeStatusRefunded {
-			return nil
+		if application.Status != constant.InvoiceApplicationStatusCancelled && application.Status != constant.InvoiceApplicationStatusRejected {
+			return ErrInvoiceStateConflict
 		}
-		if application.FeeStatus != constant.InvoiceFeeStatusRefundPending || application.FeeRefundEntryID == nil {
+		if application.FeeStatus != constant.InvoiceFeeStatusRefundPending && application.FeeStatus != constant.InvoiceFeeStatusRefunded {
 			return ErrInvoiceStateConflict
 		}
 		changed, err := refundInvoiceFeeTx(tx, &application)
