@@ -16,6 +16,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { InvoiceIcon } from '@hugeicons/core-free-icons'
+import { HugeiconsIcon } from '@hugeicons/react'
 import { Link } from '@tanstack/react-router'
 import { X, User, Wallet, LogOut } from 'lucide-react'
 import { AnimatePresence, motion, type Variants } from 'motion/react'
@@ -129,6 +131,19 @@ function MobileUserProfile({ user, onNavigate }: MobileUserProfileProps) {
         >
           <Wallet className='size-4' />
           {t('Wallet')}
+        </Link>
+
+        <Link
+          to='/invoices'
+          onClick={onNavigate}
+          className='text-primary/60 hover:text-primary/80 border-border flex items-center gap-2.5 border-b p-2.5 transition-colors'
+        >
+          <HugeiconsIcon
+            icon={InvoiceIcon}
+            strokeWidth={2}
+            className='size-4'
+          />
+          {t('Invoices')}
         </Link>
 
         {/* Sign out - consistent style */}
@@ -261,9 +276,9 @@ export function MobileDrawer({
                   </div>
                 ) : (
                   <AnimatePresence>
-                    {mobileLinksList.map((link, index) => (
+                    {mobileLinksList.map((link) => (
                       <motion.div
-                        key={`${link.href}-${index}`}
+                        key={`${link.href}-${link.title}`}
                         className='border-border border-b p-2.5 last:border-b-0'
                         variants={MOBILE_DRAWER_ANIMATION.menuItem as Variants}
                       >

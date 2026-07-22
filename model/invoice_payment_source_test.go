@@ -1,6 +1,7 @@
 package model
 
 import (
+	"math"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -195,7 +196,8 @@ func runTopUpInvoicePaymentSourceAcceptanceMatrix(t *testing.T) {
 			{UserID: 0, ApplicationID: 1, TopUps: []TopUpVersionExpectation{{TopUpID: 1, ExpectedPaymentVersion: 1}}},
 			{UserID: 1, ApplicationID: 0, TopUps: []TopUpVersionExpectation{{TopUpID: 1, ExpectedPaymentVersion: 1}}},
 			{UserID: 1, ApplicationID: 1, TopUps: []TopUpVersionExpectation{{TopUpID: 0, ExpectedPaymentVersion: 1}}},
-			{UserID: 1, ApplicationID: 1, TopUps: []TopUpVersionExpectation{{TopUpID: 1, ExpectedPaymentVersion: 2}}},
+			{UserID: 1, ApplicationID: 1, TopUps: []TopUpVersionExpectation{{TopUpID: 1, ExpectedPaymentVersion: 0}}},
+			{UserID: 1, ApplicationID: 1, TopUps: []TopUpVersionExpectation{{TopUpID: 1, ExpectedPaymentVersion: math.MaxInt64}}},
 			{UserID: 1, ApplicationID: 1, TopUps: []TopUpVersionExpectation{{TopUpID: 1, ExpectedPaymentVersion: 1}, {TopUpID: 1, ExpectedPaymentVersion: 1}}},
 		}
 		for _, request := range claimRequests {
@@ -205,7 +207,7 @@ func runTopUpInvoicePaymentSourceAcceptanceMatrix(t *testing.T) {
 		_, err := source.ClaimTopUpsTx(nil, ClaimInvoiceTopUpsRequest{})
 		require.ErrorIs(t, err, ErrInvoicePaymentSourceInvalidRequest)
 		_, err = source.ReleaseTopUpsTx(DB, ReleaseInvoiceTopUpsRequest{
-			UserID: 1, ApplicationID: 1, TopUps: []TopUpVersionExpectation{{TopUpID: 1, ExpectedPaymentVersion: 1}},
+			UserID: 1, ApplicationID: 1, TopUps: []TopUpVersionExpectation{{TopUpID: 1, ExpectedPaymentVersion: 0}},
 		})
 		require.ErrorIs(t, err, ErrInvoicePaymentSourceInvalidRequest)
 	})
@@ -412,9 +414,9 @@ func runTopUpInvoicePaymentSourceAcceptanceMatrix(t *testing.T) {
 		{name: "evidence_drift", requestUser: 54, requestApp: 9540, mutate: func(t *testing.T, topUp *TopUp) {
 			require.NoError(t, DB.Model(topUp).Update("product_snapshot", " ").Error)
 		}, expectedError: ErrInvoicePaymentSourceEvidenceConflict},
-		{name: "subscription_drift", requestUser: 54, requestApp: 9540, mutate: func(t *testing.T, topUp *TopUp) {
+		{name: "subscription_drift_does_not_block_release", requestUser: 54, requestApp: 9540, mutate: func(t *testing.T, topUp *TopUp) {
 			require.NoError(t, DB.Create(&SubscriptionOrder{TradeNo: topUp.TradeNo}).Error)
-		}, expectedError: ErrInvoicePaymentSourceEvidenceConflict},
+		}},
 	}
 	for _, testCase := range releaseCases {
 		t.Run("release_"+testCase.name, func(t *testing.T) {
@@ -433,7 +435,11 @@ func runTopUpInvoicePaymentSourceAcceptanceMatrix(t *testing.T) {
 				})
 				return releaseErr
 			})
-			require.ErrorIs(t, err, testCase.expectedError)
+			if testCase.expectedError == nil {
+				require.NoError(t, err)
+			} else {
+				require.ErrorIs(t, err, testCase.expectedError)
+			}
 		})
 	}
 }
@@ -441,4 +447,130 @@ func runTopUpInvoicePaymentSourceAcceptanceMatrix(t *testing.T) {
 func TestTopUpInvoicePaymentSourceAcceptanceMatrix(t *testing.T) {
 	setupInvoicePaymentSourceTest(t)
 	runTopUpInvoicePaymentSourceAcceptanceMatrix(t)
+}
+
+func TestTopUpInvoicePaymentSourceSupportsMixedVersions(t *testing.T) {
+	setupInvoicePaymentSourceTest(t)
+	first := trustedInvoiceTopUp(5501, 55, "mixed-first")
+	second := trustedInvoiceTopUp(5502, 55, "mixed-second")
+	first.PaymentVersion = ptr(int64(3))
+	second.PaymentVersion = ptr(int64(7))
+	require.NoError(t, DB.Create(&first).Error)
+	require.NoError(t, DB.Create(&second).Error)
+
+	var claimed []ClaimedTopUpEvidence
+	require.NoError(t, DB.Transaction(func(tx *gorm.DB) error {
+		var err error
+		claimed, err = NewTopUpInvoicePaymentSource().ClaimTopUpsTx(tx, ClaimInvoiceTopUpsRequest{
+			UserID: 55, ApplicationID: 9550,
+			TopUps: []TopUpVersionExpectation{
+				{TopUpID: second.Id, ExpectedPaymentVersion: 7},
+				{TopUpID: first.Id, ExpectedPaymentVersion: 3},
+			},
+		})
+		return err
+	}))
+	require.Len(t, claimed, 2)
+	assert.Equal(t, []ClaimedTopUpEvidence{
+		{TopUpID: first.Id, MerchantTradeNo: first.TradeNo, PaidAmountMinor: 100, Currency: "CNY", ProductSnapshot: constant.InvoicePaymentEvidenceTopUpProduct, PaidAt: 1000, EvidenceSource: constant.InvoicePaymentEvidenceSourceTrustedCallback, PaymentVersion: 4},
+		{TopUpID: second.Id, MerchantTradeNo: second.TradeNo, PaidAmountMinor: 100, Currency: "CNY", ProductSnapshot: constant.InvoicePaymentEvidenceTopUpProduct, PaidAt: 1000, EvidenceSource: constant.InvoicePaymentEvidenceSourceTrustedCallback, PaymentVersion: 8},
+	}, claimed)
+
+	var released []ReleasedTopUpVersion
+	require.NoError(t, DB.Transaction(func(tx *gorm.DB) error {
+		var err error
+		released, err = NewTopUpInvoicePaymentSource().ReleaseTopUpsTx(tx, ReleaseInvoiceTopUpsRequest{
+			UserID: 55, ApplicationID: 9550,
+			TopUps: []TopUpVersionExpectation{
+				{TopUpID: second.Id, ExpectedPaymentVersion: 8},
+				{TopUpID: first.Id, ExpectedPaymentVersion: 4},
+			},
+		})
+		return err
+	}))
+	assert.Equal(t, []ReleasedTopUpVersion{{TopUpID: first.Id, PaymentVersion: 5}, {TopUpID: second.Id, PaymentVersion: 9}}, released)
+}
+
+func TestTopUpInvoicePaymentSourceRejectsVersionOverflowWithoutMutation(t *testing.T) {
+	setupInvoicePaymentSourceTest(t)
+	topUp := trustedInvoiceTopUp(5601, 56, "overflow")
+	topUp.PaymentVersion = ptr(int64(math.MaxInt64))
+	require.NoError(t, DB.Create(&topUp).Error)
+
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		_, claimErr := NewTopUpInvoicePaymentSource().ClaimTopUpsTx(tx, ClaimInvoiceTopUpsRequest{
+			UserID: 56, ApplicationID: 9560,
+			TopUps: []TopUpVersionExpectation{{TopUpID: topUp.Id, ExpectedPaymentVersion: math.MaxInt64}},
+		})
+		return claimErr
+	})
+	require.ErrorIs(t, err, ErrInvoicePaymentSourceInvalidRequest)
+
+	var unchanged TopUp
+	require.NoError(t, DB.First(&unchanged, topUp.Id).Error)
+	assert.Nil(t, unchanged.InvoiceApplicationID)
+	require.NotNil(t, unchanged.PaymentVersion)
+	assert.Equal(t, int64(math.MaxInt64), *unchanged.PaymentVersion)
+
+	unchanged.InvoiceApplicationID = ptr(int64(9560))
+	require.NoError(t, DB.Save(&unchanged).Error)
+	err = DB.Transaction(func(tx *gorm.DB) error {
+		_, releaseErr := NewTopUpInvoicePaymentSource().ReleaseTopUpsTx(tx, ReleaseInvoiceTopUpsRequest{
+			UserID: 56, ApplicationID: 9560,
+			TopUps: []TopUpVersionExpectation{{TopUpID: topUp.Id, ExpectedPaymentVersion: math.MaxInt64}},
+		})
+		return releaseErr
+	})
+	require.ErrorIs(t, err, ErrInvoicePaymentSourceInvalidRequest)
+	require.NoError(t, DB.First(&unchanged, topUp.Id).Error)
+	require.NotNil(t, unchanged.InvoiceApplicationID)
+	assert.Equal(t, int64(9560), *unchanged.InvoiceApplicationID)
+	require.NotNil(t, unchanged.PaymentVersion)
+	assert.Equal(t, int64(math.MaxInt64), *unchanged.PaymentVersion)
+}
+
+func TestTopUpInvoicePaymentSourceReleaseAfterPaymentAnomalyAndReclaim(t *testing.T) {
+	setupInvoicePaymentSourceTest(t)
+	topUp := trustedInvoiceTopUp(5701, 57, "release-anomaly")
+	require.NoError(t, DB.Create(&topUp).Error)
+	source := NewTopUpInvoicePaymentSource()
+
+	require.NoError(t, DB.Transaction(func(tx *gorm.DB) error {
+		_, err := source.ClaimTopUpsTx(tx, ClaimInvoiceTopUpsRequest{
+			UserID: 57, ApplicationID: 9570,
+			TopUps: []TopUpVersionExpectation{{TopUpID: topUp.Id, ExpectedPaymentVersion: 1}},
+		})
+		return err
+	}))
+	require.NoError(t, DB.Model(&TopUp{}).Where("id = ?", topUp.Id).Updates(map[string]any{
+		"payment_state":         "refunded",
+		"refunded_amount_minor": int64(100),
+	}).Error)
+
+	var released []ReleasedTopUpVersion
+	require.NoError(t, DB.Transaction(func(tx *gorm.DB) error {
+		var err error
+		released, err = source.ReleaseTopUpsTx(tx, ReleaseInvoiceTopUpsRequest{
+			UserID: 57, ApplicationID: 9570,
+			TopUps: []TopUpVersionExpectation{{TopUpID: topUp.Id, ExpectedPaymentVersion: 2}},
+		})
+		return err
+	}))
+	assert.Equal(t, []ReleasedTopUpVersion{{TopUpID: topUp.Id, PaymentVersion: 3}}, released)
+
+	require.NoError(t, DB.Model(&TopUp{}).Where("id = ?", topUp.Id).Updates(map[string]any{
+		"payment_state":         constant.InvoicePaymentStateSucceeded,
+		"refunded_amount_minor": int64(0),
+	}).Error)
+	var reclaimed []ClaimedTopUpEvidence
+	require.NoError(t, DB.Transaction(func(tx *gorm.DB) error {
+		var err error
+		reclaimed, err = source.ClaimTopUpsTx(tx, ClaimInvoiceTopUpsRequest{
+			UserID: 57, ApplicationID: 9571,
+			TopUps: []TopUpVersionExpectation{{TopUpID: topUp.Id, ExpectedPaymentVersion: 3}},
+		})
+		return err
+	}))
+	require.Len(t, reclaimed, 1)
+	assert.Equal(t, int64(4), reclaimed[0].PaymentVersion)
 }

@@ -12,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	mysqlDriver "github.com/go-sql-driver/mysql"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	gormMySQL "gorm.io/driver/mysql"
@@ -81,12 +82,20 @@ func openInvoiceEvidencePostgreSQL(t *testing.T) (*invoiceEvidenceRealDatabase, 
 	config, err := pgx.ParseConfig(dsn)
 	require.NoError(t, err)
 	require.Zero(t, invoiceEvidenceDatabaseCount(t, admin, common.DatabaseTypePostgreSQL, name))
-	require.NoError(t, admin.Exec(`CREATE DATABASE "`+name+`"`).Error)
+	require.NoError(t, admin.Exec(`CREATE DATABASE "`+name+`" TEMPLATE template0`).Error)
 	config.Database = name
-	testDB, err := gorm.Open(gormPostgres.New(gormPostgres.Config{DSN: config.ConnString(), PreferSimpleProtocol: true}), &gorm.Config{})
+	testSQL := stdlib.OpenDB(*config)
+	testDB, err := gorm.Open(gormPostgres.New(gormPostgres.Config{Conn: testSQL, PreferSimpleProtocol: true}), &gorm.Config{})
 	if err != nil {
+		_ = testSQL.Close()
 		_ = admin.Exec(`DROP DATABASE "` + name + `"`).Error
 		t.Fatal("postgres isolated database connection failed")
+	}
+	var currentDatabase string
+	if err := testDB.Raw("SELECT current_database()").Scan(&currentDatabase).Error; err != nil || currentDatabase != name {
+		_ = testSQL.Close()
+		_ = admin.Exec(`DROP DATABASE "` + name + `"`).Error
+		t.Fatal("postgres isolated database binding verification failed")
 	}
 	return &invoiceEvidenceRealDatabase{admin: admin, test: testDB, name: name, dialect: common.DatabaseTypePostgreSQL}, true
 }

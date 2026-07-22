@@ -115,6 +115,7 @@ func SetApiRouter(router *gin.Engine) {
 			selfRoute := userRoute.Group("/")
 			selfRoute.Use(middleware.UserAuth())
 			{
+				registerInvoiceRoutes(selfRoute, invoiceUserRoutes)
 				selfRoute.GET("/sessions", middleware.DisableCache(), controller.GetLoginSessions)
 				selfRoute.DELETE("/sessions/:sid", middleware.DisableCache(), controller.DeleteLoginSession)
 				selfRoute.POST("/sessions/revoke-others", middleware.DisableCache(), controller.RevokeOtherLoginSessions)
@@ -186,6 +187,11 @@ func SetApiRouter(router *gin.Engine) {
 				adminRoute.DELETE("/:id/2fa", controller.AdminDisable2FA)
 			}
 		}
+		invoiceAdminRoute := apiRouter.Group("/admin")
+		invoiceAdminRoute.Use(middleware.AdminAuth())
+		{
+			registerInvoiceRoutes(invoiceAdminRoute, invoiceAdminRoutes)
+		}
 
 		// Subscription billing (plans, purchase, admin management)
 		subscriptionRoute := apiRouter.Group("/subscription")
@@ -223,6 +229,11 @@ func SetApiRouter(router *gin.Engine) {
 		apiRouter.GET("/subscription/epay/notify", controller.SubscriptionEpayNotify)
 		apiRouter.GET("/subscription/epay/return", controller.SubscriptionEpayReturn)
 		apiRouter.POST("/subscription/epay/return", anonymousRequestBodyLimit, controller.SubscriptionEpayReturn)
+		invoiceOptionRoute := apiRouter.Group("/option")
+		invoiceOptionRoute.Use(middleware.AdminAuth())
+		{
+			registerInvoiceRoutes(invoiceOptionRoute, invoiceOptionRoutes)
+		}
 		optionRoute := apiRouter.Group("/option")
 		optionRoute.Use(middleware.RootAuth())
 		{

@@ -1,11 +1,45 @@
 package model
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
+
+type invoiceDocumentContractStub struct{}
+
+func (invoiceDocumentContractStub) PrepareDocumentTx(*gorm.DB, PrepareInvoiceDocumentRequest) (PrepareInvoiceDocumentResult, error) {
+	return PrepareInvoiceDocumentResult{}, nil
+}
+func (invoiceDocumentContractStub) FinalizeDocumentTx(*gorm.DB, FinalizeInvoiceDocumentRequest) (FinalizeInvoiceDocumentResult, error) {
+	return FinalizeInvoiceDocumentResult{}, nil
+}
+func (invoiceDocumentContractStub) ReplaceDocumentTx(*gorm.DB, ReplaceInvoiceDocumentRequest) (ReplaceInvoiceDocumentResult, error) {
+	return ReplaceInvoiceDocumentResult{}, nil
+}
+func (invoiceDocumentContractStub) RevokeDocumentTx(*gorm.DB, RevokeInvoiceDocumentRequest) error {
+	return nil
+}
+
+func TestInvoiceDocumentApplicationContractIsFrozen(t *testing.T) {
+	var contract InvoiceDocumentApplicationContract = invoiceDocumentContractStub{}
+	assert.NotNil(t, contract)
+
+	request := FinalizeInvoiceDocumentRequest{
+		ApplicationID: 1, DocumentID: 2, OperationToken: "token",
+		ExpectedStatus: "approved", ExpectedPaymentReviewStatus: "none",
+		ExpectedActiveDocumentID: nil,
+		Issuance:                 InvoiceIssuanceFacts{InvoiceNumber: "N", InvoiceCode: "C", InvoiceDate: 3, FaceAmountMinor: 4, Currency: "CNY"},
+		PDFFactsAttested:         true, AttestedBy: 5,
+	}
+	assert.True(t, request.PDFFactsAttested)
+	assert.Equal(t, int64(4), request.Issuance.FaceAmountMinor)
+	assert.ErrorIs(t, ErrInvoiceNotFound, ErrInvoiceNotFound)
+	assert.False(t, errors.Is(ErrInvoiceNotFound, ErrInvoiceDocumentConflict))
+}
 
 func TestInvoicePaymentSourceContractDeclarations(t *testing.T) {
 	claim := ClaimInvoiceTopUpsRequest{

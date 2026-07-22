@@ -18,11 +18,16 @@ import (
 // instances and each run is recorded as one task row. Call this before
 // service.StartSystemTaskRunner.
 func RegisterScheduledSystemTasks() {
-	service.RegisterSystemTaskHandler(channelTestHandler{})
-	service.RegisterSystemTaskHandler(modelUpdateHandler{})
-	service.RegisterSystemTaskHandler(midjourneyPollHandler{})
-	service.RegisterSystemTaskHandler(asyncTaskPollHandler{})
-	service.RegisterSystemTaskHandler(service.NewInvoicePaymentEvidenceApplyHandler())
+	for _, handler := range scheduledSystemTaskHandlers() {
+		service.RegisterSystemTaskHandler(handler)
+	}
+}
+
+func scheduledSystemTaskHandlers() []service.SystemTaskHandler {
+	return []service.SystemTaskHandler{
+		channelTestHandler{}, modelUpdateHandler{}, midjourneyPollHandler{}, asyncTaskPollHandler{},
+		service.NewInvoicePaymentEvidenceApplyHandler(), service.NewInvoiceDocumentCleanupHandler(),
+	}
 }
 
 // channelTestHandler runs the scheduled "test all channels" job. Enablement and

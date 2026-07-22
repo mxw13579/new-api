@@ -16,6 +16,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { InvoiceIcon } from '@hugeicons/core-free-icons'
+import { HugeiconsIcon } from '@hugeicons/react'
 import {
   Activity,
   Box,
@@ -34,10 +36,19 @@ import {
   Users,
   Wallet,
 } from 'lucide-react'
+import { createElement } from 'react'
 import { useTranslation } from 'react-i18next'
 
-import { type SidebarData } from '@/components/layout/types'
+import type { SidebarData } from '@/components/layout/types'
 import { ROLE } from '@/lib/roles'
+
+function InvoiceNavIcon(props: { className?: string }) {
+  return createElement(HugeiconsIcon, {
+    icon: InvoiceIcon,
+    strokeWidth: 2,
+    className: props.className,
+  })
+}
 
 /**
  * Root navigation groups for the application sidebar.
@@ -107,6 +118,11 @@ export function useSidebarData(): SidebarData {
             title: t('Wallet'),
             url: '/wallet',
             icon: Wallet,
+          },
+          {
+            title: t('Invoices'),
+            url: '/invoices',
+            icon: InvoiceNavIcon,
           },
           {
             title: t('Profile'),

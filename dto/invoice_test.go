@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -45,6 +46,51 @@ func TestInvoicePaymentEvidenceDTOJSONContract(t *testing.T) {
 	assertJSONContract(t, BackfillStopRequest{}, `{}`)
 	lastTaskID := "task"
 	assertJSONContract(t, BackfillStopResponse{RunID: 1, Status: "failed", Attempt: 2, LastTaskID: &lastTaskID, FailedAt: 3, Reason: "operator_stopped"}, `{"run_id":1,"status":"failed","attempt":2,"last_task_id":"task","failed_at":3,"reason":"operator_stopped"}`)
+}
+
+func TestPersonalInvoiceDTOJSONContract(t *testing.T) {
+	assert.Equal(t, "company", constant.InvoiceTypeCompany)
+	assert.Equal(t, "submitted", constant.InvoiceApplicationStatusSubmitted)
+	assert.Equal(t, "resolved_voided", constant.InvoicePaymentReviewStatusResolvedVoided)
+	assert.Equal(t, "refund_pending", constant.InvoiceFeeStatusRefundPending)
+	assert.Equal(t, "available", constant.InvoiceDocumentStatusAvailable)
+	assert.Equal(t, "INVOICE_PAYMENT_EVIDENCE_CONFLICT", constant.InvoiceCodePaymentEvidenceConflict)
+
+	assertJSONContract(t, InvoiceConfig{
+		PersonalEnabled: true, CompanyEnabled: true, ApplicationWindowDays: 90,
+		MinimumAmountMinor: 100, FeeQuota: 20, PDFRetentionDays: 365, Currency: "CNY",
+	}, `{"personal_enabled":true,"company_enabled":true,"application_window_days":90,"minimum_amount_minor":100,"fee_quota":20,"pdf_retention_days":365,"currency":"CNY"}`)
+
+	assertJSONContract(t, CreateInvoiceProfileRequest{Type: "company", Title: "Example Ltd", TaxNumber: "TAX", IsDefault: true},
+		`{"type":"company","title":"Example Ltd","tax_number":"TAX","is_default":true}`)
+	assertJSONContract(t, UpdateInvoiceProfileRequest{ID: 7, ExpectedVersion: 3, Title: "Example Ltd", TaxNumber: "TAX", IsDefault: false},
+		`{"id":7,"expected_version":3,"title":"Example Ltd","tax_number":"TAX","is_default":false}`)
+	assertJSONContract(t, DeleteInvoiceProfileRequest{ID: 7, ExpectedVersion: 4}, `{"id":7,"expected_version":4}`)
+
+	assertJSONContract(t, EligibleInvoiceOrderPage{
+		Items: []EligibleInvoiceOrder{{TopUpID: 11, OrderNo: "order", PaidAmountMinor: 1200, Currency: "CNY", ProductDescription: "quota", PaidAt: 100}},
+		Page:  1, PageSize: 20, Total: 1,
+	}, `{"items":[{"topup_id":11,"order_no":"order","paid_amount_minor":1200,"currency":"CNY","product_description":"quota","paid_at":100}],"page":1,"page_size":20,"total":1}`)
+
+	assertJSONContract(t, CreateInvoiceApplicationRequest{RequestID: "req", ProfileID: 7, ProfileVersion: 4, TopUpIDs: []int{11, 12}},
+		`{"request_id":"req","profile_id":7,"profile_version":4,"topup_ids":[11,12]}`)
+
+	reviewedAt, expiresAt := int64(200), int64(300)
+	assertJSONContract(t, InvoiceApplicationSummary{
+		ID: 21, ApplicationNo: "INV-21", Type: "company", Status: "approved", PaymentReviewStatus: "none",
+		Currency: "CNY", AmountMinor: 1200, FeeQuota: 20, FeeStatus: "paid", SubmittedAt: 100,
+		ReviewedAt: &reviewedAt, DocumentStatus: "available", DocumentExpiresAt: &expiresAt,
+		CanCancel: false, CanDownload: true,
+	}, `{"id":21,"application_no":"INV-21","type":"company","status":"approved","payment_review_status":"none","currency":"CNY","amount_minor":1200,"fee_quota":20,"fee_status":"paid","submitted_at":100,"reviewed_at":200,"cancelled_at":null,"issued_at":null,"reject_reason":"","document_status":"available","document_expires_at":300,"document_deleted_at":null,"can_cancel":false,"can_download":true}`)
+
+	assertJSONContract(t, ReviewInvoiceApplicationRequest{Action: "approve", ExpectedStatus: "reviewing"},
+		`{"action":"approve","expected_status":"reviewing"}`)
+	assertJSONContract(t, RejectInvoiceApplicationRequest{ExpectedStatus: "reviewing", Reason: "invalid profile"},
+		`{"expected_status":"reviewing","reason":"invalid profile"}`)
+	assertJSONContract(t, InvoiceDocumentUploadRequest{
+		ExpectedStatus: "approved", InvoiceNumber: "N", InvoiceCode: "C", InvoiceDate: 100,
+		FaceAmountMinor: 1200, Currency: "CNY", PDFFactsAttested: true,
+	}, `{"expected_status":"approved","invoice_number":"N","invoice_code":"C","invoice_date":100,"face_amount_minor":1200,"currency":"CNY","pdf_facts_attested":true}`)
 }
 
 func assertJSONContract(t *testing.T, value any, expected string) {

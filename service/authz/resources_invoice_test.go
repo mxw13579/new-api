@@ -34,3 +34,32 @@ func TestInvoicePaymentEvidenceRootOnlyPermissions(t *testing.T) {
 	assert.True(t, rootGrants[ResourceInvoicePaymentEvidence][ActionRead])
 	assert.True(t, rootGrants[ResourceInvoicePaymentEvidence][ActionOperate])
 }
+
+func TestPersonalInvoicePermissionCatalog(t *testing.T) {
+	assert.Equal(t, "invoice", ResourceInvoice)
+	assert.Equal(t, Permission{Resource: ResourceInvoice, Action: ActionInvoiceReview}, InvoiceReview)
+	assert.Equal(t, Permission{Resource: ResourceInvoice, Action: ActionInvoiceDocumentUpload}, InvoiceDocumentUpload)
+	assert.Equal(t, Permission{Resource: ResourceInvoice, Action: ActionInvoiceSettings}, InvoiceSettings)
+	assert.Equal(t, Permission{Resource: ResourceInvoice, Action: ActionInvoiceSensitiveRead}, InvoiceSensitiveRead)
+
+	var definition *ResourceDefinition
+	for _, candidate := range Catalog() {
+		if candidate.Resource == ResourceInvoice {
+			candidate := candidate
+			definition = &candidate
+			break
+		}
+	}
+	require.NotNil(t, definition)
+	require.Len(t, definition.Actions, 4)
+	assert.Contains(t, PermissionsForRole(BuiltInRoleAdmin), InvoiceReview)
+	assert.Contains(t, PermissionsForRole(BuiltInRoleAdmin), InvoiceDocumentUpload)
+	assert.Contains(t, PermissionsForRole(BuiltInRoleAdmin), InvoiceSettings)
+	assert.NotContains(t, PermissionsForRole(BuiltInRoleAdmin), InvoiceSensitiveRead)
+
+	rootGrants := roleGrants(RoleSpec{Key: BuiltInRoleRoot, Superuser: true})
+	assert.True(t, rootGrants[ResourceInvoice][ActionInvoiceReview])
+	assert.True(t, rootGrants[ResourceInvoice][ActionInvoiceDocumentUpload])
+	assert.True(t, rootGrants[ResourceInvoice][ActionInvoiceSettings])
+	assert.True(t, rootGrants[ResourceInvoice][ActionInvoiceSensitiveRead])
+}
