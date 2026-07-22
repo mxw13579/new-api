@@ -26,7 +26,8 @@ func RegisterScheduledSystemTasks() {
 func scheduledSystemTaskHandlers() []service.SystemTaskHandler {
 	return []service.SystemTaskHandler{
 		channelTestHandler{}, modelUpdateHandler{}, midjourneyPollHandler{}, asyncTaskPollHandler{},
-		service.NewInvoicePaymentEvidenceApplyHandler(), service.NewInvoiceDocumentCleanupHandler(),
+		service.NewInvoicePaymentEvidenceApplyHandler(), service.NewInvoiceFeeRefundSettlementHandler(),
+		service.NewInvoiceDocumentCleanupHandler(),
 	}
 }
 

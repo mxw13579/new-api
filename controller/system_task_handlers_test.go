@@ -7,10 +7,11 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestScheduledSystemTaskHandlersIncludeInvoiceCleanup(t *testing.T) {
+func TestScheduledSystemTaskHandlersIncludeInvoiceFeeSettlementAndCleanup(t *testing.T) {
 	types := map[string]bool{}
 	for _, handler := range scheduledSystemTaskHandlers() {
 		types[handler.Type()] = true
 	}
+	assert.True(t, types[model.InvoiceFeeRefundSettlementTaskType])
 	assert.True(t, types[model.InvoiceDocumentCleanupTaskType])
 }
