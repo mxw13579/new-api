@@ -20,6 +20,7 @@ import { createFileRoute } from '@tanstack/react-router'
 
 import { Invoices } from '@/features/invoices'
 
+/** Authenticated route registration for the personal-invoice workspace. */
 export const Route = createFileRoute('/_authenticated/invoices/')({
   component: Invoices,
 })

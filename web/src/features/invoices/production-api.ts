@@ -20,6 +20,7 @@ import { api } from '@/lib/api'
 
 import { createHttpInvoiceApi, type InvoiceHttpTransport } from './api'
 
+/** Production invoice API backed by the authenticated application client. */
 export const invoiceApi = createHttpInvoiceApi(
   api as unknown as InvoiceHttpTransport
 )

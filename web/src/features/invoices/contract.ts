@@ -32,6 +32,7 @@ interface StatusConfig {
   variant: StatusVariant
 }
 
+/** Maps application states to localized badge presentation. */
 export const APPLICATION_STATUS_CONFIG: Record<
   InvoiceApplicationStatus,
   StatusConfig
@@ -44,6 +45,7 @@ export const APPLICATION_STATUS_CONFIG: Record<
   issued: { labelKey: 'Invoice issued', variant: 'default' },
 }
 
+/** Maps fee states to localized badge presentation. */
 export const FEE_STATUS_CONFIG: Record<InvoiceFeeStatus, StatusConfig> = {
   not_required: { labelKey: 'Invoice fee not required', variant: 'secondary' },
   paid: { labelKey: 'Invoice fee paid', variant: 'default' },
@@ -54,6 +56,7 @@ export const FEE_STATUS_CONFIG: Record<InvoiceFeeStatus, StatusConfig> = {
   refunded: { labelKey: 'Invoice fee refunded', variant: 'secondary' },
 }
 
+/** Maps payment-review states to localized badge presentation. */
 export const PAYMENT_REVIEW_STATUS_CONFIG: Record<
   InvoicePaymentReviewStatus,
   StatusConfig
@@ -77,6 +80,7 @@ export const PAYMENT_REVIEW_STATUS_CONFIG: Record<
   },
 }
 
+/** Maps document states to localized badge presentation. */
 export const DOCUMENT_STATUS_CONFIG: Record<
   InvoiceDocumentStatus,
   StatusConfig
@@ -113,10 +117,18 @@ const ERROR_MESSAGE_KEYS: Record<InvoiceErrorCode, string> = {
   INVOICE_INTERNAL_ERROR: 'Invoice error: service unavailable',
 }
 
+/** Returns the localization key for a stable invoice error code. */
 export function getInvoiceErrorMessageKey(code: InvoiceErrorCode): string {
   return ERROR_MESSAGE_KEYS[code]
 }
 
+/**
+ * Sums the full minor-unit amounts for the selected eligible orders.
+ *
+ * @param orders - Eligible orders available for selection.
+ * @param selectedTopUpIds - Identifiers of the selected complete orders.
+ * @returns The selected amount in CNY minor units.
+ */
 export function calculateSelectedAmountMinor(
   orders: Array<Pick<EligibleInvoiceOrder, 'topup_id' | 'paid_amount_minor'>>,
   selectedTopUpIds: ReadonlySet<number>
@@ -127,6 +139,13 @@ export function calculateSelectedAmountMinor(
   }, 0)
 }
 
+/**
+ * Determines whether an application currently permits document download.
+ *
+ * @param application - Application and active-document summary.
+ * @param nowSeconds - Current Unix time in seconds.
+ * @returns Whether the download action should be exposed.
+ */
 export function canDownloadInvoice(
   application: InvoiceApplicationSummary,
   nowSeconds: number

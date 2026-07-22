@@ -20,6 +20,7 @@ import { useQuery } from '@tanstack/react-query'
 
 import type { InvoiceApi } from './types'
 
+/** Provides hierarchical query keys for invoice-domain cache entries. */
 export const invoiceQueryKeys = {
   all: ['invoices'] as const,
   config: () => [...invoiceQueryKeys.all, 'config'] as const,
@@ -32,6 +33,12 @@ export const invoiceQueryKeys = {
     [...invoiceQueryKeys.all, 'application', applicationId] as const,
 }
 
+/**
+ * Loads the independent invoice landing-page resources in parallel.
+ *
+ * @param invoiceApi - Invoice data source used by each query.
+ * @returns React Query results for policy, profiles, orders, and applications.
+ */
 export function useInvoiceQueries(invoiceApi: InvoiceApi) {
   const configQuery = useQuery({
     queryKey: invoiceQueryKeys.config(),

@@ -42,6 +42,7 @@ interface InvoiceTransportResponse {
   data: InvoiceEnvelope<unknown>
 }
 
+/** Defines the minimal HTTP transport required by the invoice adapter. */
 export interface InvoiceHttpTransport {
   get(url: string): Promise<InvoiceTransportResponse>
   post(url: string, body?: unknown): Promise<InvoiceTransportResponse>
@@ -52,6 +53,7 @@ export interface InvoiceHttpTransport {
   ): Promise<InvoiceTransportResponse>
 }
 
+/** Carries a stable invoice error code across the frontend API boundary. */
 export class InvoiceApiError extends Error {
   code: InvoiceErrorCode
 
@@ -78,6 +80,12 @@ function pageUrl(path: string, request: InvoicePageRequest): string {
   return `${path}?${params.toString()}`
 }
 
+/**
+ * Creates the production invoice API adapter for the supplied transport.
+ *
+ * @param transport - HTTP client used to call authenticated invoice routes.
+ * @returns An invoice API backed exclusively by live HTTP requests.
+ */
 export function createHttpInvoiceApi(
   transport: InvoiceHttpTransport
 ): InvoiceApi {

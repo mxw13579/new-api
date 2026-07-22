@@ -61,6 +61,12 @@ function formatCny(minor: number): string {
   }).format(minor / 100)
 }
 
+/**
+ * Renders invoice application history and its available actions.
+ *
+ * @param props - Application records, loading state, and API dependency.
+ * @returns Status cards with cancellation and guarded download actions.
+ */
 export function HistoryPanel(props: HistoryPanelProps) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()

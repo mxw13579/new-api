@@ -31,6 +31,7 @@ import { ProfilesPanel } from './components/profiles-panel'
 import { invoiceApi } from './production-api'
 import { useInvoiceQueries } from './queries'
 
+/** Renders the authenticated personal-invoice workspace. */
 export function Invoices() {
   const { t } = useTranslation()
   const walletQuota = useAuthStore((state) => state.auth.user?.quota ?? 0)

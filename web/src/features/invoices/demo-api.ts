@@ -77,6 +77,11 @@ function detailFromSummary(
   }
 }
 
+/**
+ * Creates an in-memory invoice API for explicit demo and test composition.
+ *
+ * @returns A stateful invoice API populated with representative fixtures.
+ */
 export function createInvoiceDemoApi(): InvoiceApi {
   let profiles: InvoiceProfile[] = [
     {

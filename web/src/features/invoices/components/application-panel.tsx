@@ -98,6 +98,12 @@ function formatCny(minor: number): string {
   }).format(minor / 100)
 }
 
+/**
+ * Renders order selection and invoice application submission.
+ *
+ * @param props - Invoice policy, selectable records, and API dependencies.
+ * @returns The application workflow for desktop and mobile layouts.
+ */
 export function ApplicationPanel(props: ApplicationPanelProps) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()

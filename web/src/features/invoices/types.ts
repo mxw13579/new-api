@@ -16,7 +16,10 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+/** Identifies the supported invoice profile categories. */
 export type InvoiceType = 'personal' | 'company'
+
+/** Enumerates the lifecycle states of an invoice application. */
 export type InvoiceApplicationStatus =
   | 'submitted'
   | 'reviewing'
@@ -24,17 +27,20 @@ export type InvoiceApplicationStatus =
   | 'rejected'
   | 'cancelled'
   | 'issued'
+/** Describes the independent payment-evidence review state. */
 export type InvoicePaymentReviewStatus =
   | 'none'
   | 'pre_issue_hold'
   | 'post_issue_hold'
   | 'resolved_valid'
   | 'resolved_voided'
+/** Describes invoice fee collection and refund progress. */
 export type InvoiceFeeStatus =
   | 'not_required'
   | 'paid'
   | 'refund_pending'
   | 'refunded'
+/** Enumerates the persisted PDF document lifecycle states. */
 export type InvoiceDocumentStatus =
   | 'uploading'
   | 'validating'
@@ -46,6 +52,7 @@ export type InvoiceDocumentStatus =
   | 'delete_failed'
   | 'missing'
 
+/** Lists stable invoice API error codes used by UI error handling. */
 export type InvoiceErrorCode =
   | 'INVOICE_INVALID_REQUEST'
   | 'INVOICE_FORBIDDEN'
@@ -58,6 +65,7 @@ export type InvoiceErrorCode =
   | 'INVOICE_DOCUMENT_UNAVAILABLE'
   | 'INVOICE_INTERNAL_ERROR'
 
+/** Defines the invoice policy exposed to the current user. */
 export interface InvoiceConfig {
   personal_enabled: boolean
   company_enabled: boolean
@@ -68,6 +76,7 @@ export interface InvoiceConfig {
   currency: 'CNY'
 }
 
+/** Represents a versioned personal or company invoice identity. */
 export interface InvoiceProfile {
   id: number
   type: InvoiceType
@@ -79,6 +88,7 @@ export interface InvoiceProfile {
   updated_at: number
 }
 
+/** Defines the fields accepted when creating an invoice profile. */
 export interface CreateInvoiceProfileRequest {
   type: InvoiceType
   title: string
@@ -86,6 +96,7 @@ export interface CreateInvoiceProfileRequest {
   is_default: boolean
 }
 
+/** Defines an optimistic-concurrency update for an invoice profile. */
 export interface UpdateInvoiceProfileRequest {
   id: number
   expected_version: number
@@ -94,11 +105,13 @@ export interface UpdateInvoiceProfileRequest {
   is_default: boolean
 }
 
+/** Identifies the profile version to delete. */
 export interface DeleteInvoiceProfileRequest {
   id: number
   expected_version: number
 }
 
+/** Represents a complete paid order eligible for invoice selection. */
 export interface EligibleInvoiceOrder {
   topup_id: number
   order_no: string
@@ -108,6 +121,7 @@ export interface EligibleInvoiceOrder {
   paid_at: number
 }
 
+/** Wraps a page of invoice-domain records. */
 export interface InvoicePage<T> {
   items: T[]
   page: number
@@ -115,11 +129,13 @@ export interface InvoicePage<T> {
   total: number
 }
 
+/** Defines one invoice list pagination request. */
 export interface InvoicePageRequest {
   page: number
   page_size: number
 }
 
+/** Defines an idempotent invoice application submission. */
 export interface CreateInvoiceApplicationRequest {
   request_id: string
   profile_id: number
@@ -127,6 +143,7 @@ export interface CreateInvoiceApplicationRequest {
   topup_ids: number[]
 }
 
+/** Summarizes application, fee, payment-review, and document state. */
 export interface InvoiceApplicationSummary {
   id: number
   application_no: string
@@ -149,6 +166,7 @@ export interface InvoiceApplicationSummary {
   can_download: boolean
 }
 
+/** Captures the immutable profile facts used by an application. */
 export interface InvoiceProfileSnapshot {
   type: InvoiceType
   title: string
@@ -156,6 +174,7 @@ export interface InvoiceProfileSnapshot {
   version: number
 }
 
+/** Captures the invoice policy applied at submission time. */
 export interface InvoicePolicySnapshot {
   application_window_days: number
   minimum_amount_minor: number
@@ -163,8 +182,10 @@ export interface InvoicePolicySnapshot {
   pdf_retention_days: number
 }
 
+/** Represents an immutable eligible order attached to an application. */
 export interface InvoiceApplicationItem extends EligibleInvoiceOrder {}
 
+/** Describes immutable issuance metadata for an issued invoice. */
 export interface InvoiceIssuanceMetadata {
   id: number
   invoice_number: string
@@ -174,6 +195,7 @@ export interface InvoiceIssuanceMetadata {
   currency: 'CNY'
 }
 
+/** Describes the active invoice document lifecycle metadata. */
 export interface InvoiceDocumentMetadata {
   id: number
   status: InvoiceDocumentStatus
@@ -181,6 +203,7 @@ export interface InvoiceDocumentMetadata {
   deleted_at: number | null
 }
 
+/** Extends an application summary with snapshots and document details. */
 export interface InvoiceApplicationDetail extends InvoiceApplicationSummary {
   profile_snapshot: InvoiceProfileSnapshot
   policy_snapshot: InvoicePolicySnapshot
@@ -189,6 +212,7 @@ export interface InvoiceApplicationDetail extends InvoiceApplicationSummary {
   document: InvoiceDocumentMetadata | null
 }
 
+/** Defines the frontend boundary for personal invoice operations. */
 export interface InvoiceApi {
   getConfig(): Promise<InvoiceConfig>
   listProfiles(): Promise<InvoiceProfile[]>

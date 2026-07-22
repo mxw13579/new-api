@@ -95,6 +95,12 @@ const EMPTY_PROFILE_DRAFT: ProfileDraft = {
   version: 0,
 }
 
+/**
+ * Renders version-aware invoice profile management.
+ *
+ * @param props - Current profiles, loading state, and API dependency.
+ * @returns Profile cards and the create or edit dialog.
+ */
 export function ProfilesPanel(props: ProfilesPanelProps) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()

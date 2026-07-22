@@ -32,6 +32,12 @@ interface InvoiceStatusBadgesProps {
   application: InvoiceApplicationSummary
 }
 
+/**
+ * Renders the four independent status groups for an invoice application.
+ *
+ * @param props - Application whose statuses should be displayed.
+ * @returns Localized badges for application, fee, review, and document state.
+ */
 export function InvoiceStatusBadges(props: InvoiceStatusBadgesProps) {
   const { t } = useTranslation()
   const applicationStatus = APPLICATION_STATUS_CONFIG[props.application.status]
