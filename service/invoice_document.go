@@ -12,6 +12,7 @@ import (
 	"io"
 	"time"
 
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 
 	"gorm.io/gorm"
@@ -69,9 +70,27 @@ func NewInvoiceDocumentLifecycle(db *gorm.DB, store InvoiceObjectStore, applicat
 		db: db, store: store, application: application, retentionDays: retentionDays,
 	}
 	lifecycle.runTransaction = func(db *gorm.DB, operation func(*gorm.DB) error) error {
-		return db.Transaction(operation)
+		return runInvoiceDocumentTransaction(db, operation, nil)
 	}
 	return lifecycle
+}
+
+func runInvoiceDocumentTransaction(db *gorm.DB, operation func(*gorm.DB) error, commit func(*gorm.DB) error) error {
+	tx := db.Begin()
+	if tx.Error != nil {
+		return tx.Error
+	}
+	if err := operation(tx); err != nil {
+		_ = tx.Rollback().Error
+		return err
+	}
+	if commit == nil {
+		commit = func(tx *gorm.DB) error { return tx.Commit().Error }
+	}
+	if err := commit(tx); err != nil {
+		return fmt.Errorf("%w: %v", ErrInvoiceCommitAmbiguous, err)
+	}
+	return nil
 }
 
 func CreateInvoiceDocumentUpload(db *gorm.DB, bucket string, applicationID int64, uploadedBy int, now int64) (*model.InvoiceDocument, error) {
@@ -302,14 +321,14 @@ func ReconcileInvoiceDocument(ctx context.Context, db *gorm.DB, store InvoiceObj
 		key = document.ObjectKey
 	}
 	if key == nil {
-		if err := markInvoiceDocumentUploadFailed(db, document.ID, newToken, now); err != nil {
+		if err := markInvoiceDocumentTerminal(db, document.ID, newToken, model.InvoiceDocumentStatusMissing, now); err != nil {
 			return nil, err
 		}
 		return lifecycleDocumentByID(db, document.ID)
 	}
 	head, err := store.Head(ctx, *key)
 	if errors.Is(err, ErrInvoiceObjectNotFound) {
-		if err := markInvoiceDocumentUploadFailed(db, document.ID, newToken, now); err != nil {
+		if err := markInvoiceDocumentTerminal(db, document.ID, newToken, model.InvoiceDocumentStatusMissing, now); err != nil {
 			return nil, err
 		}
 		return lifecycleDocumentByID(db, document.ID)
@@ -318,16 +337,69 @@ func ReconcileInvoiceDocument(ctx context.Context, db *gorm.DB, store InvoiceObj
 		return nil, err
 	}
 	if document.Status == model.InvoiceDocumentStatusValidating {
+		var application model.InvoiceApplication
+		if err := db.Select("id", "status", "active_document_id").First(&application, document.ApplicationID).Error; err != nil {
+			return nil, err
+		}
+		notActivated := application.ActiveDocumentID == nil || *application.ActiveDocumentID != document.ID
 		expectedChecksum, checksumErr := invoiceObjectChecksum(document.SHA256)
 		if checksumErr != nil || head.SizeBytes != document.SizeBytes || head.ChecksumSHA256 != expectedChecksum {
-			_ = deleteInvoiceObject(ctx, store, *key)
+			if notActivated {
+				if err := deleteInvoiceObject(ctx, store, *key); err != nil {
+					if markErr := markInvoiceDocumentTerminal(db, document.ID, newToken, model.InvoiceDocumentStatusDeleteFailed, now); markErr != nil {
+						return nil, errors.Join(err, markErr)
+					}
+					return lifecycleDocumentByID(db, document.ID)
+				}
+			}
 			if err := markInvoiceDocumentUploadFailed(db, document.ID, newToken, now); err != nil {
 				return nil, err
 			}
 			return lifecycleDocumentByID(db, document.ID)
 		}
+		if !notActivated {
+			if hasDurableInvoiceActivationFacts(document, application.Status, now) {
+				updated := db.Model(&model.InvoiceDocument{}).
+					Where("id = ? AND status = ? AND operation_token = ?", document.ID, model.InvoiceDocumentStatusValidating, newToken).
+					Updates(map[string]any{"status": model.InvoiceDocumentStatusAvailable, "updated_at": now})
+				if updated.Error != nil {
+					return nil, updated.Error
+				}
+				if updated.RowsAffected != 1 {
+					return nil, model.ErrInvoiceDocumentConflict
+				}
+				return lifecycleDocumentByID(db, document.ID)
+			}
+			if err := markInvoiceDocumentUploadFailed(db, document.ID, newToken, now); err != nil {
+				return nil, err
+			}
+			return lifecycleDocumentByID(db, document.ID)
+		}
+		if err := deleteInvoiceObject(ctx, store, *key); err != nil {
+			if markErr := markInvoiceDocumentTerminal(db, document.ID, newToken, model.InvoiceDocumentStatusDeleteFailed, now); markErr != nil {
+				return nil, errors.Join(err, markErr)
+			}
+			return lifecycleDocumentByID(db, document.ID)
+		}
+		if err := markInvoiceDocumentUploadFailed(db, document.ID, newToken, now); err != nil {
+			return nil, err
+		}
+		return lifecycleDocumentByID(db, document.ID)
+	}
+	if err := deleteInvoiceObject(ctx, store, *key); err != nil {
+		return nil, err
+	}
+	if err := markInvoiceDocumentUploadFailed(db, document.ID, newToken, now); err != nil {
+		return nil, err
 	}
 	return lifecycleDocumentByID(db, document.ID)
+}
+
+func hasDurableInvoiceActivationFacts(document model.InvoiceDocument, applicationStatus string, now int64) bool {
+	return applicationStatus == constant.InvoiceApplicationStatusIssued && document.IssuanceID != nil && *document.IssuanceID > 0 &&
+		document.Version != nil && *document.Version > 0 && document.PDFFactsAttested && document.AttestedBy != nil && *document.AttestedBy > 0 &&
+		document.AttestedAt != nil && *document.AttestedAt > 0 && len(document.AttestedProfileSnapshotSHA256) == sha256.Size*2 &&
+		document.AvailableAt != nil && *document.AvailableAt > 0 && document.RetentionDaysSnapshot > 0 && document.ExpiresAt != nil && *document.ExpiresAt > now
 }
 
 func activateInvoiceDocumentTx(tx *gorm.DB, document *model.InvoiceDocument, issuanceID, version int64, attestedBy int, now int64, profileSnapshot string, retentionDays int) error {
@@ -373,10 +445,18 @@ func (lifecycle *InvoiceDocumentLifecycle) resolveFinalizeFailure(ctx context.Co
 		if err != nil {
 			return nil, fmt.Errorf("%w: outcome reread failed", ErrInvoiceDocumentRetryable)
 		}
-		if current.OperationToken == token && current.Status == model.InvoiceDocumentStatusAvailable {
+		var application model.InvoiceApplication
+		if err := lifecycle.db.Select("id", "status", "active_document_id").First(&application, before.ApplicationID).Error; err != nil {
+			return nil, fmt.Errorf("%w: application outcome reread failed", ErrInvoiceDocumentRetryable)
+		}
+		activated := current.OperationToken == token && current.Status == model.InvoiceDocumentStatusAvailable &&
+			application.Status == constant.InvoiceApplicationStatusIssued && application.ActiveDocumentID != nil && *application.ActiveDocumentID == current.ID
+		if activated {
 			return current, nil
 		}
-		if current.OperationToken != token || current.Status != model.InvoiceDocumentStatusValidating {
+		notActivated := current.OperationToken == token && current.Status == model.InvoiceDocumentStatusValidating &&
+			(application.ActiveDocumentID == nil || *application.ActiveDocumentID != current.ID)
+		if !notActivated {
 			return nil, fmt.Errorf("%w: outcome remains unproven", ErrInvoiceDocumentRetryable)
 		}
 	}
@@ -390,6 +470,19 @@ func (lifecycle *InvoiceDocumentLifecycle) resolveFinalizeFailure(ctx context.Co
 		return nil, errors.Join(operationErr, ErrInvoiceDocumentRetryable, markErr)
 	}
 	return nil, operationErr
+}
+
+func markInvoiceDocumentTerminal(db *gorm.DB, id int64, token, status string, now int64) error {
+	updated := db.Model(&model.InvoiceDocument{}).
+		Where("id = ? AND operation_token = ? AND status IN ?", id, token, []string{model.InvoiceDocumentStatusUploading, model.InvoiceDocumentStatusValidating}).
+		Updates(map[string]any{"status": status, "updated_at": now})
+	if updated.Error != nil {
+		return updated.Error
+	}
+	if updated.RowsAffected != 1 {
+		return model.ErrInvoiceDocumentConflict
+	}
+	return nil
 }
 
 func (lifecycle *InvoiceDocumentLifecycle) documentByID(id int64) (*model.InvoiceDocument, error) {

@@ -1,7 +1,8 @@
 package model
 
 const (
-	InvoicePDFContentType = "application/pdf"
+	InvoicePDFContentType          = "application/pdf"
+	InvoiceDocumentCleanupTaskType = "invoice_document_cleanup"
 
 	InvoiceDocumentStatusUploading    = "uploading"
 	InvoiceDocumentStatusValidating   = "validating"

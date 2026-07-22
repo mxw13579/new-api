@@ -3,7 +3,10 @@ package service
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -16,11 +19,13 @@ import (
 )
 
 type invoiceObjectStoreStub struct {
-	objects map[string][]byte
+	objects      map[string][]byte
+	deleteErrors map[string]error
+	deletedKeys  []string
 }
 
 func newInvoiceObjectStoreStub() *invoiceObjectStoreStub {
-	return &invoiceObjectStoreStub{objects: map[string][]byte{}}
+	return &invoiceObjectStoreStub{objects: map[string][]byte{}, deleteErrors: map[string]error{}}
 }
 
 func (s *invoiceObjectStoreStub) Put(_ context.Context, key string, body io.Reader, _ int64, _ string) error {
@@ -58,6 +63,10 @@ func (s *invoiceObjectStoreStub) Head(_ context.Context, key string) (InvoiceObj
 }
 
 func (s *invoiceObjectStoreStub) Delete(_ context.Context, key string) error {
+	s.deletedKeys = append(s.deletedKeys, key)
+	if err := s.deleteErrors[key]; err != nil {
+		return err
+	}
 	if _, ok := s.objects[key]; !ok {
 		return ErrInvoiceObjectNotFound
 	}
@@ -100,8 +109,19 @@ func openInvoiceDocumentServiceTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
 	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&model.InvoiceIssuance{}, &model.InvoiceDocument{}))
+	require.NoError(t, db.AutoMigrate(&model.InvoiceApplication{}, &model.InvoiceIssuance{}, &model.InvoiceDocument{}))
 	return db
+}
+
+func seedInvoiceDocumentApplication(t *testing.T, db *gorm.DB, id int64, status string, activeDocumentID *int64) {
+	t.Helper()
+	require.NoError(t, db.Create(&model.InvoiceApplication{
+		ID: id, ApplicationNo: fmt.Sprintf("APP-%d", id), UserID: int(id), RequestID: fmt.Sprintf("REQ-%d", id),
+		RequestFingerprint: strings.Repeat("a", 64), Type: "personal", Status: status,
+		PaymentReviewStatus: "none", Currency: "CNY", AmountMinor: 100, FeeMethod: "wallet_quota",
+		FeeStatus: "not_required", ProfileSnapshot: `{"title":"Buyer"}`, PolicySnapshot: `{}`,
+		ActiveDocumentID: activeDocumentID, SubmittedAt: 1,
+	}).Error)
 }
 
 func validInvoiceDocumentApplicationStub() *invoiceDocumentApplicationStub {
@@ -210,10 +230,14 @@ func TestInvoiceDocumentFinalizeDistinguishesRollbackFromAmbiguousCommit(t *test
 	t.Run("ambiguous committed outcome is reread and retained", func(t *testing.T) {
 		db := openInvoiceDocumentServiceTestDB(t)
 		store := newInvoiceObjectStoreStub()
+		seedInvoiceDocumentApplication(t, db, 1, "approved", nil)
 		document := createPromotedInvoiceDocument(t, db, store, 100)
 		lifecycle := NewInvoiceDocumentLifecycle(db, store, validInvoiceDocumentApplicationStub(), 30)
 		lifecycle.runTransaction = func(db *gorm.DB, operation func(*gorm.DB) error) error {
 			require.NoError(t, db.Transaction(operation))
+			require.NoError(t, db.Model(&model.InvoiceApplication{}).Where("id = ?", 1).Updates(map[string]any{
+				"status": "issued", "active_document_id": document.ID,
+			}).Error)
 			return ErrInvoiceCommitAmbiguous
 		}
 
@@ -230,6 +254,7 @@ func TestInvoiceDocumentFinalizeDistinguishesRollbackFromAmbiguousCommit(t *test
 	t.Run("ambiguous non-commit proven by reread deletes object", func(t *testing.T) {
 		db := openInvoiceDocumentServiceTestDB(t)
 		store := newInvoiceObjectStoreStub()
+		seedInvoiceDocumentApplication(t, db, 1, "approved", nil)
 		document := createPromotedInvoiceDocument(t, db, store, 100)
 		lifecycle := NewInvoiceDocumentLifecycle(db, store, validInvoiceDocumentApplicationStub(), 30)
 		lifecycle.runTransaction = func(*gorm.DB, func(*gorm.DB) error) error { return ErrInvoiceCommitAmbiguous }
@@ -286,29 +311,73 @@ func TestInvoiceDocumentReplacementRequiresFreshAttestation(t *testing.T) {
 	assert.Equal(t, firstAttestedAt, *unchangedFirst.AttestedAt)
 }
 
-func TestReconcileInvoiceDocumentRefreshesStaleOperationToken(t *testing.T) {
+func TestReconcileInvoiceDocumentTerminalizesCrashAfterCopyWhenActivationDidNotCommit(t *testing.T) {
 	db := openInvoiceDocumentServiceTestDB(t)
 	store := newInvoiceObjectStoreStub()
+	seedInvoiceDocumentApplication(t, db, 1, "approved", nil)
 	document := createPromotedInvoiceDocument(t, db, store, 100)
 	require.NoError(t, db.Model(&model.InvoiceDocument{}).Where("id = ?", document.ID).Update("operation_started_at", 1).Error)
 
 	reconciled, err := ReconcileInvoiceDocument(context.Background(), db, store, document.ID, 50, 60)
 	require.NoError(t, err)
-	assert.Equal(t, model.InvoiceDocumentStatusValidating, reconciled.Status)
+	assert.Equal(t, model.InvoiceDocumentStatusUploadFailed, reconciled.Status)
 	assert.NotEqual(t, document.OperationToken, reconciled.OperationToken)
+	assert.NotContains(t, store.objects, *document.ObjectKey)
+}
 
-	lifecycle := NewInvoiceDocumentLifecycle(db, store, validInvoiceDocumentApplicationStub(), 30)
-	_, err = lifecycle.Finalize(context.Background(), FinalizeInvoiceDocumentOperation{
-		ApplicationID: 1, DocumentID: document.ID, OperationToken: document.OperationToken,
-		ExpectedStatus: "approved", ExpectedPaymentReviewStatus: "none",
-		Issuance: validInvoiceFacts(), PDFFactsAttested: true, AttestedBy: 9, Now: 200,
-	})
-	assert.ErrorIs(t, err, model.ErrInvoiceDocumentConflict)
+func TestReconcileInvoiceDocumentNeverDeletesWhenApplicationPointsAtDocument(t *testing.T) {
+	db := openInvoiceDocumentServiceTestDB(t)
+	store := newInvoiceObjectStoreStub()
+	seedInvoiceDocumentApplication(t, db, 1, "issued", nil)
+	document := createPromotedInvoiceDocument(t, db, store, 100)
+	require.NoError(t, db.Model(&model.InvoiceApplication{}).Where("id = ?", 1).Update("active_document_id", document.ID).Error)
+	require.NoError(t, db.Model(&model.InvoiceDocument{}).Where("id = ?", document.ID).Update("operation_started_at", 1).Error)
 
-	_, err = lifecycle.Finalize(context.Background(), FinalizeInvoiceDocumentOperation{
-		ApplicationID: 1, DocumentID: document.ID, OperationToken: reconciled.OperationToken,
-		ExpectedStatus: "approved", ExpectedPaymentReviewStatus: "none",
-		Issuance: validInvoiceFacts(), PDFFactsAttested: true, AttestedBy: 9, Now: 200,
-	})
+	reconciled, err := ReconcileInvoiceDocument(context.Background(), db, store, document.ID, 50, 60)
 	require.NoError(t, err)
+	assert.Equal(t, model.InvoiceDocumentStatusUploadFailed, reconciled.Status)
+	assert.Contains(t, store.objects, *document.ObjectKey)
+}
+
+func TestReconcileInvoiceDocumentSafelyReplaysDurableActivationFacts(t *testing.T) {
+	db := openInvoiceDocumentServiceTestDB(t)
+	store := newInvoiceObjectStoreStub()
+	seedInvoiceDocumentApplication(t, db, 1, "issued", nil)
+	document := createPromotedInvoiceDocument(t, db, store, 100)
+	issuanceID := int64(10)
+	version := int64(1)
+	availableAt := int64(20)
+	expiresAt := int64(200)
+	attestedBy := 9
+	attestedAt := int64(20)
+	require.NoError(t, db.Model(&model.InvoiceDocument{}).Where("id = ?", document.ID).Updates(map[string]any{
+		"issuance_id": issuanceID, "version": version, "pdf_facts_attested": true, "attested_by": attestedBy,
+		"attested_at": attestedAt, "attested_profile_snapshot_sha256": strings.Repeat("a", 64),
+		"available_at": availableAt, "retention_days_snapshot": 30, "expires_at": expiresAt, "operation_started_at": 1,
+	}).Error)
+	require.NoError(t, db.Model(&model.InvoiceApplication{}).Where("id = ?", 1).Update("active_document_id", document.ID).Error)
+
+	reconciled, err := ReconcileInvoiceDocument(context.Background(), db, store, document.ID, 50, 60)
+	require.NoError(t, err)
+	assert.Equal(t, model.InvoiceDocumentStatusAvailable, reconciled.Status)
+	assert.Contains(t, store.objects, *document.ObjectKey)
+}
+
+func TestInvoiceTransactionRunnerClassifiesCommitErrorAsAmbiguous(t *testing.T) {
+	db := openInvoiceDocumentServiceTestDB(t)
+	bodyCalled := false
+	err := runInvoiceDocumentTransaction(db, func(tx *gorm.DB) error {
+		bodyCalled = true
+		return tx.Create(&model.InvoiceIssuance{
+			ApplicationID: 999, InvoiceNumber: "AMBIGUOUS-COMMIT", InvoiceDate: 1, FaceAmountMinor: 1,
+			Currency: "CNY", CreatedBy: 1, CreatedAt: 1, UpdatedAt: 1,
+		}).Error
+	}, func(tx *gorm.DB) error {
+		require.NoError(t, tx.Commit().Error)
+		return errors.New("commit response lost")
+	})
+	require.ErrorIs(t, err, ErrInvoiceCommitAmbiguous)
+	assert.True(t, bodyCalled)
+	var committed model.InvoiceIssuance
+	require.NoError(t, db.Where("application_id = ?", 999).First(&committed).Error)
 }
