@@ -64,6 +64,15 @@ func TestPersonalInvoicePostgreSQLMigrationShape(t *testing.T) {
 	if !enabled {
 		t.Skip("set TEST_POSTGRES_DSN and TEST_INVOICE_POSTGRES_DATABASE to run personal invoice PostgreSQL migration test")
 	}
+	installPersonalInvoicePostgreSQLTestDatabase(t, database)
+
+	require.NoError(t, migratePersonalInvoiceStructures(DB))
+	assertPersonalInvoicePostgreSQLSchema(t, DB)
+}
+
+func installPersonalInvoicePostgreSQLTestDatabase(t *testing.T, database *invoiceEvidenceRealDatabase) {
+	t.Helper()
+	require.NotNil(t, database)
 	previousDB, previousLogDB := DB, LOG_DB
 	previousMainType, previousLogType := common.MainDatabaseType(), common.LogDatabaseType()
 	DB, LOG_DB = database.test, database.test
@@ -84,9 +93,6 @@ func TestPersonalInvoicePostgreSQLMigrationShape(t *testing.T) {
 		common.SetDatabaseTypes(previousMainType, previousLogType)
 		initCol()
 	})
-
-	require.NoError(t, migratePersonalInvoiceStructures(DB))
-	assertPersonalInvoicePostgreSQLSchema(t, DB)
 }
 
 func assertPersonalInvoicePostgreSQLSchema(t *testing.T, db *gorm.DB) {
