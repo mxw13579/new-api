@@ -32,11 +32,10 @@ func invoiceErrorCode(err error) (string, int) {
 		return constant.InvoiceCodeTopUpIneligible, http.StatusConflict
 	case errors.Is(err, model.ErrInvoicePaymentSourceEvidenceConflict), errors.Is(err, model.ErrInvoicePaymentReviewConflict):
 		return constant.InvoiceCodePaymentEvidenceConflict, http.StatusConflict
-	case errors.Is(err, model.ErrInvoiceDocumentConflict), errors.Is(err, model.ErrInvoiceIssuanceConflict), errors.Is(err, service.ErrInvoiceDocumentRetryable):
+	case errors.Is(err, service.ErrInvoiceDocumentUnavailable):
 		return constant.InvoiceCodeDocumentUnavailable, http.StatusConflict
-	case errors.Is(err, service.ErrInvoiceObjectNotFound), errors.Is(err, service.ErrInvoiceObjectRetryable), errors.Is(err, service.ErrInvoiceObjectTerminal):
-		return constant.InvoiceCodeDocumentUnavailable, http.StatusConflict
-	case errors.Is(err, model.ErrInvoiceProfileVersionConflict), errors.Is(err, model.ErrInvoiceStateConflict):
+	case errors.Is(err, model.ErrInvoiceDocumentConflict), errors.Is(err, model.ErrInvoiceIssuanceConflict),
+		errors.Is(err, model.ErrInvoiceProfileVersionConflict), errors.Is(err, model.ErrInvoiceStateConflict):
 		return constant.InvoiceCodeStateConflict, http.StatusConflict
 	default:
 		return constant.InvoiceCodeInternalError, http.StatusInternalServerError
@@ -195,6 +194,20 @@ func GetInvoiceApplication(c *gin.Context) {
 		return
 	}
 	writeInvoiceSuccess(c, http.StatusOK, detail)
+}
+
+func DownloadInvoiceDocument(c *gin.Context) {
+	id, err := invoiceApplicationID(c)
+	if err != nil {
+		writeInvoiceError(c, err)
+		return
+	}
+	url, err := service.GetInvoiceDocumentDownload(c.Request.Context(), c.GetInt("id"), id)
+	if err != nil {
+		writeInvoiceError(c, err)
+		return
+	}
+	c.Redirect(http.StatusFound, url)
 }
 
 func CancelInvoiceApplication(c *gin.Context) {

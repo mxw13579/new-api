@@ -28,6 +28,7 @@ var invoiceUserRoutes = []invoiceRoute{
 	{http.MethodPost, "/invoices", "CreateInvoiceApplication", controller.CreateInvoiceApplication, nil},
 	{http.MethodGet, "/invoices", "ListInvoiceApplications", controller.ListInvoiceApplications, nil},
 	{http.MethodGet, "/invoices/:id", "GetInvoiceApplication", controller.GetInvoiceApplication, nil},
+	{http.MethodGet, "/invoices/:id/document", "DownloadInvoiceDocument", controller.DownloadInvoiceDocument, nil},
 	{http.MethodPost, "/invoices/:id/cancel", "CancelInvoiceApplication", controller.CancelInvoiceApplication, nil},
 }
 
@@ -37,6 +38,8 @@ var invoiceAdminRoutes = []invoiceRoute{
 	{http.MethodPost, "/invoices/:id/review", "AdminReviewInvoiceApplication", controller.AdminReviewInvoiceApplication, &authz.InvoiceReview},
 	{http.MethodPost, "/invoices/:id/reject", "AdminRejectInvoiceApplication", controller.AdminRejectInvoiceApplication, &authz.InvoiceReview},
 	{http.MethodPost, "/invoices/:id/document", "AdminUploadInvoiceDocument", controller.AdminUploadInvoiceDocument, &authz.InvoiceDocumentUpload},
+	{http.MethodGet, "/invoice/settings", "GetInvoiceSetting", controller.GetInvoiceSetting, &authz.InvoiceSettings},
+	{http.MethodPut, "/invoice/settings", "UpdateInvoiceSetting", controller.UpdateInvoiceSetting, &authz.InvoiceSettings},
 }
 
 func registerInvoiceRoutes(group *gin.RouterGroup, routes []invoiceRoute) {

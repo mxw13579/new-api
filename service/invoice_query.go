@@ -37,6 +37,10 @@ func ListEligibleInvoiceOrders(userID, page, pageSize int) (dto.EligibleInvoiceO
 }
 
 func invoiceApplicationSummary(application *model.InvoiceApplication, document *model.InvoiceDocument) dto.InvoiceApplicationSummary {
+	return invoiceApplicationSummaryAt(application, document, time.Now())
+}
+
+func invoiceApplicationSummaryAt(application *model.InvoiceApplication, document *model.InvoiceDocument, now time.Time) dto.InvoiceApplicationSummary {
 	documentStatus := constant.InvoiceDocumentStatusMissing
 	var expiresAt, deletedAt *int64
 	if document != nil {
@@ -44,6 +48,7 @@ func invoiceApplicationSummary(application *model.InvoiceApplication, document *
 		expiresAt = document.ExpiresAt
 		deletedAt = document.DeletedAt
 	}
+	_, downloadErr := invoiceDocumentDownloadTTL(application, document, now)
 	return dto.InvoiceApplicationSummary{
 		ID: application.ID, ApplicationNo: application.ApplicationNo, Type: application.Type,
 		Status: application.Status, PaymentReviewStatus: application.PaymentReviewStatus,
@@ -52,7 +57,7 @@ func invoiceApplicationSummary(application *model.InvoiceApplication, document *
 		CancelledAt: application.CancelledAt, IssuedAt: application.IssuedAt, RejectReason: application.RejectReason,
 		DocumentStatus: documentStatus, DocumentExpiresAt: expiresAt, DocumentDeletedAt: deletedAt,
 		CanCancel:   application.Status == constant.InvoiceApplicationStatusSubmitted,
-		CanDownload: false,
+		CanDownload: downloadErr == nil,
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/QuantumNous/new-api/service/authz"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -19,6 +20,7 @@ func TestPersonalInvoiceRouteContract(t *testing.T) {
 		http.MethodGet + " /invoices":                "ListInvoiceApplications",
 		http.MethodGet + " /invoices/:id":            "GetInvoiceApplication",
 		http.MethodPost + " /invoices/:id/cancel":    "CancelInvoiceApplication",
+		http.MethodGet + " /invoices/:id/document":   "DownloadInvoiceDocument",
 	}
 	adminRoutes := map[string]string{
 		http.MethodGet + " /invoices":               "AdminListInvoiceApplications",
@@ -26,9 +28,26 @@ func TestPersonalInvoiceRouteContract(t *testing.T) {
 		http.MethodPost + " /invoices/:id/review":   "AdminReviewInvoiceApplication",
 		http.MethodPost + " /invoices/:id/reject":   "AdminRejectInvoiceApplication",
 		http.MethodPost + " /invoices/:id/document": "AdminUploadInvoiceDocument",
+		http.MethodGet + " /invoice/settings":       "GetInvoiceSetting",
+		http.MethodPut + " /invoice/settings":       "UpdateInvoiceSetting",
 	}
 	assertInvoiceRouteSet(t, invoiceUserRoutes, userRoutes)
 	assertInvoiceRouteSet(t, invoiceAdminRoutes, adminRoutes)
+}
+
+func TestInvoiceSettingRoutesUseInvoicePermissionForAdminAndRoot(t *testing.T) {
+	matched := 0
+	for _, route := range invoiceAdminRoutes {
+		if route.path != "/invoice/settings" {
+			continue
+		}
+		matched++
+		assert.Equal(t, &authz.InvoiceSettings, route.permission)
+		assert.Contains(t, authz.PermissionsForRole(authz.BuiltInRoleAdmin), authz.InvoiceSettings)
+		rootGrants := authz.Roles()[0].Grants
+		assert.True(t, rootGrants[authz.ResourceInvoice][authz.ActionInvoiceSettings])
+	}
+	assert.Equal(t, 2, matched)
 }
 
 func assertInvoiceRouteSet(t *testing.T, routes []invoiceRoute, expected map[string]string) {
