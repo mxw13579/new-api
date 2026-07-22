@@ -1,20 +1,32 @@
 package model
 
 const (
-	InvoicePDFContentType          = "application/pdf"
+	// InvoicePDFContentType is the only media type accepted for private invoice documents.
+	InvoicePDFContentType = "application/pdf"
+	// InvoiceDocumentCleanupTaskType identifies the scheduled retention and recovery task for invoice objects.
 	InvoiceDocumentCleanupTaskType = "invoice_document_cleanup"
 
-	InvoiceDocumentStatusUploading    = "uploading"
-	InvoiceDocumentStatusValidating   = "validating"
-	InvoiceDocumentStatusAvailable    = "available"
-	InvoiceDocumentStatusSuperseded   = "superseded"
+	// InvoiceDocumentStatusUploading indicates that a document is receiving its staging object.
+	InvoiceDocumentStatusUploading = "uploading"
+	// InvoiceDocumentStatusValidating indicates that a promoted PDF awaits aggregate finalization.
+	InvoiceDocumentStatusValidating = "validating"
+	// InvoiceDocumentStatusAvailable indicates that an attested document may be served to its owner.
+	InvoiceDocumentStatusAvailable = "available"
+	// InvoiceDocumentStatusSuperseded indicates that a newer document version is active.
+	InvoiceDocumentStatusSuperseded = "superseded"
+	// InvoiceDocumentStatusUploadFailed indicates that upload or PDF validation did not complete.
 	InvoiceDocumentStatusUploadFailed = "upload_failed"
-	InvoiceDocumentStatusDeleting     = "deleting"
-	InvoiceDocumentStatusDeleted      = "deleted"
+	// InvoiceDocumentStatusDeleting indicates that a cleanup worker owns the current deletion lease.
+	InvoiceDocumentStatusDeleting = "deleting"
+	// InvoiceDocumentStatusDeleted indicates that the private object was removed successfully.
+	InvoiceDocumentStatusDeleted = "deleted"
+	// InvoiceDocumentStatusDeleteFailed indicates a retryable or terminal object deletion failure.
 	InvoiceDocumentStatusDeleteFailed = "delete_failed"
-	InvoiceDocumentStatusMissing      = "missing"
+	// InvoiceDocumentStatusMissing indicates that the expected private object no longer exists.
+	InvoiceDocumentStatusMissing = "missing"
 )
 
+// InvoiceDocument tracks a private PDF object's staged promotion, attestation, retention, and deletion state.
 type InvoiceDocument struct {
 	ID                            int64   `json:"id" gorm:"primaryKey"`
 	ApplicationID                 int64   `json:"application_id" gorm:"not null;index:idx_invoice_documents_application"`

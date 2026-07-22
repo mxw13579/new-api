@@ -9,14 +9,17 @@ import (
 	"gorm.io/gorm"
 )
 
+// InvoiceDocumentApplication implements document lifecycle compare-and-swap operations against invoice applications.
 type InvoiceDocumentApplication struct{}
 
 var _ InvoiceDocumentApplicationContract = (*InvoiceDocumentApplication)(nil)
 
+// NewInvoiceDocumentApplicationContract returns the aggregate adapter used by the document lifecycle service.
 func NewInvoiceDocumentApplicationContract() InvoiceDocumentApplicationContract {
 	return &InvoiceDocumentApplication{}
 }
 
+// PrepareDocumentTx locks an application and returns the facts required to validate a document transition.
 func (applicationContract *InvoiceDocumentApplication) PrepareDocumentTx(tx *gorm.DB, request PrepareInvoiceDocumentRequest) (PrepareInvoiceDocumentResult, error) {
 	if applicationContract == nil || tx == nil || request.ApplicationID <= 0 || request.ExpectedStatus == "" || request.ExpectedPaymentReviewStatus == "" {
 		return PrepareInvoiceDocumentResult{}, ErrInvoiceDocumentConflict
@@ -41,6 +44,7 @@ func (applicationContract *InvoiceDocumentApplication) PrepareDocumentTx(tx *gor
 	}, nil
 }
 
+// FinalizeDocumentTx creates immutable issuance facts and marks a validated document active in one transaction.
 func (applicationContract *InvoiceDocumentApplication) FinalizeDocumentTx(tx *gorm.DB, request FinalizeInvoiceDocumentRequest) (FinalizeInvoiceDocumentResult, error) {
 	if applicationContract == nil || tx == nil || request.ApplicationID <= 0 || request.DocumentID <= 0 || request.OperationToken == "" ||
 		request.ExpectedStatus != constant.InvoiceApplicationStatusApproved || request.AttestedBy <= 0 || !request.PDFFactsAttested ||
@@ -99,6 +103,7 @@ func (applicationContract *InvoiceDocumentApplication) FinalizeDocumentTx(tx *go
 	}, nil
 }
 
+// ReplaceDocumentTx switches an issued application to a validated replacement document using compare-and-swap guards.
 func (applicationContract *InvoiceDocumentApplication) ReplaceDocumentTx(tx *gorm.DB, request ReplaceInvoiceDocumentRequest) (ReplaceInvoiceDocumentResult, error) {
 	if applicationContract == nil || tx == nil || request.ApplicationID <= 0 || request.NewDocumentID <= 0 || request.OperationToken == "" ||
 		request.ExpectedStatus != constant.InvoiceApplicationStatusIssued || request.ExpectedActiveDocumentID <= 0 || request.ExpectedIssuanceID <= 0 ||
@@ -144,6 +149,7 @@ func (applicationContract *InvoiceDocumentApplication) ReplaceDocumentTx(tx *gor
 	return ReplaceInvoiceDocumentResult{SupersededDocumentID: request.ExpectedActiveDocumentID, ActiveDocumentID: request.NewDocumentID}, nil
 }
 
+// RevokeDocumentTx removes the active document link and places the issued application on payment-review hold.
 func (applicationContract *InvoiceDocumentApplication) RevokeDocumentTx(tx *gorm.DB, request RevokeInvoiceDocumentRequest) error {
 	if applicationContract == nil || tx == nil || request.ApplicationID <= 0 || request.ExpectedActiveDocumentID <= 0 ||
 		request.ExpectedPaymentReviewStatus == "" || strings.TrimSpace(request.Reason) == "" {

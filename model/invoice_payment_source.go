@@ -11,10 +11,12 @@ import (
 	"gorm.io/gorm"
 )
 
+// TopUpInvoicePaymentSource reserves trusted wallet top-up evidence for invoice applications.
 type TopUpInvoicePaymentSource struct{}
 
 var _ InvoicePaymentSource = (*TopUpInvoicePaymentSource)(nil)
 
+// NewTopUpInvoicePaymentSource returns the payment-evidence adapter backed by wallet top-ups.
 func NewTopUpInvoicePaymentSource() InvoicePaymentSource {
 	return &TopUpInvoicePaymentSource{}
 }
@@ -108,6 +110,7 @@ func validateLegacyInvoicePaymentSourceEvidence(tx *gorm.DB, topUp *TopUp) error
 	return nil
 }
 
+// ClaimTopUpsTx validates and atomically binds versioned top-up evidence to an invoice application.
 func (s *TopUpInvoicePaymentSource) ClaimTopUpsTx(tx *gorm.DB, request ClaimInvoiceTopUpsRequest) ([]ClaimedTopUpEvidence, error) {
 	ordered, err := validateInvoicePaymentSourceInput(tx, request.UserID, request.ApplicationID, request.TopUps)
 	if err != nil {
@@ -168,6 +171,7 @@ func claimInvoiceTopUps(tx *gorm.DB, request ClaimInvoiceTopUpsRequest, rows []T
 	return claimed, nil
 }
 
+// ReleaseTopUpsTx atomically removes an application's claims while advancing each payment version.
 func (s *TopUpInvoicePaymentSource) ReleaseTopUpsTx(tx *gorm.DB, request ReleaseInvoiceTopUpsRequest) ([]ReleasedTopUpVersion, error) {
 	ordered, err := validateInvoicePaymentSourceInput(tx, request.UserID, request.ApplicationID, request.TopUps)
 	if err != nil {

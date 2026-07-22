@@ -11,13 +11,19 @@ import (
 )
 
 var (
-	ErrInvoiceInvalidProfile         = errors.New("invalid invoice profile")
+	// ErrInvoiceInvalidProfile indicates invoice profile facts that violate personal or company requirements.
+	ErrInvoiceInvalidProfile = errors.New("invalid invoice profile")
+	// ErrInvoiceProfileVersionConflict indicates that a profile changed after the caller read its version.
 	ErrInvoiceProfileVersionConflict = errors.New("invoice profile version conflict")
-	ErrInvoiceIdempotencyConflict    = errors.New("invoice idempotency conflict")
-	ErrInvoiceQuotaInsufficient      = errors.New("invoice quota insufficient")
-	ErrInvoiceTopUpIneligible        = errors.New("invoice topup ineligible")
+	// ErrInvoiceIdempotencyConflict indicates reuse of a request identifier with different invoice facts.
+	ErrInvoiceIdempotencyConflict = errors.New("invoice idempotency conflict")
+	// ErrInvoiceQuotaInsufficient indicates that the user's balance cannot cover the configured invoice fee.
+	ErrInvoiceQuotaInsufficient = errors.New("invoice quota insufficient")
+	// ErrInvoiceTopUpIneligible indicates that one or more selected top-ups cannot be invoiced.
+	ErrInvoiceTopUpIneligible = errors.New("invoice topup ineligible")
 )
 
+// InvoiceProfile stores versioned buyer identity facts and per-type default selection for one user.
 type InvoiceProfile struct {
 	ID        int64  `json:"id"`
 	UserID    int    `json:"user_id" gorm:"not null;index:idx_invoice_profiles_user_type,priority:1"`
@@ -88,6 +94,7 @@ func lockInvoiceProfileOwner(tx *gorm.DB, userID int) error {
 	return err
 }
 
+// CreateInvoiceProfile creates normalized buyer facts and atomically converges the per-type default profile.
 func CreateInvoiceProfile(userID int, request dto.CreateInvoiceProfileRequest) (*InvoiceProfile, error) {
 	title, taxNumber, err := normalizeInvoiceProfile(request.Type, request.Title, request.TaxNumber)
 	if err != nil {
@@ -116,6 +123,7 @@ func CreateInvoiceProfile(userID int, request dto.CreateInvoiceProfileRequest) (
 	return profile, nil
 }
 
+// UpdateInvoiceProfile applies an expected-version update and preserves one default profile per invoice type.
 func UpdateInvoiceProfile(userID int, request dto.UpdateInvoiceProfileRequest) (*InvoiceProfile, error) {
 	if request.ID <= 0 || request.ExpectedVersion <= 0 {
 		return nil, ErrInvoiceInvalidProfile
@@ -166,6 +174,7 @@ func UpdateInvoiceProfile(userID int, request dto.UpdateInvoiceProfileRequest) (
 	return &updated, nil
 }
 
+// DeleteInvoiceProfile deletes an owned profile only when its expected version still matches.
 func DeleteInvoiceProfile(userID int, request dto.DeleteInvoiceProfileRequest) error {
 	if request.ID <= 0 || request.ExpectedVersion <= 0 {
 		return ErrInvoiceInvalidProfile
@@ -193,6 +202,7 @@ func DeleteInvoiceProfile(userID int, request dto.DeleteInvoiceProfileRequest) e
 	})
 }
 
+// ListInvoiceProfiles returns all buyer profiles owned by a user in deterministic default-first order.
 func ListInvoiceProfiles(userID int) ([]InvoiceProfile, error) {
 	var profiles []InvoiceProfile
 	err := DB.Where("user_id = ?", userID).Order("type, is_default desc, id").Find(&profiles).Error

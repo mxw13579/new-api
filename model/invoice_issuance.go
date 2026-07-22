@@ -2,6 +2,7 @@ package model
 
 import "gorm.io/gorm"
 
+// InvoiceIssuance stores the immutable fiscal identity and face value assigned to one application.
 type InvoiceIssuance struct {
 	ID              int64  `json:"id" gorm:"primaryKey"`
 	ApplicationID   int64  `json:"application_id" gorm:"not null;uniqueIndex:uk_invoice_issuances_application"`
@@ -15,6 +16,7 @@ type InvoiceIssuance struct {
 	UpdatedAt       int64  `json:"updated_at" gorm:"not null"`
 }
 
+// BeforeUpdate rejects mutation of persisted issuance facts after creation.
 func (InvoiceIssuance) BeforeUpdate(*gorm.DB) error {
 	return ErrInvoiceIssuanceConflict
 }

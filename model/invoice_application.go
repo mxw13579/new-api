@@ -18,15 +18,21 @@ import (
 )
 
 const (
+	// InvoiceFeeMethodWalletQuota identifies invoice fees charged from the user's quota balance.
 	InvoiceFeeMethodWalletQuota = "wallet_quota"
 
+	// InvoiceFeeEntryTypeCharge identifies the initial invoice fee debit.
 	InvoiceFeeEntryTypeCharge = "charge"
+	// InvoiceFeeEntryTypeRefund identifies an invoice fee credit created during cancellation or rejection.
 	InvoiceFeeEntryTypeRefund = "refund"
 
+	// InvoiceFeeEntryStatusApplied indicates that a fee ledger entry has changed the user's balance.
 	InvoiceFeeEntryStatusApplied = "applied"
+	// InvoiceFeeEntryStatusPending indicates that a fee refund awaits sufficient balance headroom.
 	InvoiceFeeEntryStatusPending = "pending"
 )
 
+// InvoiceApplication is the aggregate root for an invoice request, its review state, and fee settlement links.
 type InvoiceApplication struct {
 	ID                  int64  `json:"id"`
 	ApplicationNo       string `json:"application_no" gorm:"type:varchar(64);not null;uniqueIndex"`
@@ -56,6 +62,7 @@ type InvoiceApplication struct {
 	UpdatedAt           int64  `json:"updated_at" gorm:"autoUpdateTime"`
 }
 
+// InvoiceItem snapshots one claimed top-up's immutable payment facts within an invoice application.
 type InvoiceItem struct {
 	ID                 int64  `json:"id"`
 	ApplicationID      int64  `json:"application_id" gorm:"not null;uniqueIndex:uidx_invoice_item_app_topup,priority:1;index"`
@@ -68,6 +75,7 @@ type InvoiceItem struct {
 	CreatedAt          int64  `json:"created_at" gorm:"autoCreateTime"`
 }
 
+// InvoiceFeeLedgerEntry records an idempotent invoice fee charge or refund and its balance transition.
 type InvoiceFeeLedgerEntry struct {
 	ID             int64  `json:"id"`
 	ApplicationID  int64  `json:"application_id" gorm:"not null;uniqueIndex:uidx_invoice_fee_app_type,priority:1;index"`
@@ -132,6 +140,7 @@ func lookupIdempotentInvoiceApplication(userID int, requestID, fingerprint strin
 	return &existing, nil
 }
 
+// CreateInvoiceApplication atomically snapshots a profile, claims eligible top-ups, and charges the configured fee.
 func CreateInvoiceApplication(userID int, request dto.CreateInvoiceApplicationRequest, paymentSource InvoicePaymentSource) (*InvoiceApplication, error) {
 	request.RequestID = strings.TrimSpace(request.RequestID)
 	if userID <= 0 || request.RequestID == "" || len(request.RequestID) > 128 || request.ProfileID <= 0 || request.ProfileVersion <= 0 {
@@ -485,10 +494,12 @@ func settleInvoiceApplication(applicationID int64, ownerID *int, actorID int, ex
 	return &settled, nil
 }
 
+// CancelInvoiceApplication cancels an owned submitted application, releases its top-ups, and settles its fee refund.
 func CancelInvoiceApplication(userID int, applicationID int64) (*InvoiceApplication, error) {
 	return settleInvoiceApplication(applicationID, &userID, userID, constant.InvoiceApplicationStatusSubmitted, constant.InvoiceApplicationStatusCancelled, "")
 }
 
+// RejectInvoiceApplication rejects an application from its expected review state and releases its financial reservations.
 func RejectInvoiceApplication(actorID int, applicationID int64, expectedStatus, reason string) (*InvoiceApplication, error) {
 	if expectedStatus != constant.InvoiceApplicationStatusSubmitted && expectedStatus != constant.InvoiceApplicationStatusReviewing {
 		return nil, ErrInvoiceStateConflict
@@ -496,6 +507,7 @@ func RejectInvoiceApplication(actorID int, applicationID int64, expectedStatus, 
 	return settleInvoiceApplication(applicationID, nil, actorID, expectedStatus, constant.InvoiceApplicationStatusRejected, reason)
 }
 
+// ApplyPendingInvoiceFeeRefund retries one headroom-blocked fee refund without crediting the user more than once.
 func ApplyPendingInvoiceFeeRefund(applicationID int64) (bool, error) {
 	applied := false
 	userID := 0
@@ -532,6 +544,7 @@ func ApplyPendingInvoiceFeeRefund(applicationID int64) (bool, error) {
 	return applied, nil
 }
 
+// TransitionInvoiceApplicationReview advances an application through the submitted, reviewing, and approved states.
 func TransitionInvoiceApplicationReview(actorID int, applicationID int64, expectedStatus, targetStatus string) (*InvoiceApplication, error) {
 	allowed := expectedStatus == constant.InvoiceApplicationStatusSubmitted && targetStatus == constant.InvoiceApplicationStatusReviewing ||
 		expectedStatus == constant.InvoiceApplicationStatusReviewing && targetStatus == constant.InvoiceApplicationStatusApproved
