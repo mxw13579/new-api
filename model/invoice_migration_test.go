@@ -25,4 +25,31 @@ func TestMigratePersonalInvoiceStructuresCreatesConfirmedSixTables(t *testing.T)
 	} {
 		assert.Truef(t, db.Migrator().HasTable(value), "missing table for %T", value)
 	}
+	assertPersonalInvoiceDeclaredIndexMetadata(t, db)
+}
+
+func assertPersonalInvoiceDeclaredIndexMetadata(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	models := map[string]any{
+		"invoice_profiles":           &InvoiceProfile{},
+		"invoice_applications":       &InvoiceApplication{},
+		"invoice_items":              &InvoiceItem{},
+		"invoice_fee_ledger_entries": &InvoiceFeeLedgerEntry{},
+		"invoice_issuances":          &InvoiceIssuance{},
+		"invoice_documents":          &InvoiceDocument{},
+	}
+	actual := make(map[string]map[string]personalInvoiceIndexExpectation, len(models))
+	for table, value := range models {
+		statement := &gorm.Statement{DB: db}
+		require.NoError(t, statement.Parse(value))
+		actual[table] = make(map[string]personalInvoiceIndexExpectation)
+		for name, index := range statement.Schema.ParseIndexes() {
+			columns := make([]string, 0, len(index.Fields))
+			for _, field := range index.Fields {
+				columns = append(columns, field.Field.DBName)
+			}
+			actual[table][name] = personalInvoiceIndexExpectation{Columns: columns, Unique: index.Class == "UNIQUE"}
+		}
+	}
+	assert.Equal(t, personalInvoiceDeclaredIndexes, actual)
 }
