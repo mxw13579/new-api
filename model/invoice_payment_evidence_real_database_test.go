@@ -81,7 +81,7 @@ func openInvoiceEvidencePostgreSQL(t *testing.T) (*invoiceEvidenceRealDatabase, 
 	config, err := pgx.ParseConfig(dsn)
 	require.NoError(t, err)
 	require.Zero(t, invoiceEvidenceDatabaseCount(t, admin, common.DatabaseTypePostgreSQL, name))
-	require.NoError(t, admin.Exec(`CREATE DATABASE "`+name+`"`).Error)
+	require.NoError(t, admin.Exec(`CREATE DATABASE "`+name+`" TEMPLATE template0`).Error)
 	config.Database = name
 	testDB, err := gorm.Open(gormPostgres.New(gormPostgres.Config{DSN: config.ConnString(), PreferSimpleProtocol: true}), &gorm.Config{})
 	if err != nil {
