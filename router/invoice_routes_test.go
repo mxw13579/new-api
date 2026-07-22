@@ -28,19 +28,19 @@ func TestPersonalInvoiceRouteContract(t *testing.T) {
 		http.MethodPost + " /invoices/:id/review":   "AdminReviewInvoiceApplication",
 		http.MethodPost + " /invoices/:id/reject":   "AdminRejectInvoiceApplication",
 		http.MethodPost + " /invoices/:id/document": "AdminUploadInvoiceDocument",
-		http.MethodGet + " /invoice/settings":       "GetInvoiceSetting",
-		http.MethodPut + " /invoice/settings":       "UpdateInvoiceSetting",
+	}
+	optionRoutes := map[string]string{
+		http.MethodGet + " /invoice": "GetInvoiceSetting",
+		http.MethodPut + " /invoice": "UpdateInvoiceSetting",
 	}
 	assertInvoiceRouteSet(t, invoiceUserRoutes, userRoutes)
 	assertInvoiceRouteSet(t, invoiceAdminRoutes, adminRoutes)
+	assertInvoiceRouteSet(t, invoiceOptionRoutes, optionRoutes)
 }
 
 func TestInvoiceSettingRoutesUseInvoicePermissionForAdminAndRoot(t *testing.T) {
 	matched := 0
-	for _, route := range invoiceAdminRoutes {
-		if route.path != "/invoice/settings" {
-			continue
-		}
+	for _, route := range invoiceOptionRoutes {
 		matched++
 		assert.Equal(t, &authz.InvoiceSettings, route.permission)
 		assert.Contains(t, authz.PermissionsForRole(authz.BuiltInRoleAdmin), authz.InvoiceSettings)
