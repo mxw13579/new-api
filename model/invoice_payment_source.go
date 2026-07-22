@@ -2,6 +2,7 @@ package model
 
 import (
 	"errors"
+	"math"
 	"sort"
 	"strings"
 
@@ -18,19 +19,27 @@ func NewTopUpInvoicePaymentSource() InvoicePaymentSource {
 	return &TopUpInvoicePaymentSource{}
 }
 
-func validateInvoicePaymentSourceInput(tx *gorm.DB, userID int, applicationID int64, topUps []TopUpVersionExpectation, expectedVersion int64) ([]TopUpVersionExpectation, error) {
+func validateInvoicePaymentSourceInput(tx *gorm.DB, userID int, applicationID int64, topUps []TopUpVersionExpectation) ([]TopUpVersionExpectation, error) {
 	if tx == nil || userID <= 0 || applicationID <= 0 || len(topUps) == 0 {
 		return nil, ErrInvoicePaymentSourceInvalidRequest
 	}
 	ordered := append([]TopUpVersionExpectation(nil), topUps...)
 	sort.Slice(ordered, func(i, j int) bool { return ordered[i].TopUpID < ordered[j].TopUpID })
 	for i, topUp := range ordered {
-		if topUp.TopUpID <= 0 || topUp.ExpectedPaymentVersion != expectedVersion ||
+		if topUp.TopUpID <= 0 || topUp.ExpectedPaymentVersion <= 0 || topUp.ExpectedPaymentVersion == math.MaxInt64 ||
 			(i > 0 && ordered[i-1].TopUpID == topUp.TopUpID) {
 			return nil, ErrInvoicePaymentSourceInvalidRequest
 		}
 	}
 	return ordered, nil
+}
+
+func validateInvoicePaymentSourceImmutableEvidence(tx *gorm.DB, topUp *TopUp) error {
+	if topUp.PaidAmountMinor == nil || *topUp.PaidAmountMinor <= 0 || topUp.Currency == nil || *topUp.Currency != constant.InvoicePaymentEvidenceCurrencyCNY ||
+		topUp.ProductSnapshot == nil || strings.TrimSpace(*topUp.ProductSnapshot) == "" {
+		return ErrInvoicePaymentSourceEvidenceConflict
+	}
+	return validateInvoicePaymentSourceEvidence(tx, topUp)
 }
 
 func validateInvoicePaymentSourceCommon(tx *gorm.DB, topUp *TopUp, userID int) error {
@@ -100,7 +109,7 @@ func validateLegacyInvoicePaymentSourceEvidence(tx *gorm.DB, topUp *TopUp) error
 }
 
 func (s *TopUpInvoicePaymentSource) ClaimTopUpsTx(tx *gorm.DB, request ClaimInvoiceTopUpsRequest) ([]ClaimedTopUpEvidence, error) {
-	ordered, err := validateInvoicePaymentSourceInput(tx, request.UserID, request.ApplicationID, request.TopUps, 1)
+	ordered, err := validateInvoicePaymentSourceInput(tx, request.UserID, request.ApplicationID, request.TopUps)
 	if err != nil {
 		return nil, err
 	}
@@ -108,7 +117,7 @@ func (s *TopUpInvoicePaymentSource) ClaimTopUpsTx(tx *gorm.DB, request ClaimInvo
 	if err != nil {
 		return nil, err
 	}
-	return claimInvoiceTopUps(tx, request, rows)
+	return claimInvoiceTopUps(tx, request, rows, ordered)
 }
 
 func loadClaimableInvoiceTopUps(tx *gorm.DB, userID int, ordered []TopUpVersionExpectation) ([]TopUp, error) {
@@ -135,13 +144,15 @@ func loadClaimableInvoiceTopUps(tx *gorm.DB, userID int, ordered []TopUpVersionE
 	return rows, nil
 }
 
-func claimInvoiceTopUps(tx *gorm.DB, request ClaimInvoiceTopUpsRequest, rows []TopUp) ([]ClaimedTopUpEvidence, error) {
+func claimInvoiceTopUps(tx *gorm.DB, request ClaimInvoiceTopUpsRequest, rows []TopUp, ordered []TopUpVersionExpectation) ([]ClaimedTopUpEvidence, error) {
 	claimed := make([]ClaimedTopUpEvidence, 0, len(rows))
 	for i := range rows {
 		topUp := &rows[i]
+		expectedVersion := ordered[i].ExpectedPaymentVersion
+		nextVersion := expectedVersion + 1
 		result := tx.Model(&TopUp{}).
-			Where("id = ? AND user_id = ? AND payment_version = ? AND invoice_application_id IS NULL", topUp.Id, request.UserID, int64(1)).
-			Updates(map[string]any{"invoice_application_id": request.ApplicationID, "payment_version": int64(2)})
+			Where("id = ? AND user_id = ? AND payment_version = ? AND invoice_application_id IS NULL", topUp.Id, request.UserID, expectedVersion).
+			Updates(map[string]any{"invoice_application_id": request.ApplicationID, "payment_version": nextVersion})
 		if result.Error != nil {
 			return nil, result.Error
 		}
@@ -151,14 +162,14 @@ func claimInvoiceTopUps(tx *gorm.DB, request ClaimInvoiceTopUpsRequest, rows []T
 		claimed = append(claimed, ClaimedTopUpEvidence{
 			TopUpID: topUp.Id, MerchantTradeNo: topUp.TradeNo, PaidAmountMinor: *topUp.PaidAmountMinor,
 			Currency: *topUp.Currency, ProductSnapshot: *topUp.ProductSnapshot, PaidAt: topUp.CompleteTime,
-			EvidenceSource: *topUp.PaymentEvidenceSource, PaymentVersion: 2,
+			EvidenceSource: *topUp.PaymentEvidenceSource, PaymentVersion: nextVersion,
 		})
 	}
 	return claimed, nil
 }
 
 func (s *TopUpInvoicePaymentSource) ReleaseTopUpsTx(tx *gorm.DB, request ReleaseInvoiceTopUpsRequest) ([]ReleasedTopUpVersion, error) {
-	ordered, err := validateInvoicePaymentSourceInput(tx, request.UserID, request.ApplicationID, request.TopUps, 2)
+	ordered, err := validateInvoicePaymentSourceInput(tx, request.UserID, request.ApplicationID, request.TopUps)
 	if err != nil {
 		return nil, err
 	}
@@ -166,7 +177,7 @@ func (s *TopUpInvoicePaymentSource) ReleaseTopUpsTx(tx *gorm.DB, request Release
 	if err != nil {
 		return nil, err
 	}
-	return releaseInvoiceTopUps(tx, request, rows)
+	return releaseInvoiceTopUps(tx, request, rows, ordered)
 }
 
 func loadReleasableInvoiceTopUps(tx *gorm.DB, request ReleaseInvoiceTopUpsRequest, ordered []TopUpVersionExpectation) ([]TopUp, error) {
@@ -183,10 +194,7 @@ func loadReleasableInvoiceTopUps(tx *gorm.DB, request ReleaseInvoiceTopUpsReques
 			topUp.PaymentVersion == nil || *topUp.PaymentVersion != expected.ExpectedPaymentVersion {
 			return nil, ErrInvoicePaymentSourceClaimConflict
 		}
-		if err := validateInvoicePaymentSourceCommon(tx, &topUp, request.UserID); err != nil {
-			return nil, ErrInvoicePaymentSourceEvidenceConflict
-		}
-		if err := validateInvoicePaymentSourceEvidence(tx, &topUp); err != nil {
+		if err := validateInvoicePaymentSourceImmutableEvidence(tx, &topUp); err != nil {
 			return nil, err
 		}
 		rows = append(rows, topUp)
@@ -194,20 +202,22 @@ func loadReleasableInvoiceTopUps(tx *gorm.DB, request ReleaseInvoiceTopUpsReques
 	return rows, nil
 }
 
-func releaseInvoiceTopUps(tx *gorm.DB, request ReleaseInvoiceTopUpsRequest, rows []TopUp) ([]ReleasedTopUpVersion, error) {
+func releaseInvoiceTopUps(tx *gorm.DB, request ReleaseInvoiceTopUpsRequest, rows []TopUp, ordered []TopUpVersionExpectation) ([]ReleasedTopUpVersion, error) {
 	released := make([]ReleasedTopUpVersion, 0, len(rows))
 	for i := range rows {
 		topUp := &rows[i]
+		expectedVersion := ordered[i].ExpectedPaymentVersion
+		nextVersion := expectedVersion + 1
 		result := tx.Model(&TopUp{}).
-			Where("id = ? AND user_id = ? AND payment_version = ? AND invoice_application_id = ?", topUp.Id, request.UserID, int64(2), request.ApplicationID).
-			Updates(map[string]any{"invoice_application_id": nil, "payment_version": int64(3)})
+			Where("id = ? AND user_id = ? AND payment_version = ? AND invoice_application_id = ?", topUp.Id, request.UserID, expectedVersion, request.ApplicationID).
+			Updates(map[string]any{"invoice_application_id": nil, "payment_version": nextVersion})
 		if result.Error != nil {
 			return nil, result.Error
 		}
 		if result.RowsAffected != 1 {
 			return nil, ErrInvoicePaymentSourceClaimConflict
 		}
-		released = append(released, ReleasedTopUpVersion{TopUpID: topUp.Id, PaymentVersion: 3})
+		released = append(released, ReleasedTopUpVersion{TopUpID: topUp.Id, PaymentVersion: nextVersion})
 	}
 	return released, nil
 }

@@ -109,6 +109,12 @@ func TestSetUserPermissionsStoresOnlyOverrides(t *testing.T) {
 			ActionRead:    false,
 			ActionOperate: false,
 		},
+		ResourceInvoice: {
+			ActionInvoiceReview:         true,
+			ActionInvoiceDocumentUpload: true,
+			ActionInvoiceSettings:       true,
+			ActionInvoiceSensitiveRead:  false,
+		},
 	}, ExplicitUserPermissions(42))
 	assert.Equal(t, PermissionsMap{
 		ResourceChannel: {
@@ -140,6 +146,12 @@ func TestSetUserPermissionsStoresOnlyOverrides(t *testing.T) {
 		ResourceInvoicePaymentEvidence: {
 			ActionRead:    false,
 			ActionOperate: false,
+		},
+		ResourceInvoice: {
+			ActionInvoiceReview:         true,
+			ActionInvoiceDocumentUpload: true,
+			ActionInvoiceSettings:       true,
+			ActionInvoiceSensitiveRead:  false,
 		},
 	}, ExplicitUserPermissions(42))
 	assert.Empty(t, ExplicitUserOverrides(42))
@@ -234,4 +246,8 @@ func TestCapabilitiesUseCatalogShape(t *testing.T) {
 	assert.True(t, capabilities[ResourceChannel][ActionWrite])
 	assert.False(t, capabilities[ResourceChannel][ActionSensitiveWrite])
 	assert.False(t, capabilities[ResourceChannel][ActionSecretView])
+	assert.True(t, capabilities[ResourceInvoice][ActionInvoiceReview])
+	assert.True(t, capabilities[ResourceInvoice][ActionInvoiceDocumentUpload])
+	assert.True(t, capabilities[ResourceInvoice][ActionInvoiceSettings])
+	assert.False(t, capabilities[ResourceInvoice][ActionInvoiceSensitiveRead])
 }
