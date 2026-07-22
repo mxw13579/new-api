@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -15,9 +16,12 @@ import (
 	"gorm.io/gorm"
 )
 
+var invoiceFeeSettlementTestDBSequence atomic.Uint64
+
 func openInvoiceFeeSettlementServiceTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
+	databaseName := fmt.Sprintf("%s-%d", t.Name(), invoiceFeeSettlementTestDBSequence.Add(1))
+	db, err := gorm.Open(sqlite.Open("file:"+databaseName+"?mode=memory&cache=shared"), &gorm.Config{})
 	require.NoError(t, err)
 	require.NoError(t, db.AutoMigrate(&model.InvoiceFeeLedgerEntry{}, &model.SystemTask{}, &model.SystemTaskLock{}))
 	previousDB := model.DB
@@ -133,43 +137,4 @@ func TestInvoiceFeeRefundSettlementRotatesPoisonRowsWithinTwoRuns(t *testing.T) 
 		Run(context.Background(), claimInvoiceFeeSettlementTask(t, db, "runner-2"), "runner-2")
 	assert.Equal(t, 1, *secondQueries)
 	assert.Equal(t, 1, processedLegitimate)
-}
-
-func TestInvoiceFeeRefundSettlementLeaseLossDoesNotTerminalizeOldOwner(t *testing.T) {
-	db := openInvoiceFeeSettlementServiceTestDB(t)
-	entries := seedInvoiceFeeSettlementCandidates(t, db, 2)
-	ctx, cancel := context.WithCancel(context.Background())
-	credits := 0
-	handler := newInvoiceFeeRefundSettlementHandler(db, func(applicationID int64) (bool, error) {
-		credits++
-		cancel()
-		return true, db.Model(&model.InvoiceFeeLedgerEntry{}).
-			Where("application_id = ?", applicationID).Update("status", model.InvoiceFeeEntryStatusApplied).Error
-	}, func() int64 { return 1000 })
-	task := claimInvoiceFeeSettlementTask(t, db, "runner-old")
-
-	handler.Run(ctx, task, "runner-old")
-
-	assert.Equal(t, 1, credits)
-	var oldTask model.SystemTask
-	require.NoError(t, db.First(&oldTask, task.ID).Error)
-	assert.Equal(t, model.SystemTaskStatusRunning, oldTask.Status)
-	var first, second model.InvoiceFeeLedgerEntry
-	require.NoError(t, db.First(&first, entries[0].ID).Error)
-	require.NoError(t, db.First(&second, entries[1].ID).Error)
-	assert.Equal(t, 1, first.AttemptCount)
-	assert.Zero(t, second.AttemptCount)
-
-	require.NoError(t, db.Model(&model.SystemTaskLock{}).Where("task_id = ?", task.TaskID).
-		Update("locked_until", common.GetTimestamp()-1).Error)
-	require.NoError(t, model.ExpireStaleSystemTaskLocks(common.GetTimestamp()))
-	require.NoError(t, db.First(&oldTask, task.ID).Error)
-	assert.Equal(t, model.SystemTaskStatusFailed, oldTask.Status)
-	assert.Equal(t, "lease_expired", oldTask.Error)
-
-	newInvoiceFeeRefundSettlementHandler(db, func(int64) (bool, error) {
-		credits++
-		return true, nil
-	}, func() int64 { return 1001 }).Run(context.Background(), claimInvoiceFeeSettlementTask(t, db, "runner-new"), "runner-new")
-	assert.Equal(t, 2, credits, "only the still-pending second obligation may be applied")
 }

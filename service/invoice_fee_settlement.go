@@ -2,9 +2,12 @@ package service
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	"gorm.io/gorm"
 )
@@ -25,11 +28,13 @@ type InvoiceFeeRefundSettlementResult struct {
 }
 
 type invoiceFeeRefundApplyFunc func(applicationID int64) (bool, error)
+type invoiceFeeRefundFinishFunc func(taskID, runnerID string, status model.SystemTaskStatus, result any, errorMessage string) error
 
 type invoiceFeeRefundSettlementHandler struct {
-	db    *gorm.DB
-	apply invoiceFeeRefundApplyFunc
-	now   func() int64
+	db     *gorm.DB
+	apply  invoiceFeeRefundApplyFunc
+	finish invoiceFeeRefundFinishFunc
+	now    func() int64
 }
 
 var _ ScheduledSystemTaskHandler = (*invoiceFeeRefundSettlementHandler)(nil)
@@ -40,7 +45,7 @@ func NewInvoiceFeeRefundSettlementHandler() SystemTaskHandler {
 }
 
 func newInvoiceFeeRefundSettlementHandler(db *gorm.DB, apply invoiceFeeRefundApplyFunc, now func() int64) *invoiceFeeRefundSettlementHandler {
-	return &invoiceFeeRefundSettlementHandler{db: db, apply: apply, now: now}
+	return &invoiceFeeRefundSettlementHandler{db: db, apply: apply, finish: model.FinishSystemTask, now: now}
 }
 
 func (*invoiceFeeRefundSettlementHandler) Type() string {
@@ -65,7 +70,7 @@ func (handler *invoiceFeeRefundSettlementHandler) Run(ctx context.Context, task 
 	result := InvoiceFeeRefundSettlementResult{Scanned: len(candidates)}
 	if err != nil {
 		if ctx.Err() == nil {
-			_ = model.FinishSystemTask(task.TaskID, runnerID, model.SystemTaskStatusFailed, result, invoiceFeeRefundSettlementTaskError)
+			handler.finishTask(ctx, task, runnerID, model.SystemTaskStatusFailed, result, invoiceFeeRefundSettlementTaskError)
 		}
 		return
 	}
@@ -99,5 +104,22 @@ func (handler *invoiceFeeRefundSettlementHandler) Run(ctx context.Context, task 
 		status = model.SystemTaskStatusFailed
 		errorMessage = invoiceFeeRefundSettlementTaskError
 	}
-	_ = model.FinishSystemTask(task.TaskID, runnerID, status, result, errorMessage)
+	handler.finishTask(ctx, task, runnerID, status, result, errorMessage)
+}
+
+func (handler *invoiceFeeRefundSettlementHandler) finishTask(
+	ctx context.Context,
+	task *model.SystemTask,
+	runnerID string,
+	status model.SystemTaskStatus,
+	result InvoiceFeeRefundSettlementResult,
+	errorMessage string,
+) {
+	err := handler.finish(task.TaskID, runnerID, status, result, errorMessage)
+	if err == nil || errors.Is(err, model.ErrSystemTaskLockLost) {
+		return
+	}
+	logger.LogWarn(ctx, fmt.Sprintf(
+		"invoice fee refund settlement finish persistence failed: task_id=%s", task.TaskID,
+	))
 }
