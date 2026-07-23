@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/controller"
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/service/authz"
@@ -57,7 +58,7 @@ func registerInvoiceRoutes(group *gin.RouterGroup, routes []invoiceRoute) {
 				}
 				c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
 					"success": false, "message": common.TranslateMessage(c, i18n.MsgAuthInsufficientPrivilege),
-					"data": gin.H{"code": "INVOICE_FORBIDDEN"},
+					"data": gin.H{"code": constant.InvoiceCodeForbidden},
 				})
 			})
 		}
