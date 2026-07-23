@@ -8,7 +8,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
-	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -189,42 +189,11 @@ func openInvoiceR2ReviewPostgreSQL(t *testing.T) (*gorm.DB, bool) {
 	return db, true
 }
 
-type invoiceR2ReviewPrewriteBarrier struct {
-	ready   chan struct{}
-	release chan struct{}
-}
-
-type invoiceR2ReviewBarrierContract struct {
-	readDB   *gorm.DB
-	delegate model.InvoiceDocumentApplicationContract
-	barrier  *invoiceR2ReviewPrewriteBarrier
-	once     sync.Once
-}
-
-func (contract *invoiceR2ReviewBarrierContract) PrepareDocumentTx(tx *gorm.DB, request model.PrepareInvoiceDocumentRequest) (model.PrepareInvoiceDocumentResult, error) {
-	var readErr error
-	contract.once.Do(func() {
-		var application model.InvoiceApplication
-		readErr = contract.readDB.First(&application, request.ApplicationID).Error
-		contract.barrier.ready <- struct{}{}
-		<-contract.barrier.release
-	})
-	if readErr != nil {
-		return model.PrepareInvoiceDocumentResult{}, readErr
-	}
-	return contract.delegate.PrepareDocumentTx(tx, request)
-}
-
-func (contract *invoiceR2ReviewBarrierContract) FinalizeDocumentTx(tx *gorm.DB, request model.FinalizeInvoiceDocumentRequest) (model.FinalizeInvoiceDocumentResult, error) {
-	return contract.delegate.FinalizeDocumentTx(tx, request)
-}
-
-func (contract *invoiceR2ReviewBarrierContract) ReplaceDocumentTx(tx *gorm.DB, request model.ReplaceInvoiceDocumentRequest) (model.ReplaceInvoiceDocumentResult, error) {
-	return contract.delegate.ReplaceDocumentTx(tx, request)
-}
-
-func (contract *invoiceR2ReviewBarrierContract) RevokeDocumentTx(tx *gorm.DB, request model.RevokeInvoiceDocumentRequest) error {
-	return contract.delegate.RevokeDocumentTx(tx, request)
+type invoiceR2ReviewProductionLockBarrier struct {
+	oldLocked       chan string
+	newBeforeQuery  chan struct{}
+	releaseOld      chan struct{}
+	applicationRead atomic.Int32
 }
 
 type invoiceR2ReviewObjectStore struct{}
@@ -248,49 +217,81 @@ func (invoiceR2ReviewObjectStore) PresignGet(context.Context, string, time.Durat
 func runInvoiceR2ReviewFinalizeRace(t *testing.T, db *gorm.DB, operations []FinalizeInvoiceDocumentOperation) []invoiceR2ReviewRaceResult {
 	t.Helper()
 	require.Len(t, operations, 2)
-	barrier := &invoiceR2ReviewPrewriteBarrier{ready: make(chan struct{}, 2), release: make(chan struct{})}
-	results := make(chan invoiceR2ReviewRaceResult, 2)
-	for _, operation := range operations {
-		operation := operation
-		go func() {
-			contract := &invoiceR2ReviewBarrierContract{readDB: db, delegate: model.NewInvoiceDocumentApplicationContract(), barrier: barrier}
-			lifecycle := NewInvoiceDocumentLifecycle(db, invoiceR2ReviewObjectStore{}, contract, 30)
-			document, err := lifecycle.Finalize(context.Background(), operation)
-			results <- invoiceR2ReviewRaceResult{document: document, err: err}
-		}()
-	}
-	waitInvoiceR2ReviewPrewriteBarrier(t, barrier)
-	return []invoiceR2ReviewRaceResult{<-results, <-results}
+	return runInvoiceR2ReviewProductionLockRace(t, db, fmt.Sprintf("finalize-%d", operations[0].DocumentID), func(index int) invoiceR2ReviewRaceResult {
+		lifecycle := NewInvoiceDocumentLifecycle(db, invoiceR2ReviewObjectStore{}, model.NewInvoiceDocumentApplicationContract(), 30)
+		document, err := lifecycle.Finalize(context.Background(), operations[index])
+		return invoiceR2ReviewRaceResult{document: document, err: err}
+	})
 }
 
 func runInvoiceR2ReviewReplacementRace(t *testing.T, db *gorm.DB, operations []ReplaceInvoiceDocumentOperation) []invoiceR2ReviewRaceResult {
 	t.Helper()
 	require.Len(t, operations, 2)
-	barrier := &invoiceR2ReviewPrewriteBarrier{ready: make(chan struct{}, 2), release: make(chan struct{})}
-	results := make(chan invoiceR2ReviewRaceResult, 2)
-	for _, operation := range operations {
-		operation := operation
-		go func() {
-			contract := &invoiceR2ReviewBarrierContract{readDB: db, delegate: model.NewInvoiceDocumentApplicationContract(), barrier: barrier}
-			lifecycle := NewInvoiceDocumentLifecycle(db, invoiceR2ReviewObjectStore{}, contract, 30)
-			document, err := lifecycle.Replace(context.Background(), operation)
-			results <- invoiceR2ReviewRaceResult{document: document, err: err}
-		}()
-	}
-	waitInvoiceR2ReviewPrewriteBarrier(t, barrier)
-	return []invoiceR2ReviewRaceResult{<-results, <-results}
+	return runInvoiceR2ReviewProductionLockRace(t, db, fmt.Sprintf("replace-%d", operations[0].NewDocumentID), func(index int) invoiceR2ReviewRaceResult {
+		lifecycle := NewInvoiceDocumentLifecycle(db, invoiceR2ReviewObjectStore{}, model.NewInvoiceDocumentApplicationContract(), 30)
+		document, err := lifecycle.Replace(context.Background(), operations[index])
+		return invoiceR2ReviewRaceResult{document: document, err: err}
+	})
 }
 
-func waitInvoiceR2ReviewPrewriteBarrier(t *testing.T, barrier *invoiceR2ReviewPrewriteBarrier) {
+func runInvoiceR2ReviewProductionLockRace(t *testing.T, db *gorm.DB, callbackSuffix string, operation func(int) invoiceR2ReviewRaceResult) []invoiceR2ReviewRaceResult {
 	t.Helper()
-	for range 2 {
-		select {
-		case <-barrier.ready:
-		case <-time.After(10 * time.Second):
-			t.Fatal("PostgreSQL race did not reach the prewrite barrier")
-		}
+	barrier := &invoiceR2ReviewProductionLockBarrier{
+		oldLocked: make(chan string, 1), newBeforeQuery: make(chan struct{}), releaseOld: make(chan struct{}),
 	}
-	close(barrier.release)
+	defer func() {
+		select {
+		case <-barrier.releaseOld:
+		default:
+			close(barrier.releaseOld)
+		}
+	}()
+	marker := "invoice-r2-review-old-lock-" + callbackSuffix
+	beforeCallback := "test:invoice-r2-review-before-lock-" + callbackSuffix
+	afterCallback := "test:invoice-r2-review-after-lock-" + callbackSuffix
+	require.NoError(t, db.Callback().Query().Before("gorm:query").Register(beforeCallback, func(tx *gorm.DB) {
+		if tx.Statement.Table != "invoice_applications" {
+			return
+		}
+		switch barrier.applicationRead.Add(1) {
+		case 1:
+			tx.InstanceSet(marker, true)
+		case 2:
+			close(barrier.newBeforeQuery)
+		}
+	}))
+	require.NoError(t, db.Callback().Query().After("gorm:query").Register(afterCallback, func(tx *gorm.DB) {
+		if _, marked := tx.InstanceGet(marker); !marked {
+			return
+		}
+		barrier.oldLocked <- tx.Statement.SQL.String()
+		<-barrier.releaseOld
+	}))
+	defer func() {
+		_ = db.Callback().Query().Remove(beforeCallback)
+		_ = db.Callback().Query().Remove(afterCallback)
+	}()
+
+	results := make(chan invoiceR2ReviewRaceResult, 2)
+	go func() { results <- operation(0) }()
+	var lockedSQL string
+	select {
+	case lockedSQL = <-barrier.oldLocked:
+	case <-time.After(10 * time.Second):
+		t.Fatal("old PostgreSQL transaction did not complete its production locking read")
+	}
+	require.Contains(t, strings.ToUpper(lockedSQL), "FOR UPDATE")
+
+	go func() { results <- operation(1) }()
+	select {
+	case <-barrier.newBeforeQuery:
+	case <-time.After(10 * time.Second):
+		t.Fatal("new PostgreSQL transaction did not enter the production locking read")
+	}
+	close(barrier.releaseOld)
+	first, second := <-results, <-results
+	require.GreaterOrEqual(t, barrier.applicationRead.Load(), int32(2), "production lock barrier callbacks were not both hit")
+	return []invoiceR2ReviewRaceResult{first, second}
 }
 
 func seedInvoiceR2ReviewApplication(t *testing.T, db *gorm.DB, suffix, status string) *model.InvoiceApplication {

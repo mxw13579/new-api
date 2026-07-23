@@ -1,9 +1,14 @@
 package router
 
 import (
+	"bytes"
 	"fmt"
+	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -16,26 +21,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
-
-func setupInvoiceReviewRouteContract(t *testing.T) *gorm.DB {
-	t.Helper()
-	gin.SetMode(gin.TestMode)
-	previousMaster := common.IsMasterNode
-	common.IsMasterNode = true
-	db, err := gorm.Open(sqlite.Open(fmt.Sprintf("file:%s?mode=memory&cache=shared", t.Name())), &gorm.Config{})
-	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&model.CasbinRule{}, &model.AuthzRole{}))
-	require.NoError(t, authz.Init(db))
-	require.NoError(t, db.Exec("CREATE TABLE invoice_route_side_effects (id integer primary key)").Error)
-	t.Cleanup(func() {
-		common.IsMasterNode = previousMaster
-		sqlDB, sqlErr := db.DB()
-		if sqlErr == nil {
-			require.NoError(t, sqlDB.Close())
-		}
-	})
-	return db
-}
 
 func TestInvoiceAdminRoutesUseIndependentReviewAndDocumentPermissions(t *testing.T) {
 	expected := map[string]authz.Permission{
@@ -56,78 +41,224 @@ func TestInvoiceAdminRoutesUseIndependentReviewAndDocumentPermissions(t *testing
 	assert.Empty(t, expected)
 }
 
-func TestInvoiceAdminPermissionMatrixDeniesBeforeHandlerAndSideEffects(t *testing.T) {
-	db := setupInvoiceReviewRouteContract(t)
+type invoiceReviewRouteFixture struct {
+	engine       *gin.Engine
+	db           *gorm.DB
+	adminID      int
+	adminToken   string
+	domainWrites atomic.Int32
+	objectCalls  atomic.Int32
+}
 
-	type subject struct {
-		name      string
-		userID    int
-		role      int
-		overrides authz.PermissionsMap
-		reviewOK  bool
-		uploadOK  bool
-	}
-	subjects := []subject{
-		{name: "unauthenticated", userID: 0, role: common.RoleCommonUser},
-		{name: "no invoice permission", userID: 101, role: common.RoleCommonUser},
-		{name: "review only", userID: 102, role: common.RoleAdminUser, overrides: authz.PermissionsMap{authz.ResourceInvoice: {authz.ActionInvoiceReview: true, authz.ActionInvoiceDocumentUpload: false}}, reviewOK: true},
-		{name: "upload only", userID: 103, role: common.RoleAdminUser, overrides: authz.PermissionsMap{authz.ResourceInvoice: {authz.ActionInvoiceReview: false, authz.ActionInvoiceDocumentUpload: true}}, uploadOK: true},
-		{name: "admin explicitly denied review", userID: 104, role: common.RoleAdminUser, overrides: authz.PermissionsMap{authz.ResourceInvoice: {authz.ActionInvoiceReview: false}}, uploadOK: true},
-		{name: "admin explicitly denied upload", userID: 105, role: common.RoleAdminUser, overrides: authz.PermissionsMap{authz.ResourceInvoice: {authz.ActionInvoiceDocumentUpload: false}}, reviewOK: true},
-		{name: "admin explicitly allowed both", userID: 106, role: common.RoleAdminUser, overrides: authz.PermissionsMap{authz.ResourceInvoice: {authz.ActionInvoiceReview: true, authz.ActionInvoiceDocumentUpload: true}}, reviewOK: true, uploadOK: true},
-	}
+func setupInvoiceReviewRouteFixture(t *testing.T) *invoiceReviewRouteFixture {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+	previousDB, previousLogDB := model.DB, model.LOG_DB
+	previousRedis, previousMaster := common.RedisEnabled, common.IsMasterNode
+	previousMainType := common.MainDatabaseType()
+	common.RedisEnabled = false
+	common.IsMasterNode = true
+	common.SetMainDatabaseType(common.DatabaseTypeSQLite)
+	databaseName := strings.ReplaceAll(t.Name(), "/", "_")
+	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", databaseName)
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	require.NoError(t, err)
+	logDB, err := gorm.Open(sqlite.Open(fmt.Sprintf("file:%s_logs?mode=memory&cache=shared", databaseName)), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(
+		&model.User{}, &model.CasbinRule{}, &model.AuthzRole{},
+		&model.InvoiceApplication{}, &model.InvoiceIssuance{}, &model.InvoiceDocument{},
+	))
+	require.NoError(t, logDB.AutoMigrate(&model.Log{}))
+	model.DB, model.LOG_DB = db, logDB
+	require.NoError(t, authz.Init(db))
 
-	for _, subject := range subjects {
-		if subject.overrides != nil {
-			require.NoError(t, authz.SetUserPermissions(subject.userID, subject.overrides))
+	fixture := &invoiceReviewRouteFixture{db: db, adminID: 9101, adminToken: strings.Repeat("d", 32)}
+	admin := &model.User{
+		Id: fixture.adminID, Username: "invoice-route-denied", Password: "test-password",
+		AccessToken: &fixture.adminToken, Role: common.RoleAdminUser, Status: common.UserStatusEnabled,
+		Group: "default", AffCode: "invoice-route-denied", AuthVersion: 1,
+	}
+	require.NoError(t, db.Create(admin).Error)
+	require.NoError(t, authz.SetUserPermissions(fixture.adminID, authz.PermissionsMap{
+		authz.ResourceInvoice: {
+			authz.ActionInvoiceReview:         false,
+			authz.ActionInvoiceDocumentUpload: false,
+		},
+	}))
+	seedInvoiceReviewRouteApplications(t, db)
+
+	callbackPrefix := "test:invoice-review-route-domain-write"
+	countDomainWrite := func(tx *gorm.DB) {
+		if strings.HasPrefix(tx.Statement.Table, "invoice_") {
+			fixture.domainWrites.Add(1)
 		}
-		for _, endpoint := range []struct {
+	}
+	require.NoError(t, db.Callback().Create().Before("gorm:create").Register(callbackPrefix+":create", countDomainWrite))
+	require.NoError(t, db.Callback().Update().Before("gorm:update").Register(callbackPrefix+":update", countDomainWrite))
+	require.NoError(t, db.Callback().Delete().Before("gorm:delete").Register(callbackPrefix+":delete", countDomainWrite))
+
+	objectServer := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		fixture.objectCalls.Add(1)
+	}))
+	t.Setenv("INVOICE_R2_ENDPOINT", objectServer.URL)
+	t.Setenv("INVOICE_R2_BUCKET", "test-fake-private-bucket")
+	t.Setenv("INVOICE_R2_ACCESS_KEY_ID", "test-fake-access-key")
+	t.Setenv("INVOICE_R2_SECRET_ACCESS_KEY", "test-fake-secret-key")
+
+	fixture.engine = gin.New()
+	SetApiRouter(fixture.engine)
+	t.Cleanup(func() {
+		objectServer.Close()
+		_ = db.Callback().Create().Remove(callbackPrefix + ":create")
+		_ = db.Callback().Update().Remove(callbackPrefix + ":update")
+		_ = db.Callback().Delete().Remove(callbackPrefix + ":delete")
+		model.DB, model.LOG_DB = previousDB, previousLogDB
+		common.RedisEnabled, common.IsMasterNode = previousRedis, previousMaster
+		common.SetMainDatabaseType(previousMainType)
+	})
+	return fixture
+}
+
+func TestInvoiceAdminPermissionDenialsUseProductionAuthenticationAndHaveNoDomainSideEffects(t *testing.T) {
+	fixture := setupInvoiceReviewRouteFixture(t)
+	tests := []struct {
+		name        string
+		path        string
+		contentType string
+		body        []byte
+	}{
+		{name: "approve", path: "/api/admin/invoices/9201/review", contentType: "application/json", body: []byte(`{"action":"approve","expected_status":"submitted"}`)},
+		{name: "reject", path: "/api/admin/invoices/9202/reject", contentType: "application/json", body: []byte(`{"expected_status":"submitted","reason":"test rejection"}`)},
+		invoiceReviewUploadRouteCase(t, "initial upload", 9203, constant.InvoiceApplicationStatusApproved),
+		invoiceReviewUploadRouteCase(t, "replacement upload", 9204, constant.InvoiceApplicationStatusIssued),
+	}
+
+	var baselineApplications []model.InvoiceApplication
+	require.NoError(t, fixture.db.Order("id").Find(&baselineApplications).Error)
+	for _, testCase := range tests {
+		for _, identity := range []struct {
 			name       string
-			path       string
-			permission *authz.Permission
-			allowed    bool
+			authorized bool
+			status     int
+			code       string
 		}{
-			{name: "review", path: "/invoices/1/review", permission: &authz.InvoiceReview, allowed: subject.reviewOK},
-			{name: "document upload", path: "/invoices/1/document", permission: &authz.InvoiceDocumentUpload, allowed: subject.uploadOK},
+			{name: "unauthenticated", status: http.StatusUnauthorized, code: "AUTH_UNAUTHORIZED"},
+			{name: "authenticated permission denied", authorized: true, status: http.StatusForbidden, code: constant.InvoiceCodeForbidden},
 		} {
-			t.Run(subject.name+"/"+endpoint.name, func(t *testing.T) {
-				invocations := 0
-				engine := gin.New()
-				engine.Use(func(c *gin.Context) {
-					c.Set("id", subject.userID)
-					c.Set("role", subject.role)
+			t.Run(testCase.name+"/"+identity.name, func(t *testing.T) {
+				var bodyReads atomic.Int32
+				request := httptest.NewRequest(http.MethodPost, testCase.path, &invoiceReviewRouteReadSentinel{
+					reader: bytes.NewReader(testCase.body), reads: &bodyReads,
 				})
-				registerInvoiceRoutes(engine.Group(""), []invoiceRoute{{
-					method: http.MethodPost, path: endpoint.path, handlerName: "sideEffectSentinel", permission: endpoint.permission,
-					handler: func(c *gin.Context) {
-						invocations++
-						require.NoError(t, db.Exec("INSERT INTO invoice_route_side_effects DEFAULT VALUES").Error)
-						c.Status(http.StatusNoContent)
-					},
-				}})
-
+				request.Header.Set("Content-Type", testCase.contentType)
+				if identity.authorized {
+					request.Header.Set("Authorization", "Bearer "+fixture.adminToken)
+					request.Header.Set("New-Api-User", fmt.Sprint(fixture.adminID))
+				}
 				recorder := httptest.NewRecorder()
-				engine.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, endpoint.path, nil))
+				fixture.engine.ServeHTTP(recorder, request)
 
-				if endpoint.allowed {
-					assert.Equal(t, http.StatusNoContent, recorder.Code)
-					assert.Equal(t, 1, invocations)
-					require.NoError(t, db.Exec("DELETE FROM invoice_route_side_effects").Error)
-					return
-				}
-				assert.Equal(t, http.StatusForbidden, recorder.Code)
-				assert.Zero(t, invocations)
-				var payload struct {
-					Data struct {
+				assert.Equal(t, identity.status, recorder.Code)
+				if identity.status == http.StatusUnauthorized {
+					var response struct {
 						Code string `json:"code"`
-					} `json:"data"`
+					}
+					require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+					assert.Equal(t, identity.code, response.Code)
+				} else {
+					var response struct {
+						Data struct {
+							Code string `json:"code"`
+						} `json:"data"`
+					}
+					require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+					assert.Equal(t, identity.code, response.Data.Code)
 				}
-				require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &payload))
-				assert.Equal(t, constant.InvoiceCodeForbidden, payload.Data.Code)
-				var sideEffects int64
-				require.NoError(t, db.Table("invoice_route_side_effects").Count(&sideEffects).Error)
-				assert.Zero(t, sideEffects)
+				assert.Zero(t, bodyReads.Load(), "invoice handler must not consume the request body")
+				assert.Zero(t, fixture.domainWrites.Load(), "invoice service must not mutate domain tables")
+				assert.Zero(t, fixture.objectCalls.Load(), "invoice service must not contact the object store")
+				var applications []model.InvoiceApplication
+				require.NoError(t, fixture.db.Order("id").Find(&applications).Error)
+				assert.Equal(t, baselineApplications, applications)
 			})
 		}
 	}
+}
+
+type invoiceReviewRouteReadSentinel struct {
+	reader io.Reader
+	reads  *atomic.Int32
+}
+
+func (sentinel *invoiceReviewRouteReadSentinel) Read(buffer []byte) (int, error) {
+	sentinel.reads.Add(1)
+	return sentinel.reader.Read(buffer)
+}
+
+func invoiceReviewUploadRouteCase(t *testing.T, name string, applicationID int64, status string) struct {
+	name        string
+	path        string
+	contentType string
+	body        []byte
+} {
+	t.Helper()
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	require.NoError(t, writer.WriteField("expected_status", status))
+	require.NoError(t, writer.WriteField("invoice_number", "INV-ROUTE-SENTINEL"))
+	require.NoError(t, writer.WriteField("invoice_date", "100"))
+	require.NoError(t, writer.WriteField("face_amount_minor", "500"))
+	require.NoError(t, writer.WriteField("currency", constant.InvoiceCurrencyCNY))
+	require.NoError(t, writer.WriteField("pdf_facts_attested", "true"))
+	file, err := writer.CreateFormFile("file", "invoice.pdf")
+	require.NoError(t, err)
+	_, err = file.Write([]byte("%PDF-1.7\n%%EOF"))
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+	return struct {
+		name        string
+		path        string
+		contentType string
+		body        []byte
+	}{name: name, path: fmt.Sprintf("/api/admin/invoices/%d/document", applicationID), contentType: writer.FormDataContentType(), body: body.Bytes()}
+}
+
+func seedInvoiceReviewRouteApplications(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	statuses := map[int64]string{
+		9201: constant.InvoiceApplicationStatusSubmitted,
+		9202: constant.InvoiceApplicationStatusSubmitted,
+		9203: constant.InvoiceApplicationStatusApproved,
+		9204: constant.InvoiceApplicationStatusIssued,
+	}
+	for id, status := range statuses {
+		application := &model.InvoiceApplication{
+			ID: id, ApplicationNo: fmt.Sprintf("INV-ROUTE-%d", id), UserID: 1,
+			RequestID: fmt.Sprintf("invoice-route-%d", id), RequestFingerprint: strings.Repeat("f", 64),
+			Type: constant.InvoiceTypePersonal, Status: status, PaymentReviewStatus: constant.InvoicePaymentReviewStatusNone,
+			Currency: constant.InvoiceCurrencyCNY, AmountMinor: 500, FeeMethod: model.InvoiceFeeMethodWalletQuota,
+			FeeStatus: constant.InvoiceFeeStatusNotRequired, ProfileSnapshot: `{}`, PolicySnapshot: `{}`, SubmittedAt: 1,
+		}
+		require.NoError(t, db.Create(application).Error)
+	}
+	issuance := &model.InvoiceIssuance{
+		ApplicationID: 9204, InvoiceNumber: "INV-ROUTE-SENTINEL", InvoiceDate: 100,
+		FaceAmountMinor: 500, Currency: constant.InvoiceCurrencyCNY, CreatedBy: 9101, CreatedAt: 100, UpdatedAt: 100,
+	}
+	require.NoError(t, db.Create(issuance).Error)
+	objectKey := "invoices/route-replacement.pdf"
+	version, actor, availableAt, expiresAt := int64(1), 9101, int64(100), int64(100+30*86400)
+	document := &model.InvoiceDocument{
+		ID: 9304, ApplicationID: 9204, IssuanceID: &issuance.ID, Version: &version,
+		R2Bucket: "test-fake-private-bucket", ObjectKey: &objectKey, ContentType: model.InvoicePDFContentType,
+		SizeBytes: 100, SHA256: strings.Repeat("a", 64), Status: model.InvoiceDocumentStatusAvailable,
+		OperationToken: strings.Repeat("b", 64), OperationStartedAt: 100, UploadedBy: actor, UploadedAt: 100,
+		PDFFactsAttested: true, AttestedBy: &actor, AttestedAt: &availableAt,
+		AttestedProfileSnapshotSHA256: strings.Repeat("c", 64), AvailableAt: &availableAt,
+		RetentionDaysSnapshot: 30, ExpiresAt: &expiresAt, CreatedAt: 100, UpdatedAt: 100,
+	}
+	require.NoError(t, db.Create(document).Error)
+	require.NoError(t, db.Model(&model.InvoiceApplication{}).Where("id = ?", 9204).
+		Updates(map[string]any{"active_document_id": document.ID, "issued_at": availableAt}).Error)
 }
