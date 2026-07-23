@@ -90,7 +90,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { runPromptSubmission } from '@/lib/prompt-submission'
+import {
+  runPromptSubmission,
+  shouldClearSubmittedText,
+} from '@/lib/prompt-submission'
 import { cn } from '@/lib/utils'
 
 // ============================================================================
@@ -472,6 +475,8 @@ export const PromptInput = ({
   // Try to use a provider controller if present
   const controller = useOptionalPromptInputController()
   const usingProvider = !!controller
+  const providerTextRef = useRef(controller?.textInput.value ?? '')
+  providerTextRef.current = controller?.textInput.value ?? ''
 
   // Refs
   const inputRef = useRef<HTMLInputElement | null>(null)
@@ -724,6 +729,7 @@ export const PromptInput = ({
           const formData = new FormData(form)
           return (formData.get('message') as string) || ''
         })()
+    const submittedFileIds = files.map((file) => file.id)
 
     void runPromptSubmission({
       text,
@@ -742,10 +748,19 @@ export const PromptInput = ({
         ),
       submit: onSubmit,
       onSuccess: () => {
-        clear()
+        for (const id of submittedFileIds) {
+          remove(id)
+        }
         if (usingProvider) {
-          controller.textInput.clear()
-        } else {
+          if (shouldClearSubmittedText(providerTextRef.current, text)) {
+            controller.textInput.clear()
+          }
+        } else if (
+          shouldClearSubmittedText(
+            String(new FormData(form).get('message') ?? ''),
+            text
+          )
+        ) {
           form.reset()
         }
       },

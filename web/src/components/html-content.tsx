@@ -108,6 +108,16 @@ const inlineSanitizeOptions = {
   ],
 } satisfies Config
 
+DOMPurify.addHook('uponSanitizeAttribute', (node, data) => {
+  if (
+    node instanceof HTMLAnchorElement &&
+    data.attrName === 'target' &&
+    data.attrValue === '_blank'
+  ) {
+    data.forceKeepAttr = true
+  }
+})
+
 function hardenIsolatedHtml(html: string): string {
   if (typeof document === 'undefined') {
     return html

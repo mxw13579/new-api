@@ -211,6 +211,12 @@ export const WebPreviewBody = ({
 }: WebPreviewBodyProps) => {
   const { t } = useTranslation()
   const { url } = useWebPreview()
+  const {
+    srcDoc: _srcDoc,
+    sandbox: _sandbox,
+    referrerPolicy: _referrerPolicy,
+    ...safeProps
+  } = props as ComponentProps<'iframe'>
   const iframeSrc = validateEmbeddableUrl(src ?? url, {
     allowLocalhostHttp: import.meta.env.DEV,
   })
@@ -228,7 +234,7 @@ export const WebPreviewBody = ({
       <iframe
         className={cn('size-full', className)}
         title={t('Preview')}
-        {...props}
+        {...safeProps}
         referrerPolicy='no-referrer'
         sandbox='allow-scripts allow-forms allow-popups allow-presentation'
         src={iframeSrc}

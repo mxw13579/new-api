@@ -25,6 +25,7 @@ import {
   PromptInputTextarea,
   type PromptInputMessage,
 } from '@/components/ai-elements/prompt-input'
+import { shouldClearSubmittedText } from '@/lib/prompt-submission'
 
 import { getSubmittableInputText } from '../../lib'
 import type {
@@ -89,7 +90,11 @@ export function PlaygroundInput({
 
     if (!submittableText) return
     onSubmit(submittableText)
-    setText('')
+    setText((currentText) =>
+      shouldClearSubmittedText(currentText, message.text ?? '')
+        ? ''
+        : currentText
+    )
   }
 
   return (

@@ -66,8 +66,6 @@ function Chat2LinkPage() {
     }
 
     if (!validatedTemplate) {
-      toast.error(t('Unable to open this URL safely.'))
-      navigate({ to: '/dashboard' })
       return
     }
 
@@ -110,6 +108,16 @@ function Chat2LinkPage() {
     navigate,
     t,
   ])
+
+  if (firstWebPreset && !validatedTemplate) {
+    return (
+      <div className='flex h-full items-center justify-center p-6 text-center'>
+        <p className='text-destructive text-sm'>
+          {t('Unable to open this URL safely.')}
+        </p>
+      </div>
+    )
+  }
 
   return (
     <div className='flex h-full flex-col items-center justify-center gap-3'>

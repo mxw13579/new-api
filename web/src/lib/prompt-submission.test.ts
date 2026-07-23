@@ -19,9 +19,17 @@ For commercial licensing, please contact support@quantumnous.com
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 
-import { runPromptSubmission } from './prompt-submission'
+import {
+  runPromptSubmission,
+  shouldClearSubmittedText,
+} from './prompt-submission'
 
 describe('runPromptSubmission', () => {
+  test('does not clear text entered while an earlier submission is pending', () => {
+    assert.equal(shouldClearSubmittedText('next message', 'submitted'), false)
+    assert.equal(shouldClearSubmittedText('submitted', 'submitted'), true)
+  })
+
   for (const failurePoint of ['conversion', 'submit'] as const) {
     test(`reports a ${failurePoint} rejection without running success cleanup`, async () => {
       const error = new Error(`${failurePoint} failed`)

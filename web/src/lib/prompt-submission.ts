@@ -28,6 +28,13 @@ interface PromptSubmissionOptions<TFile, TEvent> {
   onError: (error: unknown) => void
 }
 
+export function shouldClearSubmittedText(
+  currentText: string,
+  submittedText: string
+): boolean {
+  return currentText === submittedText
+}
+
 export async function runPromptSubmission<TFile, TEvent>(
   options: PromptSubmissionOptions<TFile, TEvent>
 ): Promise<void> {
