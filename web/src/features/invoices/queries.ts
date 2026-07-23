@@ -25,12 +25,22 @@ export const invoiceQueryKeys = {
   all: ['invoices'] as const,
   config: () => [...invoiceQueryKeys.all, 'config'] as const,
   profiles: () => [...invoiceQueryKeys.all, 'profiles'] as const,
+  eligibleOrdersList: () =>
+    [...invoiceQueryKeys.all, 'eligible-orders'] as const,
   eligibleOrders: (page: number, pageSize: number) =>
-    [...invoiceQueryKeys.all, 'eligible-orders', page, pageSize] as const,
+    [...invoiceQueryKeys.eligibleOrdersList(), page, pageSize] as const,
+  applicationsList: () => [...invoiceQueryKeys.all, 'applications'] as const,
   applications: (page: number, pageSize: number) =>
-    [...invoiceQueryKeys.all, 'applications', page, pageSize] as const,
+    [...invoiceQueryKeys.applicationsList(), page, pageSize] as const,
   application: (applicationId: number) =>
     [...invoiceQueryKeys.all, 'application', applicationId] as const,
+  adminApplicationsList: () =>
+    [...invoiceQueryKeys.all, 'admin', 'applications'] as const,
+  adminApplications: (page: number, pageSize: number) =>
+    [...invoiceQueryKeys.adminApplicationsList(), page, pageSize] as const,
+  adminApplication: (applicationId: number) =>
+    [...invoiceQueryKeys.all, 'admin', 'application', applicationId] as const,
+  settings: () => [...invoiceQueryKeys.all, 'settings'] as const,
 }
 
 /**

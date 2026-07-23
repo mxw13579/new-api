@@ -26,28 +26,49 @@ import {
 } from './api'
 
 describe('HTTP InvoiceApi adapter', () => {
-  test('uses the frozen endpoints and preserves profile expected_version', async () => {
-    const calls: Array<{ method: string; url: string; body?: unknown }> = []
+  test('uses frozen endpoints and both skip flags for every user request', async () => {
+    const calls: Array<{
+      method: string
+      url: string
+      body?: unknown
+      config?: unknown
+    }> = []
     const transport: InvoiceHttpTransport = {
-      get: async (url) => {
-        calls.push({ method: 'GET', url })
+      get: async (url, config) => {
+        calls.push({ method: 'GET', url, config })
         return { data: { success: true, message: '', data: [] } }
       },
-      post: async (url, body) => {
-        calls.push({ method: 'POST', url, body })
-        return { data: { success: true, message: '', data: body } }
+      post: async (url, body, config) => {
+        calls.push({ method: 'POST', url, body, config })
+        return {
+          data: {
+            success: true,
+            message: '',
+            data: url.endsWith('/document-url')
+              ? { download_url: 'https://private.example.test/invoice.pdf' }
+              : body,
+          },
+        }
       },
-      put: async (url, body) => {
-        calls.push({ method: 'PUT', url, body })
+      put: async (url, body, config) => {
+        calls.push({ method: 'PUT', url, body, config })
         return { data: { success: true, message: '', data: body } }
       },
       delete: async (url, config) => {
-        calls.push({ method: 'DELETE', url, body: config?.data })
+        calls.push({ method: 'DELETE', url, body: config?.data, config })
         return { data: { success: true, message: '', data: null } }
       },
     }
     const invoiceApi = createHttpInvoiceApi(transport)
 
+    await invoiceApi.getConfig()
+    await invoiceApi.listProfiles()
+    await invoiceApi.createProfile({
+      type: 'personal',
+      title: 'Alice',
+      tax_number: '',
+      is_default: true,
+    })
     await invoiceApi.updateProfile({
       id: 4,
       expected_version: 9,
@@ -56,25 +77,39 @@ describe('HTTP InvoiceApi adapter', () => {
       is_default: true,
     })
     await invoiceApi.deleteProfile({ id: 4, expected_version: 10 })
+    await invoiceApi.listEligibleOrders({ page: 2, page_size: 20 })
+    await invoiceApi.createApplication({
+      request_id: 'request-1',
+      profile_id: 4,
+      profile_version: 9,
+      topup_ids: [8],
+    })
+    await invoiceApi.listApplications({ page: 3, page_size: 10 })
+    await invoiceApi.getApplication(7)
+    await invoiceApi.cancelApplication(7)
+    const downloadUrl = await invoiceApi.requestDocumentDownloadUrl(7)
 
-    assert.deepEqual(calls, [
-      {
-        method: 'PUT',
-        url: '/api/user/invoice/profiles',
-        body: {
-          id: 4,
-          expected_version: 9,
-          title: 'Acme',
-          tax_number: '91310000',
-          is_default: true,
-        },
-      },
-      {
-        method: 'DELETE',
-        url: '/api/user/invoice/profiles',
-        body: { id: 4, expected_version: 10 },
-      },
-    ])
+    assert.deepEqual(calls[3].body, {
+      id: 4,
+      expected_version: 9,
+      title: 'Acme',
+      tax_number: '91310000',
+      is_default: true,
+    })
+    assert.deepEqual(calls[4].body, { id: 4, expected_version: 10 })
+    assert.equal(calls.at(-1)?.url, '/api/user/invoices/7/document-url')
+    assert.equal(downloadUrl, 'https://private.example.test/invoice.pdf')
+    assert.equal(calls.length, 11)
+    for (const call of calls) {
+      assert.equal(
+        (call.config as { skipBusinessError?: boolean }).skipBusinessError,
+        true
+      )
+      assert.equal(
+        (call.config as { skipErrorHandler?: boolean }).skipErrorHandler,
+        true
+      )
+    }
   })
 
   test('surfaces stable 409 code for profile conflict recovery', async () => {
@@ -109,6 +144,61 @@ describe('HTTP InvoiceApi adapter', () => {
       (error: unknown) =>
         error instanceof InvoiceApiError &&
         error.code === 'INVOICE_STATE_CONFLICT'
+    )
+  })
+
+  test('preserves stable codes from rejected response envelopes', async () => {
+    const transport: InvoiceHttpTransport = {
+      get: async () => {
+        throw {
+          response: {
+            data: {
+              success: false,
+              message: 'server wording must not drive UI',
+              data: { code: 'INVOICE_NOT_FOUND' },
+            },
+          },
+        }
+      },
+      post: async () => {
+        throw new Error('unused')
+      },
+      put: async () => {
+        throw new Error('unused')
+      },
+      delete: async () => {
+        throw new Error('unused')
+      },
+    }
+
+    await assert.rejects(
+      createHttpInvoiceApi(transport).getApplication(99),
+      (error: unknown) =>
+        error instanceof InvoiceApiError && error.code === 'INVOICE_NOT_FOUND'
+    )
+  })
+
+  test('maps unrecognized rejected errors to the safe stable code', async () => {
+    const transport: InvoiceHttpTransport = {
+      get: async () => {
+        throw new Error('network details')
+      },
+      post: async () => {
+        throw new Error('unused')
+      },
+      put: async () => {
+        throw new Error('unused')
+      },
+      delete: async () => {
+        throw new Error('unused')
+      },
+    }
+
+    await assert.rejects(
+      createHttpInvoiceApi(transport).getConfig(),
+      (error: unknown) =>
+        error instanceof InvoiceApiError &&
+        error.code === 'INVOICE_INTERNAL_ERROR'
     )
   })
 })

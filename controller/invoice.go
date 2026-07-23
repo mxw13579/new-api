@@ -222,6 +222,21 @@ func DownloadInvoiceDocument(c *gin.Context) {
 	c.Redirect(http.StatusFound, url)
 }
 
+// GetInvoiceDocumentURL returns an owner-scoped short-lived private document URL to authenticated clients.
+func GetInvoiceDocumentURL(c *gin.Context) {
+	id, err := invoiceApplicationID(c)
+	if err != nil {
+		writeInvoiceError(c, err)
+		return
+	}
+	url, err := getInvoiceDocumentDownload(c.Request.Context(), c.GetInt("id"), id)
+	if err != nil {
+		writeInvoiceError(c, err)
+		return
+	}
+	writeInvoiceSuccess(c, http.StatusOK, gin.H{"download_url": url})
+}
+
 // CancelInvoiceApplication cancels an owned submitted invoice application and returns its updated detail.
 func CancelInvoiceApplication(c *gin.Context) {
 	id, err := invoiceApplicationID(c)

@@ -230,5 +230,59 @@ export interface InvoiceApi {
   ): Promise<InvoicePage<InvoiceApplicationSummary>>
   getApplication(applicationId: number): Promise<InvoiceApplicationDetail>
   cancelApplication(applicationId: number): Promise<InvoiceApplicationDetail>
+  requestDocumentDownloadUrl?(applicationId: number): Promise<string>
   getDocumentDownloadUrl(applicationId: number): string
+}
+
+/** Requires the authenticated companion endpoint used by production web downloads. */
+export interface AuthenticatedInvoiceApi extends InvoiceApi {
+  requestDocumentDownloadUrl(applicationId: number): Promise<string>
+}
+
+/** Defines an administrator review transition. */
+export interface ReviewInvoiceApplicationRequest {
+  action: 'reviewing' | 'approve'
+  expected_status: 'submitted' | 'reviewing'
+}
+
+/** Defines an administrator rejection transition. */
+export interface RejectInvoiceApplicationRequest {
+  expected_status: 'submitted' | 'reviewing'
+  reason: string
+}
+
+/** Defines the administrator invoice operations without user-cache overlap. */
+export interface AdminInvoiceApi {
+  listApplications(
+    request: InvoicePageRequest
+  ): Promise<InvoicePage<InvoiceApplicationSummary>>
+  getApplication(applicationId: number): Promise<InvoiceApplicationDetail>
+  reviewApplication(
+    applicationId: number,
+    request: ReviewInvoiceApplicationRequest
+  ): Promise<InvoiceApplicationDetail>
+  rejectApplication(
+    applicationId: number,
+    request: RejectInvoiceApplicationRequest
+  ): Promise<InvoiceApplicationDetail>
+  uploadDocument(
+    applicationId: number,
+    document: FormData
+  ): Promise<InvoiceApplicationDetail>
+}
+
+/** Defines the complete editable invoice policy object. */
+export interface InvoiceSetting {
+  personal_enabled: boolean
+  company_enabled: boolean
+  application_window_days: number
+  minimum_amount_minor: number
+  fee_quota: number
+  pdf_retention_days: number
+}
+
+/** Defines the independently permissioned invoice-settings API. */
+export interface InvoiceSettingsApi {
+  getSetting(): Promise<InvoiceSetting>
+  updateSetting(setting: InvoiceSetting): Promise<InvoiceSetting>
 }

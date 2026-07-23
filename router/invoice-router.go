@@ -32,6 +32,7 @@ var invoiceUserRoutes = []invoiceRoute{
 	{http.MethodGet, "/invoices", "ListInvoiceApplications", controller.ListInvoiceApplications, nil, false},
 	{http.MethodGet, "/invoices/:id", "GetInvoiceApplication", controller.GetInvoiceApplication, nil, false},
 	{http.MethodGet, "/invoices/:id/document", "DownloadInvoiceDocument", controller.DownloadInvoiceDocument, nil, true},
+	{http.MethodPost, "/invoices/:id/document-url", "GetInvoiceDocumentURL", controller.GetInvoiceDocumentURL, nil, true},
 	{http.MethodPost, "/invoices/:id/cancel", "CancelInvoiceApplication", controller.CancelInvoiceApplication, nil, false},
 }
 

@@ -23,9 +23,11 @@ import (
 )
 
 type invoiceControllerEnvelope struct {
-	Success bool `json:"success"`
+	Success bool   `json:"success"`
+	Message string `json:"message"`
 	Data    struct {
-		Code string `json:"code"`
+		Code        string `json:"code"`
+		DownloadURL string `json:"download_url"`
 	} `json:"data"`
 }
 
@@ -117,6 +119,55 @@ func TestInvoiceDownloadControllerMasksCrossUserAndDoesNotLeakURLs(t *testing.T)
 		assert.NotContains(t, recorder.Body.String(), "token")
 		assert.Contains(t, recorder.Body.String(), constant.InvoiceCodeNotFound)
 	}
+}
+
+func TestInvoiceDocumentURLControllerMasksCrossUserExactlyLikeMissing(t *testing.T) {
+	setupInvoiceControllerDB(t)
+	application := model.InvoiceApplication{
+		ApplicationNo: "INV-PRIVATE-DOCUMENT-URL", UserID: 11, RequestID: "request", RequestFingerprint: "fingerprint",
+		Type: constant.InvoiceTypePersonal, Status: constant.InvoiceApplicationStatusIssued,
+		PaymentReviewStatus: constant.InvoicePaymentReviewStatusNone, Currency: constant.InvoiceCurrencyCNY,
+		FeeStatus: constant.InvoiceFeeStatusNotRequired, ProfileSnapshot: `{}`, PolicySnapshot: `{}`, SubmittedAt: 1,
+	}
+	require.NoError(t, model.DB.Create(&application).Error)
+
+	responses := make([]*httptest.ResponseRecorder, 0, 2)
+	for _, applicationID := range []int64{application.ID, application.ID + 999} {
+		context, recorder := invoiceControllerContext(http.MethodPost, "/", "")
+		context.Params = gin.Params{{Key: "id", Value: strconv.FormatInt(applicationID, 10)}}
+		context.Set("id", 12)
+
+		GetInvoiceDocumentURL(context)
+
+		assert.Equal(t, http.StatusNotFound, recorder.Code)
+		assert.Empty(t, recorder.Header().Get("Location"))
+		assert.NotContains(t, recorder.Body.String(), "download_url")
+		assert.NotContains(t, recorder.Body.String(), "http")
+		responses = append(responses, recorder)
+	}
+	assert.Equal(t, responses[0].Code, responses[1].Code)
+	assert.Equal(t, responses[0].Body.String(), responses[1].Body.String())
+}
+
+func TestInvoiceDocumentURLControllerReturnsOnlyAuthenticatedDownloadURL(t *testing.T) {
+	previous := getInvoiceDocumentDownload
+	t.Cleanup(func() { getInvoiceDocumentDownload = previous })
+
+	getInvoiceDocumentDownload = func(context.Context, int, int64) (string, error) {
+		return "https://private.example.test/invoice.pdf?signature=test-only", nil
+	}
+	requestContext, recorder := invoiceControllerContext(http.MethodPost, "/", "")
+	requestContext.Params = gin.Params{{Key: "id", Value: "7"}}
+	requestContext.Set("id", 11)
+
+	GetInvoiceDocumentURL(requestContext)
+
+	assert.Equal(t, http.StatusOK, recorder.Code)
+	assert.Empty(t, recorder.Header().Get("Location"))
+	var envelope invoiceControllerEnvelope
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &envelope))
+	assert.True(t, envelope.Success)
+	assert.Equal(t, "https://private.example.test/invoice.pdf?signature=test-only", envelope.Data.DownloadURL)
 }
 
 func TestInvoiceDownloadControllerRedirectsWithoutLeakingErrors(t *testing.T) {

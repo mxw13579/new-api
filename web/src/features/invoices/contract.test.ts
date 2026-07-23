@@ -30,6 +30,7 @@ import {
   getInvoiceErrorMessageKey,
 } from './contract'
 import { createInvoiceDemoApi } from './demo-api'
+import { invoiceQueryKeys } from './queries'
 import type {
   InvoiceApi,
   InvoiceApplicationSummary,
@@ -257,5 +258,22 @@ describe('invoice frontend contract', () => {
     )
     assert.match(source, /createHttpInvoiceApi/)
     assert.doesNotMatch(source, /demo-api|fixture|fallback/i)
+  })
+
+  test('query keys expose precise user, admin, and settings list prefixes', () => {
+    assert.deepEqual(invoiceQueryKeys.eligibleOrdersList(), [
+      'invoices',
+      'eligible-orders',
+    ])
+    assert.deepEqual(invoiceQueryKeys.applicationsList(), [
+      'invoices',
+      'applications',
+    ])
+    assert.deepEqual(invoiceQueryKeys.adminApplicationsList(), [
+      'invoices',
+      'admin',
+      'applications',
+    ])
+    assert.deepEqual(invoiceQueryKeys.settings(), ['invoices', 'settings'])
   })
 })

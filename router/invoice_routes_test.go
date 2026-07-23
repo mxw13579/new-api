@@ -20,17 +20,18 @@ import (
 
 func TestPersonalInvoiceRouteContract(t *testing.T) {
 	userRoutes := map[string]string{
-		http.MethodGet + " /invoice/config":          "GetInvoiceConfig",
-		http.MethodGet + " /invoice/profiles":        "ListInvoiceProfiles",
-		http.MethodPost + " /invoice/profiles":       "CreateInvoiceProfile",
-		http.MethodPut + " /invoice/profiles":        "UpdateInvoiceProfile",
-		http.MethodDelete + " /invoice/profiles":     "DeleteInvoiceProfile",
-		http.MethodGet + " /invoice/eligible-orders": "ListEligibleInvoiceOrders",
-		http.MethodPost + " /invoices":               "CreateInvoiceApplication",
-		http.MethodGet + " /invoices":                "ListInvoiceApplications",
-		http.MethodGet + " /invoices/:id":            "GetInvoiceApplication",
-		http.MethodPost + " /invoices/:id/cancel":    "CancelInvoiceApplication",
-		http.MethodGet + " /invoices/:id/document":   "DownloadInvoiceDocument",
+		http.MethodGet + " /invoice/config":             "GetInvoiceConfig",
+		http.MethodGet + " /invoice/profiles":           "ListInvoiceProfiles",
+		http.MethodPost + " /invoice/profiles":          "CreateInvoiceProfile",
+		http.MethodPut + " /invoice/profiles":           "UpdateInvoiceProfile",
+		http.MethodDelete + " /invoice/profiles":        "DeleteInvoiceProfile",
+		http.MethodGet + " /invoice/eligible-orders":    "ListEligibleInvoiceOrders",
+		http.MethodPost + " /invoices":                  "CreateInvoiceApplication",
+		http.MethodGet + " /invoices":                   "ListInvoiceApplications",
+		http.MethodGet + " /invoices/:id":               "GetInvoiceApplication",
+		http.MethodPost + " /invoices/:id/cancel":       "CancelInvoiceApplication",
+		http.MethodGet + " /invoices/:id/document":      "DownloadInvoiceDocument",
+		http.MethodPost + " /invoices/:id/document-url": "GetInvoiceDocumentURL",
 	}
 	adminRoutes := map[string]string{
 		http.MethodGet + " /invoices":               "AdminListInvoiceApplications",
@@ -60,7 +61,7 @@ func TestInvoiceSettingRoutesUseInvoicePermissionForAdminAndRoot(t *testing.T) {
 	assert.Equal(t, 2, matched)
 }
 
-func TestInvoiceDownloadProductionRouteRequiresUserAuthAndUsesNoStore(t *testing.T) {
+func TestInvoiceDownloadProductionRoutesRequireUserAuthAndUseNoStore(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	previousDB, previousLogDB := model.DB, model.LOG_DB
 	previousRedis := common.RedisEnabled
@@ -89,44 +90,98 @@ func TestInvoiceDownloadProductionRouteRequiresUserAuthAndUsesNoStore(t *testing
 
 	engine := gin.New()
 	SetApiRouter(engine)
-	path := fmt.Sprintf("/api/user/invoices/%d/document", application.ID)
-	for _, test := range []struct {
-		name       string
-		token      string
-		wantStatus int
-		wantCode   string
-	}{
-		{name: "missing authentication", wantStatus: http.StatusUnauthorized, wantCode: "AUTH_UNAUTHORIZED"},
-		{name: "invalid authentication", token: "invalid-local-token", wantStatus: http.StatusUnauthorized, wantCode: "AUTH_UNAUTHORIZED"},
-		{name: "authenticated owned unavailable", token: accessToken, wantStatus: http.StatusConflict, wantCode: constant.InvoiceCodeDocumentUnavailable},
+	for _, path := range []string{
+		fmt.Sprintf("/api/user/invoices/%d/document", application.ID),
+		fmt.Sprintf("/api/user/invoices/%d/document-url", application.ID),
 	} {
-		t.Run(test.name, func(t *testing.T) {
-			request := httptest.NewRequest(http.MethodGet, path, nil)
-			if test.token != "" {
-				request.Header.Set("Authorization", "Bearer "+test.token)
-			}
-			response := httptest.NewRecorder()
+		for _, test := range []struct {
+			name       string
+			token      string
+			wantStatus int
+			wantCode   string
+		}{
+			{name: "missing authentication", wantStatus: http.StatusUnauthorized, wantCode: "AUTH_UNAUTHORIZED"},
+			{name: "invalid authentication", token: "invalid-local-token", wantStatus: http.StatusUnauthorized, wantCode: "AUTH_UNAUTHORIZED"},
+			{name: "authenticated owned unavailable", token: accessToken, wantStatus: http.StatusConflict, wantCode: constant.InvoiceCodeDocumentUnavailable},
+		} {
+			t.Run(test.name+" "+path, func(t *testing.T) {
+				method := http.MethodGet
+				if strings.HasSuffix(path, "document-url") {
+					method = http.MethodPost
+				}
+				request := httptest.NewRequest(method, path, nil)
+				if test.token != "" {
+					request.Header.Set("Authorization", "Bearer "+test.token)
+				}
+				response := httptest.NewRecorder()
 
-			engine.ServeHTTP(response, request)
+				engine.ServeHTTP(response, request)
 
-			assert.Equal(t, test.wantStatus, response.Code)
-			assert.Contains(t, response.Body.String(), test.wantCode)
-			assert.Empty(t, response.Header().Get("Location"))
-			assert.NotContains(t, response.Body.String(), "INVOICE_R2_")
-			if test.wantStatus == http.StatusConflict {
-				assert.Equal(t, "no-store, no-cache, must-revalidate, private, max-age=0", response.Header().Get("Cache-Control"))
-				assert.Equal(t, "no-cache", response.Header().Get("Pragma"))
-				assert.Equal(t, "0", response.Header().Get("Expires"))
-			}
-		})
+				assert.Equal(t, test.wantStatus, response.Code)
+				assert.Contains(t, response.Body.String(), test.wantCode)
+				assert.Empty(t, response.Header().Get("Location"))
+				assert.NotContains(t, response.Body.String(), "INVOICE_R2_")
+				if test.wantStatus == http.StatusConflict {
+					assert.Equal(t, "no-store, no-cache, must-revalidate, private, max-age=0", response.Header().Get("Cache-Control"))
+					assert.Equal(t, "no-cache", response.Header().Get("Pragma"))
+					assert.Equal(t, "0", response.Header().Get("Expires"))
+				}
+			})
+		}
 	}
 }
 
-func TestInvoiceDownloadIsTheOnlyUserInvoiceRouteWithNoStore(t *testing.T) {
+func TestInvoiceDownloadRoutesAreTheOnlyUserInvoiceRoutesWithNoStore(t *testing.T) {
 	for _, route := range invoiceUserRoutes {
-		want := route.method == http.MethodGet && route.path == "/invoices/:id/document"
+		want := route.path == "/invoices/:id/document" || route.path == "/invoices/:id/document-url"
 		assert.Equal(t, want, route.disableCache, route.method+" "+route.path)
 	}
+}
+
+func TestInvoiceDocumentURLProductionRouteMasksCrossOwnerLikeMissing(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	previousDB, previousLogDB := model.DB, model.LOG_DB
+	previousRedis := common.RedisEnabled
+	common.RedisEnabled = false
+	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", strings.ReplaceAll(t.Name(), "/", "_"))
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.InvoiceApplication{}, &model.InvoiceDocument{}))
+	model.DB, model.LOG_DB = db, db
+	t.Cleanup(func() {
+		model.DB, model.LOG_DB = previousDB, previousLogDB
+		common.RedisEnabled = previousRedis
+	})
+
+	accessToken := "invoice-document-url-mask-test"
+	user := model.User{Username: "invoice-document-url-user", Password: "test-password", AccessToken: &accessToken,
+		Role: common.RoleCommonUser, Status: common.UserStatusEnabled, Group: "default", AffCode: "invoice-document-url-aff"}
+	require.NoError(t, db.Create(&user).Error)
+	otherApplication := model.InvoiceApplication{
+		ApplicationNo: "INV-OTHER-OWNER", UserID: user.Id + 100, RequestID: "request", RequestFingerprint: "fingerprint",
+		Type: constant.InvoiceTypePersonal, Status: constant.InvoiceApplicationStatusIssued,
+		PaymentReviewStatus: constant.InvoicePaymentReviewStatusNone, Currency: constant.InvoiceCurrencyCNY,
+		FeeStatus: constant.InvoiceFeeStatusNotRequired, ProfileSnapshot: `{}`, PolicySnapshot: `{}`, SubmittedAt: 1,
+	}
+	require.NoError(t, db.Create(&otherApplication).Error)
+
+	engine := gin.New()
+	SetApiRouter(engine)
+	responses := make([]*httptest.ResponseRecorder, 0, 2)
+	for _, id := range []int64{otherApplication.ID, otherApplication.ID + 999} {
+		request := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/user/invoices/%d/document-url", id), nil)
+		request.Header.Set("Authorization", "Bearer "+accessToken)
+		response := httptest.NewRecorder()
+		engine.ServeHTTP(response, request)
+
+		assert.Equal(t, http.StatusNotFound, response.Code)
+		assert.Equal(t, "no-store, no-cache, must-revalidate, private, max-age=0", response.Header().Get("Cache-Control"))
+		assert.Empty(t, response.Header().Get("Location"))
+		assert.NotContains(t, response.Body.String(), "download_url")
+		responses = append(responses, response)
+	}
+	assert.Equal(t, responses[0].Header(), responses[1].Header())
+	assert.Equal(t, responses[0].Body.String(), responses[1].Body.String())
 }
 
 func TestInvoiceDownloadRouteNoStoreHeadersSurviveRedirect(t *testing.T) {

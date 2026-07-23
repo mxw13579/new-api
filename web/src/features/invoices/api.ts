@@ -16,12 +16,14 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import type { ApiRequestConfig as ProjectApiRequestConfig } from '@/lib/api'
+
 import type {
+  AuthenticatedInvoiceApi,
   CreateInvoiceApplicationRequest,
   CreateInvoiceProfileRequest,
   DeleteInvoiceProfileRequest,
   EligibleInvoiceOrder,
-  InvoiceApi,
   InvoiceApplicationDetail,
   InvoiceApplicationSummary,
   InvoiceConfig,
@@ -32,24 +34,46 @@ import type {
   UpdateInvoiceProfileRequest,
 } from './types'
 
-interface InvoiceEnvelope<T> {
+/** Represents the common backend response envelope for invoice APIs. */
+export interface InvoiceEnvelope<T> {
   success: boolean
   message: string
   data: T | { code: InvoiceErrorCode }
 }
 
-interface InvoiceTransportResponse {
+/** Represents the transport wrapper around an invoice response envelope. */
+export interface InvoiceTransportResponse {
   data: InvoiceEnvelope<unknown>
+}
+
+/** Configures invoice requests to defer all user-visible errors to the feature. */
+export type ApiRequestConfig = ProjectApiRequestConfig & {
+  skipBusinessError: true
+  skipErrorHandler: true
+}
+
+/** Suppresses transport-level error notifications for invoice requests. */
+export const INVOICE_REQUEST_CONFIG: ApiRequestConfig = {
+  skipBusinessError: true,
+  skipErrorHandler: true,
 }
 
 /** Defines the minimal HTTP transport required by the invoice adapter. */
 export interface InvoiceHttpTransport {
-  get(url: string): Promise<InvoiceTransportResponse>
-  post(url: string, body?: unknown): Promise<InvoiceTransportResponse>
-  put(url: string, body?: unknown): Promise<InvoiceTransportResponse>
+  get(url: string, config: ApiRequestConfig): Promise<InvoiceTransportResponse>
+  post(
+    url: string,
+    body: unknown,
+    config: ApiRequestConfig
+  ): Promise<InvoiceTransportResponse>
+  put(
+    url: string,
+    body: unknown,
+    config: ApiRequestConfig
+  ): Promise<InvoiceTransportResponse>
   delete(
     url: string,
-    config?: { data?: unknown }
+    config: ApiRequestConfig
   ): Promise<InvoiceTransportResponse>
 }
 
@@ -64,12 +88,50 @@ export class InvoiceApiError extends Error {
   }
 }
 
-function unwrapInvoiceEnvelope<T>(response: InvoiceTransportResponse): T {
-  if (!response.data.success) {
-    const errorData = response.data.data as { code?: InvoiceErrorCode }
-    throw new InvoiceApiError(errorData.code || 'INVOICE_INTERNAL_ERROR')
+const invoiceErrorCodes = new Set<InvoiceErrorCode>([
+  'INVOICE_INVALID_REQUEST',
+  'INVOICE_FORBIDDEN',
+  'INVOICE_QUOTA_INSUFFICIENT',
+  'INVOICE_NOT_FOUND',
+  'INVOICE_IDEMPOTENCY_CONFLICT',
+  'INVOICE_STATE_CONFLICT',
+  'INVOICE_TOPUP_INELIGIBLE',
+  'INVOICE_PAYMENT_EVIDENCE_CONFLICT',
+  'INVOICE_DOCUMENT_UNAVAILABLE',
+  'INVOICE_INTERNAL_ERROR',
+])
+
+/** Decodes resolved or rejected invoice envelopes into a stable feature error. */
+export function decodeInvoiceApiError(value: unknown): InvoiceApiError {
+  if (typeof value !== 'object' || value === null) {
+    return new InvoiceApiError('INVOICE_INTERNAL_ERROR')
   }
-  return response.data.data as T
+  const envelope = value as {
+    success?: unknown
+    data?: { code?: unknown }
+    response?: { data?: unknown }
+  }
+  if (envelope.response) return decodeInvoiceApiError(envelope.response.data)
+  const code = envelope.success === false ? envelope.data?.code : undefined
+  return new InvoiceApiError(
+    typeof code === 'string' && invoiceErrorCodes.has(code as InvoiceErrorCode)
+      ? (code as InvoiceErrorCode)
+      : 'INVOICE_INTERNAL_ERROR'
+  )
+}
+
+/** Executes one invoice request and normalizes both response paths. */
+export async function invoiceRequest<T>(
+  request: Promise<InvoiceTransportResponse>
+): Promise<T> {
+  try {
+    const response = await request
+    if (!response.data.success) throw decodeInvoiceApiError(response.data)
+    return response.data.data as T
+  } catch (error) {
+    if (error instanceof InvoiceApiError) throw error
+    throw decodeInvoiceApiError(error)
+  }
 }
 
 function pageUrl(path: string, request: InvoicePageRequest): string {
@@ -88,59 +150,91 @@ function pageUrl(path: string, request: InvoicePageRequest): string {
  */
 export function createHttpInvoiceApi(
   transport: InvoiceHttpTransport
-): InvoiceApi {
+): AuthenticatedInvoiceApi {
   return {
     async getConfig() {
-      return unwrapInvoiceEnvelope<InvoiceConfig>(
-        await transport.get('/api/user/invoice/config')
+      return invoiceRequest<InvoiceConfig>(
+        transport.get('/api/user/invoice/config', INVOICE_REQUEST_CONFIG)
       )
     },
     async listProfiles() {
-      return unwrapInvoiceEnvelope<InvoiceProfile[]>(
-        await transport.get('/api/user/invoice/profiles')
+      return invoiceRequest<InvoiceProfile[]>(
+        transport.get('/api/user/invoice/profiles', INVOICE_REQUEST_CONFIG)
       )
     },
     async createProfile(request: CreateInvoiceProfileRequest) {
-      return unwrapInvoiceEnvelope<InvoiceProfile>(
-        await transport.post('/api/user/invoice/profiles', request)
+      return invoiceRequest<InvoiceProfile>(
+        transport.post(
+          '/api/user/invoice/profiles',
+          request,
+          INVOICE_REQUEST_CONFIG
+        )
       )
     },
     async updateProfile(request: UpdateInvoiceProfileRequest) {
-      return unwrapInvoiceEnvelope<InvoiceProfile>(
-        await transport.put('/api/user/invoice/profiles', request)
+      return invoiceRequest<InvoiceProfile>(
+        transport.put(
+          '/api/user/invoice/profiles',
+          request,
+          INVOICE_REQUEST_CONFIG
+        )
       )
     },
     async deleteProfile(request: DeleteInvoiceProfileRequest) {
-      unwrapInvoiceEnvelope<null>(
-        await transport.delete('/api/user/invoice/profiles', { data: request })
+      await invoiceRequest<null>(
+        transport.delete('/api/user/invoice/profiles', {
+          ...INVOICE_REQUEST_CONFIG,
+          data: request,
+        })
       )
     },
     async listEligibleOrders(request: InvoicePageRequest) {
-      return unwrapInvoiceEnvelope<InvoicePage<EligibleInvoiceOrder>>(
-        await transport.get(
-          pageUrl('/api/user/invoice/eligible-orders', request)
+      return invoiceRequest<InvoicePage<EligibleInvoiceOrder>>(
+        transport.get(
+          pageUrl('/api/user/invoice/eligible-orders', request),
+          INVOICE_REQUEST_CONFIG
         )
       )
     },
     async createApplication(request: CreateInvoiceApplicationRequest) {
-      return unwrapInvoiceEnvelope<InvoiceApplicationDetail>(
-        await transport.post('/api/user/invoices', request)
+      return invoiceRequest<InvoiceApplicationDetail>(
+        transport.post('/api/user/invoices', request, INVOICE_REQUEST_CONFIG)
       )
     },
     async listApplications(request: InvoicePageRequest) {
-      return unwrapInvoiceEnvelope<InvoicePage<InvoiceApplicationSummary>>(
-        await transport.get(pageUrl('/api/user/invoices', request))
+      return invoiceRequest<InvoicePage<InvoiceApplicationSummary>>(
+        transport.get(
+          pageUrl('/api/user/invoices', request),
+          INVOICE_REQUEST_CONFIG
+        )
       )
     },
     async getApplication(applicationId: number) {
-      return unwrapInvoiceEnvelope<InvoiceApplicationDetail>(
-        await transport.get(`/api/user/invoices/${applicationId}`)
+      return invoiceRequest<InvoiceApplicationDetail>(
+        transport.get(
+          `/api/user/invoices/${applicationId}`,
+          INVOICE_REQUEST_CONFIG
+        )
       )
     },
     async cancelApplication(applicationId: number) {
-      return unwrapInvoiceEnvelope<InvoiceApplicationDetail>(
-        await transport.post(`/api/user/invoices/${applicationId}/cancel`)
+      return invoiceRequest<InvoiceApplicationDetail>(
+        transport.post(
+          `/api/user/invoices/${applicationId}/cancel`,
+          undefined,
+          INVOICE_REQUEST_CONFIG
+        )
       )
+    },
+    async requestDocumentDownloadUrl(applicationId: number) {
+      const response = await invoiceRequest<{ download_url: string }>(
+        transport.post(
+          `/api/user/invoices/${applicationId}/document-url`,
+          undefined,
+          INVOICE_REQUEST_CONFIG
+        )
+      )
+      return response.download_url
     },
     getDocumentDownloadUrl(applicationId: number) {
       return `/api/user/invoices/${applicationId}/document`
