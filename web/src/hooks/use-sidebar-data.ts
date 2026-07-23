@@ -40,7 +40,9 @@ import { createElement } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import type { SidebarData } from '@/components/layout/types'
+import { hasPermission } from '@/lib/admin-permissions'
 import { ROLE } from '@/lib/roles'
+import { useAuthStore } from '@/stores/auth-store'
 
 function InvoiceNavIcon(props: { className?: string }) {
   return createElement(HugeiconsIcon, {
@@ -58,6 +60,9 @@ function InvoiceNavIcon(props: { className?: string }) {
  */
 export function useSidebarData(): SidebarData {
   const { t } = useTranslation()
+  const user = useAuthStore((state) => state.auth.user)
+  const canReviewInvoices = hasPermission(user, 'invoice', 'review')
+  const canManageInvoiceSettings = hasPermission(user, 'invoice', 'settings')
 
   return {
     navGroups: [
@@ -160,6 +165,24 @@ export function useSidebarData(): SidebarData {
             url: '/subscriptions',
             icon: CreditCard,
           },
+          ...(canReviewInvoices
+            ? [
+                {
+                  title: t('Invoice management'),
+                  url: '/admin-invoices',
+                  icon: InvoiceNavIcon,
+                },
+              ]
+            : []),
+          ...(canManageInvoiceSettings
+            ? [
+                {
+                  title: t('Invoice settings'),
+                  url: '/invoice-settings',
+                  icon: Settings,
+                },
+              ]
+            : []),
           {
             title: t('System Info'),
             url: '/system-info',
