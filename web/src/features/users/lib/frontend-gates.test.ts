@@ -19,30 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 
-import {
-  getQuotaModeLabel,
-  loadUserForDrawer,
-  parseQuotaInput,
-  resolveDisabledUserRowClass,
-} from './frontend-gates'
-
-describe('user presentation and numeric coercion', () => {
-  test('preserves quota parsing at the input boundary', () => {
-    assert.equal(parseQuotaInput('12.5'), 12.5)
-    assert.equal(parseQuotaInput(''), 0)
-    assert.equal(Number.isNaN(parseQuotaInput('not-a-number')), true)
-    assert.equal(parseQuotaInput('Infinity'), Number.POSITIVE_INFINITY)
-  })
-
-  test('preserves quota labels and disabled row classes', () => {
-    assert.equal(getQuotaModeLabel('add'), 'Add')
-    assert.equal(getQuotaModeLabel('subtract'), 'Subtract')
-    assert.equal(getQuotaModeLabel('override'), 'Override')
-    assert.equal(resolveDisabledUserRowClass(false, true), undefined)
-    assert.equal(resolveDisabledUserRowClass(true, true), 'mobile')
-    assert.equal(resolveDisabledUserRowClass(true, false), 'desktop')
-  })
-})
+import { loadUserForDrawer } from './frontend-gates'
 
 describe('user drawer request lifecycle', () => {
   test('does not apply a stale response after the drawer target changes', async () => {

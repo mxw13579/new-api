@@ -31,7 +31,6 @@ import { Label } from '@/components/ui/label'
 import { setup2FA, enable2FA } from '@/lib/api'
 
 import type { TwoFASetupData } from '../../types'
-import { getTwoFactorSetupView } from './presentation'
 
 // ============================================================================
 // Two-FA Setup Dialog Component
@@ -131,8 +130,6 @@ export function TwoFASetupDialog({
     }
   }, [open, setupData, initializing, handleSetup])
 
-  const setupView = getTwoFactorSetupView(initializing, Boolean(setupData))
-
   return (
     <Dialog
       open={open}
@@ -180,7 +177,7 @@ export function TwoFASetupDialog({
       }
     >
       <div className='space-y-4 py-4'>
-        {setupView === 'loading' && (
+        {initializing && (
           <div className='flex flex-col items-center justify-center gap-3 py-8'>
             <div className='border-primary h-8 w-8 animate-spin rounded-full border-4 border-t-transparent' />
             <div className='text-muted-foreground text-sm'>
@@ -188,14 +185,14 @@ export function TwoFASetupDialog({
             </div>
           </div>
         )}
-        {setupView === 'error' && (
+        {!initializing && !setupData && (
           <div className='flex justify-center py-8'>
             <div className='text-muted-foreground'>
               {t('Failed to load setup data')}
             </div>
           </div>
         )}
-        {setupView === 'ready' && setupData && (
+        {!initializing && setupData && (
           <>
             {/* Step 0: QR Code */}
             {step === 0 && (

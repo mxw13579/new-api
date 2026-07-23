@@ -16,27 +16,6 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import type { QuotaAdjustMode } from '../types'
-
-export function parseQuotaInput(value: string): number {
-  if (value === '') return 0
-  return Number.parseFloat(value)
-}
-
-export function getQuotaModeLabel(mode: QuotaAdjustMode): string {
-  if (mode === 'add') return 'Add'
-  if (mode === 'subtract') return 'Subtract'
-  return 'Override'
-}
-
-export function resolveDisabledUserRowClass(
-  disabled: boolean,
-  isMobile: boolean
-): 'mobile' | 'desktop' | undefined {
-  if (!disabled) return undefined
-  return isMobile ? 'mobile' : 'desktop'
-}
-
 type UserResponse<T> = { success: boolean; data?: T }
 
 export async function loadUserForDrawer<T extends { id: number }>(

@@ -28,7 +28,6 @@ import { Label } from '@/components/ui/label'
 import { useCountdown } from '@/hooks/use-countdown'
 
 import { sendEmailVerification, bindEmail } from '../../api'
-import { getEmailVerificationButtonLabel } from './presentation'
 
 // ============================================================================
 // Email Bind Dialog Component
@@ -123,11 +122,13 @@ export function EmailBindDialog({
       }
     }
   }
-  const verificationLabel = getEmailVerificationButtonLabel(
-    isActive,
-    sendingCode,
-    secondsLeft
-  )
+  let verificationLabel = t('Send')
+  if (sendingCode) {
+    verificationLabel = t('Sending...')
+  }
+  if (isActive) {
+    verificationLabel = `${secondsLeft}s`
+  }
 
   return (
     <Dialog
@@ -195,9 +196,7 @@ export function EmailBindDialog({
               onClick={handleSendCode}
               disabled={sendingCode || isActive || !email}
             >
-              {verificationLabel.kind === 'literal'
-                ? verificationLabel.value
-                : t(verificationLabel.value)}
+              {verificationLabel}
             </Button>
           </div>
         </div>

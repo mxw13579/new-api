@@ -39,7 +39,6 @@ import {
   getUserRoleOptions,
   isUserDeleted,
 } from '../constants'
-import { resolveDisabledUserRowClass } from '../lib/frontend-gates'
 import type { User, UserSortBy } from '../types'
 import { DataTableBulkActions } from './data-table-bulk-actions'
 import { useUsersColumns } from './users-columns'
@@ -233,13 +232,8 @@ export function UsersTable() {
         ],
       }}
       getRowClassName={(row, { isMobile }) => {
-        const rowClass = resolveDisabledUserRowClass(
-          isDisabledUserRow(row.original),
-          isMobile
-        )
-        if (rowClass === 'mobile') return DISABLED_ROW_MOBILE
-        if (rowClass === 'desktop') return DISABLED_ROW_DESKTOP
-        return undefined
+        if (!isDisabledUserRow(row.original)) return undefined
+        return isMobile ? DISABLED_ROW_MOBILE : DISABLED_ROW_DESKTOP
       }}
       bulkActions={<DataTableBulkActions table={table} />}
     />

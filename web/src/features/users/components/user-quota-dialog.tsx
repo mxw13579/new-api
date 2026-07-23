@@ -29,7 +29,6 @@ import { formatQuota, parseQuotaFromDollars } from '@/lib/format'
 import { cn } from '@/lib/utils'
 
 import { adjustUserQuota } from '../api'
-import { getQuotaModeLabel, parseQuotaInput } from '../lib/frontend-gates'
 import type { QuotaAdjustMode } from '../types'
 
 interface UserQuotaDialogProps {
@@ -50,7 +49,7 @@ export function UserQuotaDialog(props: UserQuotaDialogProps) {
   const currencyLabel = getCurrencyLabel()
   const tokensOnly = currencyMeta.kind === 'tokens'
 
-  const amountValue = parseQuotaInput(amount) || 0
+  const amountValue = Number.parseFloat(amount) || 0
   const quotaValue = parseQuotaFromDollars(Math.abs(amountValue))
 
   const getPreviewText = () => {
@@ -109,6 +108,11 @@ export function UserQuotaDialog(props: UserQuotaDialogProps) {
   const placeholder = tokensOnly
     ? t('Enter amount in tokens')
     : t('Enter amount in {{currency}}', { currency: currencyLabel })
+  const modeOptions: Array<{ value: QuotaAdjustMode; label: string }> = [
+    { value: 'add', label: t('Add') },
+    { value: 'subtract', label: t('Subtract') },
+    { value: 'override', label: t('Override') },
+  ]
 
   return (
     <Dialog
@@ -135,22 +139,22 @@ export function UserQuotaDialog(props: UserQuotaDialogProps) {
         <div className='space-y-2'>
           <Label>{t('Mode')}</Label>
           <div className='flex gap-1'>
-            {(['add', 'subtract', 'override'] as const).map((m) => (
+            {modeOptions.map((option) => (
               <Button
-                key={m}
+                key={option.value}
                 type='button'
                 variant='outline'
                 size='sm'
                 className={cn(
-                  mode === m &&
+                  mode === option.value &&
                     'bg-primary text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground'
                 )}
                 onClick={() => {
-                  setMode(m)
+                  setMode(option.value)
                   setAmount('')
                 }}
               >
-                {t(getQuotaModeLabel(m))}
+                {option.label}
               </Button>
             ))}
           </div>

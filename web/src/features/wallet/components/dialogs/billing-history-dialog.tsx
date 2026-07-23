@@ -54,10 +54,6 @@ import {
   getPaymentMethodName,
   formatTimestamp,
 } from '../../lib/billing'
-import {
-  getBillingHistoryView,
-  parseBillingPageSize,
-} from '../../lib/billing-history-presentation'
 
 interface BillingHistoryDialogProps {
   open: boolean
@@ -88,7 +84,6 @@ export function BillingHistoryDialog({
   const { copyToClipboard, copiedText } = useCopyToClipboard({ notify: false })
 
   const totalPages = Math.ceil(total / pageSize)
-  const historyView = getBillingHistoryView(loading, records.length)
 
   const handleConfirmComplete = async () => {
     if (confirmTradeNo) {
@@ -133,8 +128,7 @@ export function BillingHistoryDialog({
               ]}
               value={pageSize.toString()}
               onValueChange={(value) =>
-                value !== null &&
-                handlePageSizeChange(parseBillingPageSize(value))
+                value !== null && handlePageSizeChange(Number.parseInt(value))
               }
             >
               <SelectTrigger className='h-9 w-[92px] sm:w-32'>
@@ -153,7 +147,7 @@ export function BillingHistoryDialog({
 
           {/* Records List */}
           <div className='max-h-[min(54vh,520px)] overflow-y-auto pr-1'>
-            {historyView === 'loading' && (
+            {loading && (
               <div className='space-y-3'>
                 {['one', 'two', 'three', 'four', 'five'].map((key) => (
                   <div key={key} className='rounded-lg border p-3 sm:p-4'>
@@ -173,7 +167,7 @@ export function BillingHistoryDialog({
                 ))}
               </div>
             )}
-            {historyView === 'empty' && (
+            {!loading && records.length === 0 && (
               <div className='text-muted-foreground flex min-h-40 flex-col items-center justify-center py-10 text-center'>
                 <p className='text-sm font-medium'>
                   {t('No billing records found')}
@@ -185,7 +179,7 @@ export function BillingHistoryDialog({
                 </p>
               </div>
             )}
-            {historyView === 'records' && (
+            {!loading && records.length > 0 && (
               <div className='space-y-3'>
                 {records.map((record) => {
                   const statusConfig = getStatusConfig(record.status)
