@@ -39,6 +39,10 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { useSystemConfig } from '@/hooks/use-system-config'
 import { cn } from '@/lib/utils'
 
+import {
+  getAsyncContentState,
+  getOrderedItemState,
+} from '../system-settings/models/utils'
 import { buildSetupPayload, getSetupStatus, submitSetup } from './api'
 import { AdminStep } from './components/admin-step'
 import { CompleteStep } from './components/complete-step'
@@ -71,6 +75,20 @@ const DEFAULT_FORM_VALUES: SetupFormValues = {
   password: '',
   confirmPassword: '',
   usageMode: 'external',
+}
+
+type SetupStepState = 'active' | 'completed' | 'pending'
+
+const STEP_CONTAINER_CLASS: Record<SetupStepState, string> = {
+  active: 'border-primary ring-primary/20 ring-2',
+  completed: 'border-primary/40 bg-primary/5',
+  pending: 'border-muted bg-card',
+}
+
+const STEP_NUMBER_CLASS: Record<SetupStepState, string> = {
+  active: 'border-primary bg-primary text-primary-foreground',
+  completed: 'border-primary bg-primary text-primary-foreground',
+  pending: 'border-muted-foreground/40 text-muted-foreground',
 }
 
 export function SetupWizard() {
@@ -323,29 +341,20 @@ export function SetupWizard() {
           <CardContent className='space-y-6'>
             <ol className='grid gap-3 sm:grid-cols-4'>
               {STEPS.map((step, index) => {
-                const isActive = currentStep === index
-                const isCompleted = currentStep > index
+                const stepState = getOrderedItemState(currentStep, index)
                 return (
                   <li
                     key={step.titleKey}
                     className={cn(
                       'rounded-xl border p-3',
-                      isActive
-                        ? 'border-primary ring-primary/20 ring-2'
-                        : isCompleted
-                          ? 'border-primary/40 bg-primary/5'
-                          : 'border-muted bg-card'
+                      STEP_CONTAINER_CLASS[stepState]
                     )}
                   >
                     <div className='flex items-start gap-3'>
                       <span
                         className={cn(
                           'flex size-6 items-center justify-center rounded-md border text-xs font-semibold',
-                          isActive
-                            ? 'border-primary bg-primary text-primary-foreground'
-                            : isCompleted
-                              ? 'border-primary bg-primary text-primary-foreground'
-                              : 'border-muted-foreground/40 text-muted-foreground'
+                          STEP_NUMBER_CLASS[stepState]
                         )}
                       >
                         {index + 1}
@@ -364,14 +373,16 @@ export function SetupWizard() {
               })}
             </ol>
 
-            {isLoading ? (
+            {getAsyncContentState(isLoading, isError, false) === 'loading' && (
               <LoadingState message={t('Loading setup status…')} />
-            ) : isError ? (
+            )}
+            {getAsyncContentState(isLoading, isError, false) === 'error' && (
               <ErrorState
                 title={t('We could not load the setup status.')}
                 onRetry={() => refetch()}
               />
-            ) : (
+            )}
+            {getAsyncContentState(isLoading, isError, false) === 'content' && (
               <Form {...form}>
                 <form
                   className='space-y-6'

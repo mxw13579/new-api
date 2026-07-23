@@ -34,6 +34,10 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { listSystemTasks } from '@/features/system-settings/api'
+import {
+  createStaticListKeys,
+  getAsyncContentState,
+} from '@/features/system-settings/models/utils'
 import type {
   SystemTask,
   SystemTaskStatus,
@@ -44,6 +48,11 @@ import { cn } from '@/lib/utils'
 
 const TASK_LIMIT = 20
 const ACTIVE_POLL_INTERVAL_MS = 8000
+
+const SYSTEM_TASK_SKELETON_KEYS = createStaticListKeys(
+  'system-task-skeleton',
+  4
+)
 
 const STATUS_VARIANT: Record<SystemTaskStatus, 'secondary' | 'destructive'> = {
   pending: 'secondary',
@@ -226,6 +235,11 @@ export function SystemTasksPanel() {
   const tasks = tasksQuery.data ?? []
   const loading = tasksQuery.isLoading
   const refreshing = tasksQuery.isFetching && !tasksQuery.isLoading
+  const contentState = getAsyncContentState(
+    loading,
+    tasksQuery.isError,
+    tasks.length === 0
+  )
   const hasActiveTasks = tasks.some((task) => isActiveStatus(task.status))
   const activeTasks = tasks.filter((task) => isActiveStatus(task.status))
   const historyTasks = tasks.filter((task) => !isActiveStatus(task.status))
@@ -285,13 +299,14 @@ export function SystemTasksPanel() {
       </div>
 
       <div aria-busy={tasksQuery.isFetching}>
-        {loading ? (
+        {contentState === 'loading' && (
           <div className='space-y-2 p-4 sm:p-5'>
-            {Array.from({ length: 4 }).map((_, i) => (
-              <Skeleton key={i} className='h-9 w-full rounded-md' />
+            {SYSTEM_TASK_SKELETON_KEYS.map((key) => (
+              <Skeleton key={key} className='h-9 w-full rounded-md' />
             ))}
           </div>
-        ) : tasksQuery.isError ? (
+        )}
+        {contentState === 'error' && (
           <ErrorState
             title={t('We could not load system tasks.')}
             description={
@@ -304,7 +319,8 @@ export function SystemTasksPanel() {
             }}
             className='min-h-[260px]'
           />
-        ) : tasks.length === 0 ? (
+        )}
+        {contentState === 'empty' && (
           <div className='px-4 py-10 text-center sm:px-5'>
             <div className='bg-muted mx-auto mb-3 flex size-10 items-center justify-center rounded-lg'>
               <ListChecks
@@ -316,7 +332,8 @@ export function SystemTasksPanel() {
               {t('No system tasks yet.')}
             </p>
           </div>
-        ) : (
+        )}
+        {contentState === 'content' && (
           <div className='space-y-4 p-4 sm:p-5'>
             <div>
               <div className='mb-2 flex items-center justify-between gap-3'>

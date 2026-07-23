@@ -16,6 +16,77 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { extractJsonErrorPosition } from '../utils/json-parser'
+
+export type EditableListKeyEntry<T> = {
+  item: T
+  key: string
+}
+
+export function getOrderedItemState(
+  currentIndex: number,
+  itemIndex: number
+): 'active' | 'completed' | 'pending' {
+  if (currentIndex === itemIndex) {
+    return 'active'
+  }
+  return currentIndex > itemIndex ? 'completed' : 'pending'
+}
+
+export function getAsyncContentState(
+  loading: boolean,
+  isError: boolean,
+  isEmpty: boolean
+): 'loading' | 'error' | 'empty' | 'content' {
+  if (loading) {
+    return 'loading'
+  }
+  if (isError) {
+    return 'error'
+  }
+  return isEmpty ? 'empty' : 'content'
+}
+
+export function createStaticListKeys(prefix: string, count: number): string[] {
+  return Array.from({ length: count }, (_, index) => `${prefix}-${index + 1}`)
+}
+
+export function reconcileEditableListKeys<T>(
+  previous: readonly EditableListKeyEntry<T>[],
+  items: readonly T[],
+  createKey: () => string
+): EditableListKeyEntry<T>[] {
+  const available = new Set(previous)
+  const next: Array<EditableListKeyEntry<T> | undefined> = Array.from({
+    length: items.length,
+  })
+
+  for (const [index, item] of items.entries()) {
+    const match = previous.find(
+      (entry) => available.has(entry) && Object.is(entry.item, item)
+    )
+    if (match) {
+      next[index] = { item, key: match.key }
+      available.delete(match)
+    }
+  }
+
+  for (const [index, item] of items.entries()) {
+    if (next[index]) {
+      continue
+    }
+    const positionalMatch = previous[index]
+    if (positionalMatch && available.has(positionalMatch)) {
+      next[index] = { item, key: positionalMatch.key }
+      available.delete(positionalMatch)
+      continue
+    }
+    next[index] = { item, key: createKey() }
+  }
+
+  return next as EditableListKeyEntry<T>[]
+}
+
 export function formatJsonForTextarea(value: string) {
   if (!value || !value.trim()) {
     return ''
@@ -57,38 +128,6 @@ export type JsonValidationError = {
   missingCommaLine?: number
 }
 
-function extractErrorPosition(
-  error: unknown,
-  jsonString: string
-): { line?: number; column?: number; position?: number } {
-  if (!(error instanceof Error)) return {}
-
-  const message = error.message
-
-  // Format 1: "Unexpected token } in JSON at position 15"
-  const positionMatch = message.match(/at position (\d+)/i)
-  if (positionMatch) {
-    const position = parseInt(positionMatch[1], 10)
-    const lines = jsonString.substring(0, position).split('\n')
-    return {
-      line: lines.length,
-      column: lines[lines.length - 1].length + 1,
-      position,
-    }
-  }
-
-  // Format 2: "JSON.parse: ... at line 2 column 3"
-  const lineColMatch = message.match(/at line (\d+) column (\d+)/i)
-  if (lineColMatch) {
-    return {
-      line: parseInt(lineColMatch[1], 10),
-      column: parseInt(lineColMatch[2], 10),
-    }
-  }
-
-  return {}
-}
-
 function buildSyntaxError(
   error: unknown,
   jsonString: string
@@ -99,7 +138,7 @@ function buildSyntaxError(
     } satisfies JsonValidationError
   }
 
-  const position = extractErrorPosition(error, jsonString)
+  const position = extractJsonErrorPosition(error, jsonString)
   const message = error.message
 
   // Check if it's a "missing comma" type error
@@ -123,7 +162,7 @@ function buildSyntaxError(
 function formatErrorMessage(error: unknown, jsonString: string): string {
   if (!(error instanceof Error)) return 'Invalid JSON'
 
-  const position = extractErrorPosition(error, jsonString)
+  const position = extractJsonErrorPosition(error, jsonString)
   const message = error.message
   const syntaxError = buildSyntaxError(error, jsonString)
 

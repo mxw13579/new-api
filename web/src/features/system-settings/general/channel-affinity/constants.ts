@@ -18,6 +18,44 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import type { AffinityRule } from './types'
 
+export type CacheStatsOutcome =
+  | { kind: 'success'; data: Record<string, unknown> }
+  | { kind: 'error'; message: string }
+  | { kind: 'stale' }
+
+export async function settleCacheStatsRequest(
+  request: Promise<{ success: boolean; message?: string; data?: unknown }>,
+  isCurrent: () => boolean
+): Promise<CacheStatsOutcome> {
+  try {
+    const response = await request
+    if (!isCurrent()) {
+      return { kind: 'stale' }
+    }
+    if (!response.success) {
+      return { kind: 'error', message: response.message || 'Request failed' }
+    }
+    return {
+      kind: 'success',
+      data: (response.data as Record<string, unknown>) || {},
+    }
+  } catch {
+    return isCurrent()
+      ? { kind: 'error', message: 'Request failed' }
+      : { kind: 'stale' }
+  }
+}
+
+export function getCacheStatsView(
+  loading: boolean,
+  rowCount: number
+): 'loading' | 'rows' | 'empty' {
+  if (loading) {
+    return 'loading'
+  }
+  return rowCount > 0 ? 'rows' : 'empty'
+}
+
 // Keep in sync with upstream Codex request headers:
 // https://github.com/openai/codex/commit/7c7b4861d88960f7e3bd5b7f30f8351be666dd84
 // https://github.com/openai/codex/commit/14df0e8833aad0d6d78287954b61ffac67af936c
@@ -130,5 +168,5 @@ export function makeUniqueName(
 }
 
 export function cloneTemplate<T>(template: T): T {
-  return JSON.parse(JSON.stringify(template))
+  return structuredClone(template)
 }

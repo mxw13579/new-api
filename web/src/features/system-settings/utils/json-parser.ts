@@ -34,13 +34,13 @@ export interface SafeJsonParseWithValidationOptions<T> {
   silent?: boolean
 }
 
-interface JsonErrorPosition {
+export interface JsonErrorPosition {
   line?: number
   column?: number
   position?: number
 }
 
-function extractErrorPosition(
+export function extractJsonErrorPosition(
   error: unknown,
   jsonString: string
 ): JsonErrorPosition {
@@ -52,7 +52,7 @@ function extractErrorPosition(
   // Format 1: "Unexpected token } in JSON at position 15"
   const positionMatch = message.match(/at position (\d+)/i)
   if (positionMatch) {
-    const position = parseInt(positionMatch[1], 10)
+    const position = Number.parseInt(positionMatch[1], 10)
     const { line, column } = getLineAndColumn(jsonString, position)
     return { line, column, position }
   }
@@ -61,8 +61,8 @@ function extractErrorPosition(
   const lineColMatch = message.match(/at line (\d+) column (\d+)/i)
   if (lineColMatch) {
     return {
-      line: parseInt(lineColMatch[1], 10),
-      column: parseInt(lineColMatch[2], 10),
+      line: Number.parseInt(lineColMatch[1], 10),
+      column: Number.parseInt(lineColMatch[2], 10),
     }
   }
 
@@ -73,10 +73,11 @@ function getLineAndColumn(
   text: string,
   position: number
 ): { line: number; column: number } {
-  const lines = text.substring(0, position).split('\n')
+  const lines = text.slice(0, position).split('\n')
+  const lastLine = lines.at(-1) ?? ''
   return {
     line: lines.length,
-    column: lines[lines.length - 1].length + 1,
+    column: lastLine.length + 1,
   }
 }
 
@@ -86,7 +87,7 @@ function formatErrorDescription(
 ): string | undefined {
   if (!(error instanceof Error)) return undefined
 
-  const position = extractErrorPosition(error, jsonString)
+  const position = extractJsonErrorPosition(error, jsonString)
   const message = error.message
 
   // Check if it's a "missing comma" type error

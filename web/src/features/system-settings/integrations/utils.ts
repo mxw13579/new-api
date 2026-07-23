@@ -16,6 +16,15 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { extractJsonErrorPosition } from '../utils/json-parser'
+
+export function normalizeAmountOptions(items: unknown[]): number[] {
+  return items
+    .filter((item) => !Number.isNaN(Number(item)))
+    .map(Number)
+    .sort((a, b) => a - b)
+}
+
 export function removeTrailingSlash(value: string) {
   const trimmed = value.trim()
   if (!trimmed) return ''
@@ -42,39 +51,10 @@ export function normalizeJsonForComparison(value: string) {
   }
 }
 
-function extractErrorPosition(
-  error: unknown,
-  jsonString: string
-): { line?: number; column?: number } {
-  if (!(error instanceof Error)) return {}
-
-  const message = error.message
-  const positionMatch = message.match(/at position (\d+)/i)
-
-  if (positionMatch) {
-    const position = parseInt(positionMatch[1], 10)
-    const lines = jsonString.substring(0, position).split('\n')
-    return {
-      line: lines.length,
-      column: lines[lines.length - 1].length + 1,
-    }
-  }
-
-  const lineColMatch = message.match(/at line (\d+) column (\d+)/i)
-  if (lineColMatch) {
-    return {
-      line: parseInt(lineColMatch[1], 10),
-      column: parseInt(lineColMatch[2], 10),
-    }
-  }
-
-  return {}
-}
-
 function formatJsonError(error: unknown, jsonString: string): string {
   if (!(error instanceof Error)) return 'Invalid JSON'
 
-  const position = extractErrorPosition(error, jsonString)
+  const position = extractJsonErrorPosition(error, jsonString)
   const message = error.message
 
   const isMissingCommaError =
