@@ -16,20 +16,24 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import type { Table } from '@tanstack/react-table'
-
-import { DataTableBulkActions as BulkActionsToolbar } from '@/components/data-table'
-
-import type { User } from '../types'
-
-interface DataTableBulkActionsProps {
-  table: Table<User>
+export function getEmailVerificationButtonLabel(
+  countdownActive: boolean,
+  sending: boolean,
+  secondsLeft: number
+) {
+  if (countdownActive) {
+    return { kind: 'literal', value: `${secondsLeft}s` } as const
+  }
+  return {
+    kind: 'translation',
+    value: sending ? 'Sending...' : 'Send',
+  } as const
 }
 
-export function DataTableBulkActions({ table }: DataTableBulkActionsProps) {
-  return (
-    <BulkActionsToolbar table={table} entityName='user'>
-      {null}
-    </BulkActionsToolbar>
-  )
+export function getTwoFactorSetupView(
+  initializing: boolean,
+  hasSetupData: boolean
+) {
+  if (initializing) return 'loading' as const
+  return hasSetupData ? ('ready' as const) : ('error' as const)
 }

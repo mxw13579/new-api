@@ -16,20 +16,23 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import type { Table } from '@tanstack/react-table'
+export function getResetPasswordAction(
+  hasNewPassword: boolean,
+  isValidResetLink: boolean,
+  countdownActive: boolean,
+  loading: boolean
+) {
+  if (hasNewPassword) {
+    return {
+      disabled: false,
+      labelKey: 'auth.resetPasswordConfirm.backToLogin',
+    } as const
+  }
 
-import { DataTableBulkActions as BulkActionsToolbar } from '@/components/data-table'
-
-import type { User } from '../types'
-
-interface DataTableBulkActionsProps {
-  table: Table<User>
-}
-
-export function DataTableBulkActions({ table }: DataTableBulkActionsProps) {
-  return (
-    <BulkActionsToolbar table={table} entityName='user'>
-      {null}
-    </BulkActionsToolbar>
-  )
+  return {
+    disabled: loading || countdownActive || !isValidResetLink,
+    labelKey: countdownActive
+      ? 'auth.resetPasswordConfirm.retry'
+      : 'auth.resetPasswordConfirm.confirm',
+  } as const
 }

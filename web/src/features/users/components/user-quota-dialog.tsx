@@ -29,6 +29,7 @@ import { formatQuota, parseQuotaFromDollars } from '@/lib/format'
 import { cn } from '@/lib/utils'
 
 import { adjustUserQuota } from '../api'
+import { getQuotaModeLabel, parseQuotaInput } from '../lib/frontend-gates'
 import type { QuotaAdjustMode } from '../types'
 
 interface UserQuotaDialogProps {
@@ -49,7 +50,7 @@ export function UserQuotaDialog(props: UserQuotaDialogProps) {
   const currencyLabel = getCurrencyLabel()
   const tokensOnly = currencyMeta.kind === 'tokens'
 
-  const amountValue = parseFloat(amount) || 0
+  const amountValue = parseQuotaInput(amount) || 0
   const quotaValue = parseQuotaFromDollars(Math.abs(amountValue))
 
   const getPreviewText = () => {
@@ -149,11 +150,7 @@ export function UserQuotaDialog(props: UserQuotaDialogProps) {
                   setAmount('')
                 }}
               >
-                {m === 'add'
-                  ? t('Add')
-                  : m === 'subtract'
-                    ? t('Subtract')
-                    : t('Override')}
+                {t(getQuotaModeLabel(m))}
               </Button>
             ))}
           </div>

@@ -31,6 +31,7 @@ import { api } from '@/lib/api'
 import { copyToClipboard } from '@/lib/copy-to-clipboard'
 
 import { AuthLayout } from '../auth-layout'
+import { getResetPasswordAction } from './presentation'
 
 export type ResetPasswordSearchParams = {
   email?: string
@@ -55,6 +56,12 @@ export function ResetPasswordConfirm({
   } = useCountdown({ initialSeconds: 30 })
 
   const isValidResetLink = Boolean(email && token)
+  const resetAction = getResetPasswordAction(
+    Boolean(newPassword),
+    isValidResetLink,
+    isActive,
+    loading
+  )
 
   async function handleSubmit() {
     if (!isValidResetLink || !email || !token) {
@@ -175,17 +182,9 @@ export function ResetPasswordConfirm({
                 ? () => navigate({ to: '/sign-in', replace: true })
                 : handleSubmit
             }
-            disabled={
-              newPassword ? false : loading || isActive || !isValidResetLink
-            }
+            disabled={resetAction.disabled}
           >
-            {newPassword
-              ? t('auth.resetPasswordConfirm.backToLogin')
-              : isActive
-                ? t('auth.resetPasswordConfirm.retry', {
-                    seconds: secondsLeft,
-                  })
-                : t('auth.resetPasswordConfirm.confirm')}
+            {t(resetAction.labelKey, { seconds: secondsLeft })}
           </Button>
 
           {!newPassword && (
