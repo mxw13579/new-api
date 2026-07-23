@@ -19,7 +19,8 @@ For commercial licensing, please contact support@quantumnous.com
 import { describe, it } from 'bun:test'
 import assert from 'node:assert/strict'
 
-import { getPricingItemIdentity, normalizeCondition } from './billing-expr'
+import { normalizeCondition } from './billing-expr'
+import { withStablePricingKeys } from './stable-pricing-keys'
 
 describe('pricing behavior contracts', () => {
   it('normalizes every condition-source branch without changing valid input', () => {
@@ -45,7 +46,7 @@ describe('pricing behavior contracts', () => {
     )
   })
 
-  it('uses content identity that survives insertion and reorder', () => {
+  it('keeps duplicate-content keys distinct through insertion and reorder', () => {
     const first = {
       label: 'small',
       conditions: [{ var: 'p', op: '<', value: 10 }],
@@ -54,12 +55,30 @@ describe('pricing behavior contracts', () => {
       label: 'large',
       conditions: [{ var: 'p', op: '>=', value: 10 }],
     }
+    const duplicate = structuredClone(first)
+    const inserted = { label: 'medium', conditions: [] }
 
-    const before = [first, second].map(getPricingItemIdentity)
-    const after = [second, first].map(getPricingItemIdentity)
+    const before = withStablePricingKeys([first, duplicate, second], 'tier')
+    const afterInsert = withStablePricingKeys(
+      [inserted, first, duplicate, second],
+      'tier'
+    )
+    const afterReorder = withStablePricingKeys(
+      [second, first, duplicate, inserted],
+      'tier'
+    )
 
-    assert.equal(before[0], after[1])
-    assert.equal(before[1], after[0])
-    assert.notEqual(before[0], before[1])
+    assert.equal(new Set(before.map(({ key }) => key)).size, before.length)
+    assert.deepEqual(
+      before.map(({ key }) => key),
+      afterInsert.slice(1).map(({ key }) => key)
+    )
+    assert.deepEqual(
+      before.map(({ key }) => key).sort(),
+      afterReorder
+        .filter(({ item }) => item !== inserted)
+        .map(({ key }) => key)
+        .sort()
+    )
   })
 })

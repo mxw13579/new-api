@@ -34,7 +34,6 @@ import {
   MATCH_LT,
   MATCH_RANGE,
   SOURCE_TIME,
-  getPricingItemIdentity,
   normalizeTierLabel,
   parseTiersFromExpr,
   splitBillingExprAndRequestRules,
@@ -44,6 +43,7 @@ import {
   type RequestRuleGroup,
   type TierCondition,
 } from '../lib/billing-expr'
+import { withStablePricingKeys } from '../lib/stable-pricing-keys'
 
 type DynamicPricingBreakdownProps = {
   billingExpr: string | null | undefined
@@ -189,6 +189,14 @@ export function DynamicPricingBreakdown({
 
   const hasTiers = tiers.length > 0
   const hasRules = ruleGroups.length > 0
+  const keyedTiers = useMemo(
+    () => withStablePricingKeys(tiers, 'tier'),
+    [tiers]
+  )
+  const keyedRuleGroups = useMemo(
+    () => withStablePricingKeys(ruleGroups, 'rule-group'),
+    [ruleGroups]
+  )
   const normalizedMatchedTierLabel = normalizeTierLabel(
     matchedTierLabel ?? undefined
   )
@@ -261,7 +269,7 @@ export function DynamicPricingBreakdown({
             {t('Tiered price table')}
           </div>
           <div className='space-y-1.5 sm:hidden'>
-            {tiers.map((tier) => {
+            {keyedTiers.map(({ item: tier, key }) => {
               const condSummary = formatConditionSummary(tier.conditions, t)
               const isMatched =
                 matchedTierLabel != null &&
@@ -269,7 +277,7 @@ export function DynamicPricingBreakdown({
                 tier.label === matchedTierLabel
               return (
                 <div
-                  key={`tier-mobile-${getPricingItemIdentity(tier)}`}
+                  key={key}
                   className={cn(
                     'rounded-md border p-2',
                     isMatched && 'border-emerald-500/40 bg-emerald-500/10'
@@ -426,9 +434,9 @@ export function DynamicPricingBreakdown({
             {t('Conditional multipliers')}
           </div>
           <ul className='space-y-1.5'>
-            {ruleGroups.map((group) => (
+            {keyedRuleGroups.map(({ item: group, key }) => (
               <li
-                key={`group-${getPricingItemIdentity(group)}`}
+                key={key}
                 className='bg-muted/50 flex items-center justify-between gap-3 rounded-md px-3 py-2'
               >
                 <span
