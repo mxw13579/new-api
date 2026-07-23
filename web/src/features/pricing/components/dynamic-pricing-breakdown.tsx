@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { Tag as TagIcon } from 'lucide-react'
-import { useMemo, useRef } from 'react'
+import { useLayoutEffect, useMemo, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { StaticDataTable } from '@/components/data-table'
@@ -46,6 +46,7 @@ import {
 import {
   StablePricingSequenceCoordinator,
   type KeyedPricingItem,
+  type StablePricingPlan,
 } from '../lib/stable-pricing-keys'
 
 type DynamicPricingBreakdownProps = {
@@ -157,6 +158,23 @@ function describeGroup(
     .join(' && ')
 }
 
+export type DynamicPricingBreakdownPlan = StablePricingPlan & {
+  tiers: ParsedTier[]
+  ruleGroups: RequestRuleGroup[]
+}
+
+/** Parses and plans the shared pricing view model used by every rendered list. */
+function planDynamicPricingBreakdown(
+  coordinator: StablePricingSequenceCoordinator,
+  expression: string
+): DynamicPricingBreakdownPlan {
+  const split = splitBillingExprAndRequestRules(expression)
+  const tiers = parseTiersFromExpr(split.billingExpr)
+  const ruleGroups = tryParseRequestRuleExpr(split.requestRuleExpr || '') || []
+  const plan = coordinator.plan({ tiers, ruleGroups })
+  return { tiers, ruleGroups, ...plan }
+}
+
 export function DynamicPricingBreakdown({
   billingExpr,
   matchedTierLabel,
@@ -187,22 +205,17 @@ export function DynamicPricingBreakdown({
     return { symbol: '$', rate: 1 }
   }, [currency])
 
-  const { tiers, ruleGroups } = useMemo(() => {
-    const split = splitBillingExprAndRequestRules(expr)
-    const parsedTiers = parseTiersFromExpr(split.billingExpr)
-    const parsedRules = tryParseRequestRuleExpr(split.requestRuleExpr || '')
-    return {
-      tiers: parsedTiers,
-      ruleGroups: parsedRules || [],
-    }
-  }, [expr])
+  const pricingPlan = useMemo(
+    () => planDynamicPricingBreakdown(pricingCoordinator, expr),
+    [expr, pricingCoordinator]
+  )
+  useLayoutEffect(() => {
+    pricingCoordinator.commit(pricingPlan.nextSnapshot)
+  }, [pricingCoordinator, pricingPlan.nextSnapshot])
+  const { tiers, ruleGroups, viewModel: pricingViewModel } = pricingPlan
 
   const hasTiers = tiers.length > 0
   const hasRules = ruleGroups.length > 0
-  const pricingViewModel = useMemo(
-    () => pricingCoordinator.reconcile({ tiers, ruleGroups }),
-    [pricingCoordinator, ruleGroups, tiers]
-  )
   const normalizedMatchedTierLabel = normalizeTierLabel(
     matchedTierLabel ?? undefined
   )
@@ -468,3 +481,5 @@ export function DynamicPricingBreakdown({
     </section>
   )
 }
+
+DynamicPricingBreakdown.plan = planDynamicPricingBreakdown

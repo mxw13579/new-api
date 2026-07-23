@@ -61,26 +61,32 @@ describe('pricing behavior contracts', () => {
 
   it('reconciles keys across real tier and rule reparsing', () => {
     const coordinator = new StablePricingSequenceCoordinator()
-    const before = coordinator.reconcile(
+    const beforePlan = coordinator.plan(
       parsePricingExpression(
         'tier("small", 1, 2) + tier("small", 1, 2) + tier("large", 3, 4)'
       )
     )
-    const afterInsert = coordinator.reconcile(
+    coordinator.commit(beforePlan.nextSnapshot)
+    const before = beforePlan.viewModel
+    const afterInsertPlan = coordinator.plan(
       parsePricingExpression(
         'tier("small", 1, 2) + tier("small", 1, 2) + tier("small", 1, 2) + tier("large", 3, 4)'
       )
     )
-    const afterReorder = coordinator.reconcile(
+    coordinator.commit(afterInsertPlan.nextSnapshot)
+    const afterInsert = afterInsertPlan.viewModel
+    const afterReorderPlan = coordinator.plan(
       parsePricingExpression(
         'tier("large", 3, 4) + tier("small", 1, 2) + tier("small", 1, 2) + tier("small", 1, 2)'
       )
     )
-    const repeated = coordinator.reconcile(
+    coordinator.commit(afterReorderPlan.nextSnapshot)
+    const afterReorder = afterReorderPlan.viewModel
+    const repeated = coordinator.plan(
       parsePricingExpression(
         'tier("large", 3, 4) + tier("small", 1, 2) + tier("small", 1, 2) + tier("small", 1, 2)'
       )
-    )
+    ).viewModel
 
     assert.notEqual(afterInsert.tiers[0].key, before.tiers[0].key)
     assert.deepEqual(
@@ -94,21 +100,25 @@ describe('pricing behavior contracts', () => {
     )
     assert.deepEqual(repeated, afterReorder)
 
-    const rulesBefore = coordinator.reconcile(
+    const rulesBeforePlan = coordinator.plan(
       parsePricingExpression(
         '(tier("base", 1, 2)) * (header("x-plan") == "pro" ? 2 : 1) * (header("x-plan") == "pro" ? 2 : 1) * (header("x-plan") == "team" ? 3 : 1)'
       )
     )
-    const rulesAfterInsert = coordinator.reconcile(
+    coordinator.commit(rulesBeforePlan.nextSnapshot)
+    const rulesBefore = rulesBeforePlan.viewModel
+    const rulesAfterInsertPlan = coordinator.plan(
       parsePricingExpression(
         '(tier("base", 1, 2)) * (header("x-plan") == "pro" ? 2 : 1) * (header("x-plan") == "pro" ? 2 : 1) * (header("x-plan") == "pro" ? 2 : 1) * (header("x-plan") == "team" ? 3 : 1)'
       )
     )
-    const rulesAfterReorder = coordinator.reconcile(
+    coordinator.commit(rulesAfterInsertPlan.nextSnapshot)
+    const rulesAfterInsert = rulesAfterInsertPlan.viewModel
+    const rulesAfterReorder = coordinator.plan(
       parsePricingExpression(
         '(tier("base", 1, 2)) * (header("x-plan") == "team" ? 3 : 1) * (header("x-plan") == "pro" ? 2 : 1) * (header("x-plan") == "pro" ? 2 : 1) * (header("x-plan") == "pro" ? 2 : 1)'
       )
-    )
+    ).viewModel
 
     assert.notEqual(
       rulesAfterInsert.ruleGroups[0].key,
@@ -128,8 +138,70 @@ describe('pricing behavior contracts', () => {
     )
     assert.ok(
       rulesAfterReorder.ruleGroups.every(({ key }) =>
-        key.startsWith('tier:rule-group:')
+        key.startsWith('calculation[tier:')
       )
+    )
+  })
+
+  it('does not let an abandoned plan mutate the committed pricing keys', () => {
+    const coordinator = new StablePricingSequenceCoordinator()
+    const committedInput = parsePricingExpression(
+      'tier("small", 1, 2) + tier("large", 3, 4)'
+    )
+    const committedPlan = coordinator.plan(committedInput)
+    coordinator.commit(committedPlan.nextSnapshot)
+    coordinator.commit(committedPlan.nextSnapshot)
+
+    const abandonedPlan = coordinator.plan(
+      parsePricingExpression(
+        'tier("small", 1, 2) + tier("small", 1, 2) + tier("large", 3, 4)'
+      )
+    )
+    const restoredPlan = coordinator.plan(committedInput)
+
+    assert.deepEqual(
+      restoredPlan.viewModel.tiers.map(({ key }) => key),
+      committedPlan.viewModel.tiers.map(({ key }) => key)
+    )
+    assert.deepEqual(
+      coordinator.plan(committedInput),
+      restoredPlan,
+      'repeat evaluation must stay independent of an uncommitted snapshot'
+    )
+    assert.notDeepEqual(
+      abandonedPlan.viewModel.tiers.map(({ key }) => key),
+      restoredPlan.viewModel.tiers.map(({ key }) => key)
+    )
+  })
+
+  it('namespaces rule keys by the stable tier calculation identity', () => {
+    const coordinator = new StablePricingSequenceCoordinator()
+    const initialPlan = coordinator.plan(
+      parsePricingExpression(
+        '(tier("small", 1, 2) + tier("large", 3, 4)) * (header("x-plan") == "pro" ? 2 : 1)'
+      )
+    )
+    coordinator.commit(initialPlan.nextSnapshot)
+
+    const reorderedPlan = coordinator.plan(
+      parsePricingExpression(
+        '(tier("large", 3, 4) + tier("small", 1, 2)) * (header("x-plan") == "pro" ? 2 : 1)'
+      )
+    )
+    coordinator.commit(reorderedPlan.nextSnapshot)
+    const changedPlan = coordinator.plan(
+      parsePricingExpression(
+        '(tier("enterprise", 5, 6) + tier("small", 1, 2)) * (header("x-plan") == "pro" ? 2 : 1)'
+      )
+    )
+
+    assert.deepEqual(
+      reorderedPlan.viewModel.ruleGroups.map(({ key }) => key),
+      initialPlan.viewModel.ruleGroups.map(({ key }) => key)
+    )
+    assert.notDeepEqual(
+      changedPlan.viewModel.ruleGroups.map(({ key }) => key),
+      reorderedPlan.viewModel.ruleGroups.map(({ key }) => key)
     )
   })
 })
