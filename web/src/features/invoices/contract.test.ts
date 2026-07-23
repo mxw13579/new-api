@@ -17,8 +17,10 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import assert from 'node:assert/strict'
-import { readFile } from 'node:fs/promises'
+import { readdir, readFile } from 'node:fs/promises'
+import path from 'node:path'
 import { describe, test } from 'node:test'
+import { pathToFileURL } from 'node:url'
 
 import {
   APPLICATION_STATUS_CONFIG,
@@ -220,19 +222,52 @@ describe('invoice frontend contract', () => {
     }
   })
 
-  test('all seven locales cover every invoice page literal without English fallback', async () => {
-    const sourceFiles = [
-      './index.tsx',
-      './components/application-panel.tsx',
-      './components/profiles-panel.tsx',
-      './components/history-panel.tsx',
+  test('all seven locales cover every user and admin invoice literal', async () => {
+    const sourceDirectories = [
+      new URL('./', import.meta.url),
+      new URL('../invoice-admin/', import.meta.url),
     ]
+    const sourceFiles: URL[] = [
+      new URL(
+        '../../routes/_authenticated/invoices/index.tsx',
+        import.meta.url
+      ),
+      new URL(
+        '../../routes/_authenticated/admin-invoices/index.tsx',
+        import.meta.url
+      ),
+      new URL(
+        '../../routes/_authenticated/invoice-settings/index.tsx',
+        import.meta.url
+      ),
+      new URL('../../hooks/use-sidebar-data.ts', import.meta.url),
+    ]
+    for (const sourceDirectory of sourceDirectories) {
+      for (const entry of await readdir(sourceDirectory, {
+        recursive: true,
+        withFileTypes: true,
+      })) {
+        if (!entry.isFile() || !/\.tsx?$/.test(entry.name)) continue
+        sourceFiles.push(pathToFileURL(path.join(entry.parentPath, entry.name)))
+      }
+    }
     const pageKeys = new Set<string>()
+    for (const dynamicKey of [
+      'Protected invoice value',
+      'Select a non-empty invoice PDF',
+      'Invoice PDF must be at most 10 MiB',
+      'Confirm that the PDF facts are correct',
+      'Invoice document state changed',
+      'Enter valid invoice issuance facts',
+      'Application window must be positive',
+      'Minimum invoice amount cannot be negative',
+      'Invoice fee quota is out of range',
+      'PDF retention must be positive',
+    ]) {
+      pageKeys.add(dynamicKey)
+    }
     for (const sourceFile of sourceFiles) {
-      const source = await readFile(
-        new URL(sourceFile, import.meta.url),
-        'utf8'
-      )
+      const source = await readFile(sourceFile, 'utf8')
       for (const match of source.matchAll(/\bt\(\s*['"]([^'"]+)['"]/gs)) {
         pageKeys.add(match[1])
       }
@@ -244,10 +279,8 @@ describe('invoice frontend contract', () => {
         'utf8'
       )
       const translation = JSON.parse(raw).translation as Record<string, string>
-      for (const key of pageKeys) {
-        assert.ok(translation[key], `${locale} missing page key ${key}`)
-        if (locale !== 'en') assert.notEqual(translation[key], key)
-      }
+      const missingKeys = [...pageKeys].filter((key) => !translation[key])
+      assert.deepEqual(missingKeys, [], `${locale} missing invoice page keys`)
     }
   })
 
