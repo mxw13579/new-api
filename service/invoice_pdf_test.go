@@ -178,6 +178,20 @@ func TestValidateInvoicePDFRejectsParsedActionsAtLegalAEntries(t *testing.T) {
 			},
 		},
 		{
+			name: "screen annotation action",
+			extra: []string{
+				"<< /Type /Annot /Subtype /Screen /Rect [0 0 10 10] /A 6 0 R >>",
+				"<< /S /Rendition >>",
+			},
+		},
+		{
+			name: "link annotation previous action",
+			extra: []string{
+				"<< /Type /Annot /Subtype /Link /Rect [0 0 10 10] /PA 6 0 R >>",
+				"<< /S /URI /URI (https://sentinel.invalid) >>",
+			},
+		},
+		{
 			name:         "outline item",
 			catalogExtra: "/Outlines 5 0 R",
 			extra: []string{
@@ -202,8 +216,9 @@ func TestValidateInvoicePDFRejectsParsedActionsAtLegalAEntries(t *testing.T) {
 
 func TestValidateInvoicePDFDoesNotTreatArbitraryAKeyAsActionEntry(t *testing.T) {
 	benign := buildInvoiceTestPDF(t, "/Benign 5 0 R",
-		"<< /A 6 0 R >>",
+		"<< /A 6 0 R /PA 7 0 R >>",
 		"<< /S /URI /URI (ordinary metadata value) >>",
+		"<< /S /Rendition >>",
 	)
 	_, err := ValidateInvoicePDF(bytes.NewReader(benign))
 	require.NoError(t, err)

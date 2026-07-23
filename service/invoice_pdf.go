@@ -220,7 +220,9 @@ func (traversal *invoicePDFTraversal) walkDict(dict types.Dict, depth int, locat
 			next = invoicePDFLocationAction
 		case location == invoicePDFLocationOutlineItem && (key == "First" || key == "Last" || key == "Next" || key == "Prev"):
 			next = invoicePDFLocationOutlineItem
-		case (subtypeName == "Link" || subtypeName == "Widget") && key == "A":
+		case (subtypeName == "Link" || subtypeName == "Widget" || subtypeName == "Screen") && key == "A":
+			next = invoicePDFLocationAction
+		case subtypeName == "Link" && key == "PA":
 			next = invoicePDFLocationAction
 		}
 		if err := traversal.walk(child, depth+1, true, next); err != nil {
