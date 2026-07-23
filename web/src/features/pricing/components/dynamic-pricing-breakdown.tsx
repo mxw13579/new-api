@@ -481,5 +481,3 @@ export function DynamicPricingBreakdown({
     </section>
   )
 }
-
-DynamicPricingBreakdown.plan = planDynamicPricingBreakdown
