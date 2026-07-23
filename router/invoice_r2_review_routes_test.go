@@ -186,6 +186,121 @@ func TestInvoiceAdminPermissionDenialsUseProductionAuthenticationAndHaveNoDomain
 	}
 }
 
+func TestInvoiceAdminProductionPermissionMatrix(t *testing.T) {
+	identities := []struct {
+		name          string
+		role          int
+		permissions   authz.PermissionsMap
+		authenticated bool
+		reviewOK      bool
+		uploadOK      bool
+		deniedCode    string
+	}{
+		{name: "unauthenticated", role: common.RoleAdminUser, deniedCode: "AUTH_UNAUTHORIZED"},
+		{name: "no target permission", role: common.RoleCommonUser, authenticated: true, deniedCode: "AUTH_INSUFFICIENT_PRIVILEGE"},
+		{name: "review only", role: common.RoleAdminUser, authenticated: true, permissions: authz.PermissionsMap{authz.ResourceInvoice: {authz.ActionInvoiceReview: true, authz.ActionInvoiceDocumentUpload: false}}, reviewOK: true, deniedCode: constant.InvoiceCodeForbidden},
+		{name: "upload only", role: common.RoleAdminUser, authenticated: true, permissions: authz.PermissionsMap{authz.ResourceInvoice: {authz.ActionInvoiceReview: false, authz.ActionInvoiceDocumentUpload: true}}, uploadOK: true, deniedCode: constant.InvoiceCodeForbidden},
+		{name: "explicit deny", role: common.RoleAdminUser, authenticated: true, permissions: authz.PermissionsMap{authz.ResourceInvoice: {authz.ActionInvoiceReview: false, authz.ActionInvoiceDocumentUpload: false}}, deniedCode: constant.InvoiceCodeForbidden},
+		{name: "explicit allow", role: common.RoleAdminUser, authenticated: true, permissions: authz.PermissionsMap{authz.ResourceInvoice: {authz.ActionInvoiceReview: true, authz.ActionInvoiceDocumentUpload: true}}, reviewOK: true, uploadOK: true},
+	}
+
+	for _, identity := range identities {
+		t.Run(identity.name, func(t *testing.T) {
+			fixture := setupInvoiceReviewRouteFixture(t)
+			require.NoError(t, fixture.db.Model(&model.User{}).Where("id = ?", fixture.adminID).Update("role", identity.role).Error)
+			require.NoError(t, authz.ClearUserPermissions(fixture.adminID))
+			if identity.permissions != nil {
+				require.NoError(t, authz.SetUserPermissions(fixture.adminID, identity.permissions))
+			}
+
+			for _, testCase := range []struct {
+				name        string
+				path        string
+				contentType string
+				body        []byte
+				allowed     bool
+			}{
+				{name: "approve", path: "/api/admin/invoices/9201/review", contentType: "application/json", body: []byte(`{}`), allowed: identity.reviewOK},
+				{name: "reject", path: "/api/admin/invoices/9202/reject", contentType: "application/json", body: []byte(`{}`), allowed: identity.reviewOK},
+				invoiceReviewUploadMatrixCase(t, "initial", 9203, constant.InvoiceApplicationStatusApproved, identity.uploadOK),
+				invoiceReviewUploadMatrixCase(t, "replacement", 9204, constant.InvoiceApplicationStatusIssued, identity.uploadOK),
+			} {
+				t.Run(testCase.name, func(t *testing.T) {
+					beforeWrites, beforeObjects := fixture.domainWrites.Load(), fixture.objectCalls.Load()
+					var beforeApplications []model.InvoiceApplication
+					require.NoError(t, fixture.db.Order("id").Find(&beforeApplications).Error)
+					var bodyReads atomic.Int32
+					request := httptest.NewRequest(http.MethodPost, testCase.path, &invoiceReviewRouteReadSentinel{
+						reader: bytes.NewReader(testCase.body), reads: &bodyReads,
+					})
+					request.Header.Set("Content-Type", testCase.contentType)
+					if identity.authenticated {
+						request.Header.Set("Authorization", "Bearer "+fixture.adminToken)
+						request.Header.Set("New-Api-User", fmt.Sprint(fixture.adminID))
+					}
+					recorder := httptest.NewRecorder()
+					fixture.engine.ServeHTTP(recorder, request)
+
+					if testCase.allowed {
+						assert.NotEqual(t, http.StatusUnauthorized, recorder.Code)
+						assert.NotEqual(t, http.StatusForbidden, recorder.Code)
+						assert.Positive(t, bodyReads.Load(), "allowed production route must invoke its handler")
+						return
+					}
+					if identity.authenticated {
+						assert.Equal(t, http.StatusForbidden, recorder.Code)
+					} else {
+						assert.Equal(t, http.StatusUnauthorized, recorder.Code)
+					}
+					assert.Equal(t, identity.deniedCode, invoiceReviewDeniedCode(t, recorder, identity.role >= common.RoleAdminUser && identity.authenticated))
+					assert.Zero(t, bodyReads.Load(), "denied production route must not invoke its handler")
+					assert.Equal(t, beforeWrites, fixture.domainWrites.Load(), "denied route must not mutate invoice domain tables")
+					assert.Equal(t, beforeObjects, fixture.objectCalls.Load(), "denied route must not contact object storage")
+					var afterApplications []model.InvoiceApplication
+					require.NoError(t, fixture.db.Order("id").Find(&afterApplications).Error)
+					assert.Equal(t, beforeApplications, afterApplications)
+				})
+			}
+		})
+	}
+}
+
+func invoiceReviewUploadMatrixCase(t *testing.T, name string, applicationID int64, status string, allowed bool) struct {
+	name        string
+	path        string
+	contentType string
+	body        []byte
+	allowed     bool
+} {
+	t.Helper()
+	testCase := invoiceReviewUploadRouteCase(t, name, applicationID, status)
+	return struct {
+		name        string
+		path        string
+		contentType string
+		body        []byte
+		allowed     bool
+	}{name: testCase.name, path: testCase.path, contentType: testCase.contentType, body: testCase.body, allowed: allowed}
+}
+
+func invoiceReviewDeniedCode(t *testing.T, recorder *httptest.ResponseRecorder, invoicePermissionDenial bool) string {
+	t.Helper()
+	if invoicePermissionDenial {
+		var response struct {
+			Data struct {
+				Code string `json:"code"`
+			} `json:"data"`
+		}
+		require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+		return response.Data.Code
+	}
+	var response struct {
+		Code string `json:"code"`
+	}
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+	return response.Code
+}
+
 type invoiceReviewRouteReadSentinel struct {
 	reader io.Reader
 	reads  *atomic.Int32
