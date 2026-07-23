@@ -19,8 +19,21 @@ For commercial licensing, please contact support@quantumnous.com
 import { describe, it } from 'bun:test'
 import assert from 'node:assert/strict'
 
-import { normalizeCondition } from './billing-expr'
-import { StablePricingKeyRegistry } from './stable-pricing-keys'
+import {
+  normalizeCondition,
+  parseTiersFromExpr,
+  splitBillingExprAndRequestRules,
+  tryParseRequestRuleExpr,
+} from './billing-expr'
+import { StablePricingSequenceCoordinator } from './stable-pricing-keys'
+
+function parsePricingExpression(expression: string) {
+  const split = splitBillingExprAndRequestRules(expression)
+  return {
+    tiers: parseTiersFromExpr(split.billingExpr),
+    ruleGroups: tryParseRequestRuleExpr(split.requestRuleExpr) ?? [],
+  }
+}
 
 describe('pricing behavior contracts', () => {
   it('normalizes every condition-source branch without changing valid input', () => {
@@ -46,37 +59,77 @@ describe('pricing behavior contracts', () => {
     )
   })
 
-  it('keeps existing duplicate-object keys through identical insertion and reorder', () => {
-    const registry = new StablePricingKeyRegistry()
-    const first = {
-      label: 'small',
-      conditions: [{ var: 'p', op: '<', value: 10 }],
-    }
-    const second = {
-      label: 'large',
-      conditions: [{ var: 'p', op: '>=', value: 10 }],
-    }
-    const duplicate = structuredClone(first)
-    const insertedDuplicate = structuredClone(first)
-
-    const before = registry.withKeys([first, duplicate, second], 'tier')
-    const afterInsert = registry.withKeys(
-      [insertedDuplicate, first, duplicate, second],
-      'tier'
+  it('reconciles keys across real tier and rule reparsing', () => {
+    const coordinator = new StablePricingSequenceCoordinator()
+    const before = coordinator.reconcile(
+      parsePricingExpression(
+        'tier("small", 1, 2) + tier("small", 1, 2) + tier("large", 3, 4)'
+      )
     )
-    const afterReorder = registry.withKeys(
-      [second, duplicate, insertedDuplicate, first],
-      'tier'
+    const afterInsert = coordinator.reconcile(
+      parsePricingExpression(
+        'tier("small", 1, 2) + tier("small", 1, 2) + tier("small", 1, 2) + tier("large", 3, 4)'
+      )
+    )
+    const afterReorder = coordinator.reconcile(
+      parsePricingExpression(
+        'tier("large", 3, 4) + tier("small", 1, 2) + tier("small", 1, 2) + tier("small", 1, 2)'
+      )
+    )
+    const repeated = coordinator.reconcile(
+      parsePricingExpression(
+        'tier("large", 3, 4) + tier("small", 1, 2) + tier("small", 1, 2) + tier("small", 1, 2)'
+      )
     )
 
-    assert.equal(new Set(before.map(({ key }) => key)).size, before.length)
-    assert.notEqual(afterInsert[0].key, before[0].key)
-    assert.equal(afterInsert[1].key, before[0].key)
-    assert.equal(afterInsert[2].key, before[1].key)
-    assert.equal(afterInsert[3].key, before[2].key)
-    assert.equal(afterReorder[0].key, before[2].key)
-    assert.equal(afterReorder[1].key, before[1].key)
-    assert.equal(afterReorder[2].key, afterInsert[0].key)
-    assert.equal(afterReorder[3].key, before[0].key)
+    assert.notEqual(afterInsert.tiers[0].key, before.tiers[0].key)
+    assert.deepEqual(
+      afterInsert.tiers.slice(1).map(({ key }) => key),
+      before.tiers.map(({ key }) => key)
+    )
+    assert.equal(afterReorder.tiers[0].key, before.tiers[2].key)
+    assert.deepEqual(
+      new Set(afterReorder.tiers.slice(1).map(({ key }) => key)),
+      new Set(afterInsert.tiers.slice(0, 3).map(({ key }) => key))
+    )
+    assert.deepEqual(repeated, afterReorder)
+
+    const rulesBefore = coordinator.reconcile(
+      parsePricingExpression(
+        '(tier("base", 1, 2)) * (header("x-plan") == "pro" ? 2 : 1) * (header("x-plan") == "pro" ? 2 : 1) * (header("x-plan") == "team" ? 3 : 1)'
+      )
+    )
+    const rulesAfterInsert = coordinator.reconcile(
+      parsePricingExpression(
+        '(tier("base", 1, 2)) * (header("x-plan") == "pro" ? 2 : 1) * (header("x-plan") == "pro" ? 2 : 1) * (header("x-plan") == "pro" ? 2 : 1) * (header("x-plan") == "team" ? 3 : 1)'
+      )
+    )
+    const rulesAfterReorder = coordinator.reconcile(
+      parsePricingExpression(
+        '(tier("base", 1, 2)) * (header("x-plan") == "team" ? 3 : 1) * (header("x-plan") == "pro" ? 2 : 1) * (header("x-plan") == "pro" ? 2 : 1) * (header("x-plan") == "pro" ? 2 : 1)'
+      )
+    )
+
+    assert.notEqual(
+      rulesAfterInsert.ruleGroups[0].key,
+      rulesBefore.ruleGroups[0].key
+    )
+    assert.deepEqual(
+      rulesAfterInsert.ruleGroups.slice(1).map(({ key }) => key),
+      rulesBefore.ruleGroups.map(({ key }) => key)
+    )
+    assert.equal(
+      rulesAfterReorder.ruleGroups[0].key,
+      rulesBefore.ruleGroups[2].key
+    )
+    assert.deepEqual(
+      new Set(rulesAfterReorder.ruleGroups.slice(1).map(({ key }) => key)),
+      new Set(rulesAfterInsert.ruleGroups.slice(0, 3).map(({ key }) => key))
+    )
+    assert.ok(
+      rulesAfterReorder.ruleGroups.every(({ key }) =>
+        key.startsWith('tier:rule-group:')
+      )
+    )
   })
 })

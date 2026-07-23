@@ -43,7 +43,10 @@ import {
   type RequestRuleGroup,
   type TierCondition,
 } from '../lib/billing-expr'
-import { StablePricingKeyRegistry } from '../lib/stable-pricing-keys'
+import {
+  StablePricingSequenceCoordinator,
+  type KeyedPricingItem,
+} from '../lib/stable-pricing-keys'
 
 type DynamicPricingBreakdownProps = {
   billingExpr: string | null | undefined
@@ -163,11 +166,13 @@ export function DynamicPricingBreakdown({
   const { t } = useTranslation()
   const expr = billingExpr || ''
   const currency = useSystemConfigStore((s) => s.config.currency)
-  const keyRegistryRef = useRef<StablePricingKeyRegistry | null>(null)
-  if (keyRegistryRef.current === null) {
-    keyRegistryRef.current = new StablePricingKeyRegistry()
+  const pricingCoordinatorRef = useRef<StablePricingSequenceCoordinator | null>(
+    null
+  )
+  if (pricingCoordinatorRef.current === null) {
+    pricingCoordinatorRef.current = new StablePricingSequenceCoordinator()
   }
-  const keyRegistry = keyRegistryRef.current
+  const pricingCoordinator = pricingCoordinatorRef.current
 
   const { symbol, rate } = useMemo(() => {
     if (currency.quotaDisplayType === 'CNY') {
@@ -194,13 +199,9 @@ export function DynamicPricingBreakdown({
 
   const hasTiers = tiers.length > 0
   const hasRules = ruleGroups.length > 0
-  const keyedTiers = useMemo(
-    () => keyRegistry.withKeys(tiers, 'tier'),
-    [keyRegistry, tiers]
-  )
-  const keyedRuleGroups = useMemo(
-    () => keyRegistry.withKeys(ruleGroups, 'rule-group'),
-    [keyRegistry, ruleGroups]
+  const pricingViewModel = useMemo(
+    () => pricingCoordinator.reconcile({ tiers, ruleGroups }),
+    [pricingCoordinator, ruleGroups, tiers]
   )
   const normalizedMatchedTierLabel = normalizeTierLabel(
     matchedTierLabel ?? undefined
@@ -274,7 +275,7 @@ export function DynamicPricingBreakdown({
             {t('Tiered price table')}
           </div>
           <div className='space-y-1.5 sm:hidden'>
-            {keyedTiers.map(({ item: tier, key }) => {
+            {pricingViewModel.tiers.map(({ item: tier, key }) => {
               const condSummary = formatConditionSummary(tier.conditions, t)
               const isMatched =
                 matchedTierLabel != null &&
@@ -345,9 +346,9 @@ export function DynamicPricingBreakdown({
                 : 'text-sm'
             }
             headerRowClassName='hover:bg-transparent'
-            data={tiers}
-            getRowKey={(tier) => keyRegistry.keyFor(tier, 'tier')}
-            getRowClassName={(tier) => {
+            data={pricingViewModel.tiers}
+            getRowKey={(keyedTier) => keyedTier.key}
+            getRowClassName={({ item: tier }) => {
               const isMatched =
                 normalizedMatchedTierLabel !== '' &&
                 normalizeTierLabel(tier.label) === normalizedMatchedTierLabel
@@ -365,7 +366,7 @@ export function DynamicPricingBreakdown({
                   compact && 'h-8'
                 ),
                 cellClassName: cn('align-top', compact ? 'py-2' : 'py-2.5'),
-                cell: (tier) => {
+                cell: ({ item: tier }) => {
                   const condSummary = formatConditionSummary(tier.conditions, t)
                   const isMatched =
                     normalizedMatchedTierLabel !== '' &&
@@ -409,7 +410,8 @@ export function DynamicPricingBreakdown({
                   'text-right align-top font-mono',
                   compact ? 'py-2' : 'py-2.5'
                 ),
-                cell: (tier: ParsedTier) => {
+                cell: (keyedTier: KeyedPricingItem<ParsedTier>) => {
+                  const tier = keyedTier.item
                   const value = Number(
                     tier[v.field as string as keyof ParsedTier] || 0
                   )
@@ -439,7 +441,7 @@ export function DynamicPricingBreakdown({
             {t('Conditional multipliers')}
           </div>
           <ul className='space-y-1.5'>
-            {keyedRuleGroups.map(({ item: group, key }) => (
+            {pricingViewModel.ruleGroups.map(({ item: group, key }) => (
               <li
                 key={key}
                 className='bg-muted/50 flex items-center justify-between gap-3 rounded-md px-3 py-2'
