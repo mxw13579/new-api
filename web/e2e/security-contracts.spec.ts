@@ -171,18 +171,79 @@ test('an earlier attachment submission cannot clear newer prompt input', async (
   await expect(prompt).toHaveValue('newer message', { timeout: 2_000 })
 })
 
-test('chat iframe is opaque, no-referrer, and keeps the key outside parent DOM', async ({
+test('chat iframe blocks a malicious child from parent state and navigation', async ({
   page,
 }) => {
+  const secretKey = 'sk-test-fake-chat-key'
+  const consoleMessages: string[] = []
+  const pageErrors: string[] = []
+  const redirectRequests: string[] = []
+  let parentUrlBeforeChild = ''
+  page.on('console', (message) => consoleMessages.push(message.text()))
+  page.on('pageerror', (error) => pageErrors.push(error.message))
   await installSecurityBackend(page, {
     chats: [{ AIAW: 'https://chat.example/?key={key}' }],
   })
   const externalRequests: Array<{ url: string; referer?: string }> = []
   await page.route('https://chat.example/**', async (route) => {
+    parentUrlBeforeChild = await page.evaluate(() => {
+      window.localStorage.setItem('security-parent-local', 'local-sentinel')
+      window.sessionStorage.setItem(
+        'security-parent-session',
+        'session-sentinel'
+      )
+      const sentinel = document.createElement('div')
+      sentinel.id = 'security-parent-sentinel'
+      sentinel.textContent = 'dom-sentinel'
+      document.body.append(sentinel)
+      return window.location.href
+    })
     externalRequests.push({
       url: route.request().url(),
       referer: route.request().headers().referer,
     })
+    await route.fulfill({
+      contentType: 'text/html',
+      body: '<meta http-equiv="refresh" content="0;url=https://child.example/controlled">',
+    })
+  })
+  await page.route('https://child.example/**', async (route) => {
+    await route.fulfill({
+      contentType: 'text/html',
+      body: `<!doctype html><script>
+        const outcomes = [];
+        const attempt = (name, action) => {
+          try {
+            action();
+            outcomes.push(name + ':returned');
+          } catch {
+            outcomes.push(name + ':blocked');
+          }
+        };
+        attempt('parent-dom', () => {
+          parent.document.getElementById('security-parent-sentinel').textContent = 'compromised';
+        });
+        attempt('parent-local', () => {
+          parent.localStorage.setItem('security-parent-local', 'compromised');
+        });
+        attempt('parent-session', () => {
+          parent.sessionStorage.setItem('security-parent-session', 'compromised');
+        });
+        attempt('opaque-storage', () => {
+          localStorage.setItem('security-child-local', 'compromised');
+        });
+        attempt('top-navigation', () => {
+          top.location.href = 'https://redirect.example/top';
+        });
+        attempt('parent-redirect', () => {
+          parent.location.replace('https://redirect.example/replace');
+        });
+        console.log('controlled-child-attempts:' + outcomes.join(','));
+      </script>`,
+    })
+  })
+  await page.route('https://redirect.example/**', async (route) => {
+    redirectRequests.push(route.request().url())
     await route.abort()
   })
 
@@ -195,10 +256,36 @@ test('chat iframe is opaque, no-referrer, and keeps the key outside parent DOM',
   await expect(frame).toHaveAttribute('referrerpolicy', 'no-referrer')
   await expect(frame).not.toHaveAttribute('srcdoc', /.+/)
   await expect(frame).toHaveAttribute('allow', 'camera; microphone')
-  await expect(page.locator('body')).not.toContainText('test-fake-chat-key')
+  await expect
+    .poll(() =>
+      consoleMessages.find((message) =>
+        message.startsWith('controlled-child-attempts:')
+      )
+    )
+    .toBe(
+      'controlled-child-attempts:parent-dom:blocked,parent-local:blocked,parent-session:blocked,opaque-storage:blocked,top-navigation:blocked,parent-redirect:blocked'
+    )
+  await expect(page.locator('#security-parent-sentinel')).toHaveText(
+    'dom-sentinel'
+  )
+  expect(
+    await page.evaluate(() =>
+      window.localStorage.getItem('security-parent-local')
+    )
+  ).toBe('local-sentinel')
+  expect(
+    await page.evaluate(() =>
+      window.sessionStorage.getItem('security-parent-session')
+    )
+  ).toBe('session-sentinel')
+  expect(page.url()).toBe(parentUrlBeforeChild)
+  expect(redirectRequests).toEqual([])
+  await expect(page.locator('body')).not.toContainText(secretKey)
   await expect.poll(() => externalRequests.length).toBeGreaterThan(0)
-  expect(externalRequests[0]?.url).toContain('sk-test-fake-chat-key')
+  expect(externalRequests[0]?.url).toContain(secretKey)
   expect(externalRequests[0]?.referer).toBeUndefined()
+  expect(consoleMessages.join('\n')).not.toContain(secretKey)
+  expect(pageErrors.join('\n')).not.toContain(secretKey)
 })
 
 for (const presetName of ['Lobe', 'AIAW']) {

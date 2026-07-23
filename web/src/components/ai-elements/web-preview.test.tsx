@@ -70,4 +70,30 @@ describe('WebPreviewBody security attributes', () => {
     assert.match(html, /Unable to open this URL safely/)
     assert.doesNotMatch(html, /<iframe/)
   })
+
+  it('rejects a target with the application origin', async () => {
+    const originalLocation = Object.getOwnPropertyDescriptor(
+      globalThis,
+      'location'
+    )
+    Object.defineProperty(globalThis, 'location', {
+      configurable: true,
+      value: { origin: 'https://gateway.example' },
+    })
+
+    try {
+      const html = await renderPreview({
+        src: 'https://gateway.example/embedded',
+      })
+
+      assert.match(html, /Unable to open this URL safely/)
+      assert.doesNotMatch(html, /<iframe/)
+    } finally {
+      if (originalLocation) {
+        Object.defineProperty(globalThis, 'location', originalLocation)
+      } else {
+        Reflect.deleteProperty(globalThis, 'location')
+      }
+    }
+  })
 })
