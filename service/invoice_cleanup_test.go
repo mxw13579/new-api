@@ -95,6 +95,9 @@ func TestCleanupInvoiceDocumentsEligibilityAndPoisonIsolation(t *testing.T) {
 	waiting := seedCleanupDocument(t, db, model.InvoiceDocumentStatusDeleteFailed, "invoices/waiting.pdf", &future, 1)
 	waiting.DeleteErrorCategory, waiting.NextDeleteAttemptAt = &retryable, &notDue
 	require.NoError(t, db.Save(&waiting).Error)
+	missingDue := seedCleanupDocument(t, db, model.InvoiceDocumentStatusDeleteFailed, "invoices/missing-due.pdf", &future, 1)
+	missingDue.DeleteErrorCategory = &retryable
+	require.NoError(t, db.Save(&missingDue).Error)
 	for _, document := range eligible {
 		store.objects[*document.ObjectKey] = []byte("pdf")
 	}
@@ -105,6 +108,11 @@ func TestCleanupInvoiceDocumentsEligibilityAndPoisonIsolation(t *testing.T) {
 	assert.NotContains(t, store.deletedKeys, *confirmedAbsent.ObjectKey)
 	assert.NotContains(t, store.deletedKeys, *dormant.ObjectKey)
 	assert.NotContains(t, store.deletedKeys, *waiting.ObjectKey)
+	assert.NotContains(t, store.deletedKeys, *missingDue.ObjectKey)
+	var reloadedMissingDue model.InvoiceDocument
+	require.NoError(t, db.First(&reloadedMissingDue, missingDue.ID).Error)
+	assert.Equal(t, model.InvoiceDocumentStatusDeleteFailed, reloadedMissingDue.Status)
+	assert.Zero(t, reloadedMissingDue.DeleteAttempts)
 }
 
 func TestCleanupInvoiceDocumentsPrevalidationIsTerminalWithoutAttemptAndContinues(t *testing.T) {

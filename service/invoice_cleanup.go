@@ -183,7 +183,7 @@ func findInvoiceDocumentCleanupCandidates(db *gorm.DB, now, staleBefore int64, l
 		"(status = ? AND expires_at IS NOT NULL AND expires_at <= ?) OR "+
 			"(status = ? AND delete_error_category = ? AND expires_at IS NOT NULL AND expires_at <= ?) OR "+
 			"status = ? OR "+
-			"(status = ? AND (delete_error_category IS NULL OR delete_error_category = '' OR (delete_error_category = ? AND (next_delete_attempt_at IS NULL OR next_delete_attempt_at <= ?)))) OR "+
+			"(status = ? AND (delete_error_category IS NULL OR delete_error_category = '' OR (delete_error_category = ? AND next_delete_attempt_at IS NOT NULL AND next_delete_attempt_at <= ?))) OR "+
 			"(status = ? AND operation_started_at <= ?)",
 		model.InvoiceDocumentStatusAvailable, now,
 		model.InvoiceDocumentStatusMissing, model.InvoiceDocumentDeleteErrorObjectIntegrityMismatch, now,
