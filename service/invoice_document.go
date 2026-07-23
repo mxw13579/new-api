@@ -525,19 +525,6 @@ func (lifecycle *InvoiceDocumentLifecycle) resolveFinalizeFailure(ctx context.Co
 	return nil, operationErr
 }
 
-func markInvoiceDocumentTerminal(db *gorm.DB, id int64, token, status string, now int64) error {
-	updated := db.Model(&model.InvoiceDocument{}).
-		Where("id = ? AND operation_token = ? AND status IN ?", id, token, []string{model.InvoiceDocumentStatusUploading, model.InvoiceDocumentStatusValidating}).
-		Updates(map[string]any{"status": status, "updated_at": now})
-	if updated.Error != nil {
-		return updated.Error
-	}
-	if updated.RowsAffected != 1 {
-		return model.ErrInvoiceDocumentConflict
-	}
-	return nil
-}
-
 func (lifecycle *InvoiceDocumentLifecycle) documentByID(id int64) (*model.InvoiceDocument, error) {
 	return lifecycleDocumentByID(lifecycle.db, id)
 }
