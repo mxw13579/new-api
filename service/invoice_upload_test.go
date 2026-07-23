@@ -23,11 +23,12 @@ func TestUploadInvoiceDocumentReachesIssuedReplacementPath(t *testing.T) {
 	require.NoError(t, db.Create(&issuance).Error)
 	oldKey := "invoices/old.pdf"
 	version := int64(1)
+	expiresAt := int64(400)
 	old := model.InvoiceDocument{
 		ApplicationID: 1, IssuanceID: &issuance.ID, Version: &version, R2Bucket: "private", ObjectKey: &oldKey,
 		ContentType: model.InvoicePDFContentType, SizeBytes: 100, SHA256: "sha", Status: model.InvoiceDocumentStatusAvailable,
 		OperationToken: "old-token", OperationStartedAt: 100, UploadedBy: 9, UploadedAt: 100,
-		PDFFactsAttested: true, RetentionDaysSnapshot: 30, CreatedAt: 100, UpdatedAt: 100,
+		PDFFactsAttested: true, RetentionDaysSnapshot: 30, ExpiresAt: &expiresAt, CreatedAt: 100, UpdatedAt: 100,
 	}
 	require.NoError(t, db.Create(&old).Error)
 	require.NoError(t, db.Model(&model.InvoiceApplication{}).Where("id = ?", 1).Update("active_document_id", old.ID).Error)
