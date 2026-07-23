@@ -460,6 +460,9 @@ func migratePersonalInvoiceStructures(db *gorm.DB) error {
 	if db == nil {
 		return fmt.Errorf("personal invoice migration requires database")
 	}
+	if err := migrateInvoiceDocumentRecoveryColumns(db); err != nil {
+		return err
+	}
 	return db.AutoMigrate(
 		&InvoiceProfile{},
 		&InvoiceApplication{},
@@ -468,6 +471,21 @@ func migratePersonalInvoiceStructures(db *gorm.DB) error {
 		&InvoiceIssuance{},
 		&InvoiceDocument{},
 	)
+}
+
+type invoiceDocumentRecoveryColumnMigration struct {
+	RecoveryAttempts  int    `gorm:"not null;default:0"`
+	LastRecoveryAt    int64  `gorm:"not null;default:0"`
+	LastRecoveryError string `gorm:"type:varchar(32);not null;default:''"`
+}
+
+func (invoiceDocumentRecoveryColumnMigration) TableName() string { return "invoice_documents" }
+
+func migrateInvoiceDocumentRecoveryColumns(db *gorm.DB) error {
+	if !db.Migrator().HasTable(&InvoiceDocument{}) {
+		return nil
+	}
+	return db.AutoMigrate(&invoiceDocumentRecoveryColumnMigration{})
 }
 
 func migrateLOGDB() error {

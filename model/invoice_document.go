@@ -61,9 +61,9 @@ type InvoiceDocument struct {
 	ExpiresAt                     *int64  `json:"expires_at,omitempty" gorm:"index:idx_invoice_documents_status_expiry,priority:2"`
 	DeleteAttempts                int     `json:"delete_attempts" gorm:"not null"`
 	LastDeleteError               string  `json:"last_delete_error" gorm:"type:varchar(512)"`
-	RecoveryAttempts              int     `json:"recovery_attempts" gorm:"not null"`
-	LastRecoveryAt                int64   `json:"last_recovery_at" gorm:"not null"`
-	LastRecoveryError             string  `json:"last_recovery_error" gorm:"type:varchar(32);not null"`
+	RecoveryAttempts              int     `json:"recovery_attempts" gorm:"not null;default:0"`
+	LastRecoveryAt                int64   `json:"last_recovery_at" gorm:"not null;default:0"`
+	LastRecoveryError             string  `json:"last_recovery_error" gorm:"type:varchar(32);not null;default:''"`
 	DeletedAt                     *int64  `json:"deleted_at,omitempty"`
 	CreatedAt                     int64   `json:"created_at" gorm:"not null"`
 	UpdatedAt                     int64   `json:"updated_at" gorm:"not null"`
