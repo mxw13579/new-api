@@ -16,23 +16,26 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useRouterState } from '@tanstack/react-router'
-import { useEffect, useRef } from 'react'
-import LoadingBar, { type LoadingBarRef } from 'react-top-loading-bar'
+interface PromptSubmissionOptions<TFile, TEvent> {
+  text: string
+  event: TEvent
+  convertFiles: () => Promise<TFile[]>
+  submit: (
+    input: { text: string; files: TFile[] },
+    event: TEvent
+  ) => void | Promise<void>
+  onSuccess: () => void
+  onError: (error: unknown) => void
+}
 
-export function NavigationProgress() {
-  const ref = useRef<LoadingBarRef>(null)
-  const state = useRouterState()
-
-  useEffect(() => {
-    if (state.status === 'pending') {
-      ref.current?.continuousStart()
-    } else {
-      ref.current?.complete()
-    }
-  }, [state.status])
-
-  return (
-    <LoadingBar color='var(--muted-foreground)' ref={ref} shadow height={2} />
-  )
+export async function runPromptSubmission<TFile, TEvent>(
+  options: PromptSubmissionOptions<TFile, TEvent>
+): Promise<void> {
+  try {
+    const files = await options.convertFiles()
+    await options.submit({ text: options.text, files }, options.event)
+    options.onSuccess()
+  } catch (error) {
+    options.onError(error)
+  }
 }

@@ -87,6 +87,27 @@ const isolatedSanitizeOptions = {
   FORCE_BODY: true,
 } satisfies Config
 
+const inlineSanitizeOptions = {
+  ADD_ATTR: ['rel', 'target'],
+  ALLOWED_URI_REGEXP: /^(?:https?:|mailto:)/i,
+  FORBID_ATTR: ['srcdoc', 'style'],
+  FORBID_TAGS: [
+    'button',
+    'embed',
+    'form',
+    'iframe',
+    'input',
+    'math',
+    'object',
+    'option',
+    'script',
+    'select',
+    'style',
+    'svg',
+    'textarea',
+  ],
+} satisfies Config
+
 function hardenIsolatedHtml(html: string): string {
   if (typeof document === 'undefined') {
     return html
@@ -118,6 +139,21 @@ function hardenIsolatedHtml(html: string): string {
   return template.innerHTML
 }
 
+function hardenInlineHtml(html: string): string {
+  if (typeof document === 'undefined') {
+    return html
+  }
+
+  const template = document.createElement('template')
+  template.innerHTML = html
+
+  template.content.querySelectorAll('a[target="_blank"]').forEach((link) => {
+    link.setAttribute('rel', 'noopener noreferrer')
+  })
+
+  return template.innerHTML
+}
+
 function sanitizeHtmlContent(
   content: string,
   variant: HtmlContentVariant
@@ -128,7 +164,7 @@ function sanitizeHtmlContent(
     return hardenIsolatedHtml(html)
   }
 
-  return DOMPurify.sanitize(content)
+  return hardenInlineHtml(DOMPurify.sanitize(content, inlineSanitizeOptions))
 }
 
 function syncDarkClass(wrapper: HTMLElement): void {

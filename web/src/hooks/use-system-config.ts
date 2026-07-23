@@ -120,13 +120,13 @@ function preloadImage(
   onError: () => void
 ): () => void {
   const img = new Image()
-  img.onload = onLoad
-  img.onerror = onError
+  img.addEventListener('load', onLoad)
+  img.addEventListener('error', onError)
   img.src = src
 
   return () => {
-    img.onload = null
-    img.onerror = null
+    img.removeEventListener('load', onLoad)
+    img.removeEventListener('error', onError)
   }
 }
 
@@ -167,7 +167,9 @@ export function useSystemConfig(options: UseSystemConfigOptions = {}) {
   }, [setConfig, setLoading])
 
   useEffect(() => {
-    if (autoLoad) loadConfig()
+    if (autoLoad) {
+      void loadConfig()
+    }
   }, [autoLoad, loadConfig])
 
   // Preload logo image when URL changes

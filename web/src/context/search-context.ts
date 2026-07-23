@@ -16,23 +16,21 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useRouterState } from '@tanstack/react-router'
-import { useEffect, useRef } from 'react'
-import LoadingBar, { type LoadingBarRef } from 'react-top-loading-bar'
+import { createContext, useContext } from 'react'
 
-export function NavigationProgress() {
-  const ref = useRef<LoadingBarRef>(null)
-  const state = useRouterState()
+export interface SearchContextValue {
+  open: boolean
+  setOpen: React.Dispatch<React.SetStateAction<boolean>>
+}
 
-  useEffect(() => {
-    if (state.status === 'pending') {
-      ref.current?.continuousStart()
-    } else {
-      ref.current?.complete()
-    }
-  }, [state.status])
+export const SearchContext = createContext<SearchContextValue | null>(null)
 
-  return (
-    <LoadingBar color='var(--muted-foreground)' ref={ref} shadow height={2} />
-  )
+export function useSearch(): SearchContextValue {
+  const searchContext = useContext(SearchContext)
+
+  if (!searchContext) {
+    throw new Error('useSearch has to be used within SearchProvider')
+  }
+
+  return searchContext
 }

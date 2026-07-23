@@ -25,6 +25,10 @@ import { toast } from 'sonner'
 import { useActiveChatKey } from '@/features/chat/hooks/use-active-chat-key'
 import { useChatPresets } from '@/features/chat/hooks/use-chat-presets'
 import { resolveChatUrl } from '@/features/chat/lib/chat-links'
+import {
+  resolveEmbeddableUrl,
+  validateEmbeddableUrl,
+} from '@/lib/embeddable-url'
 
 export const Route = createFileRoute('/_authenticated/chat2link')({
   component: Chat2LinkPage,
@@ -39,9 +43,18 @@ function Chat2LinkPage() {
     () => chatPresets.find((p) => p.type === 'web'),
     [chatPresets]
   )
+  const validatedTemplate = useMemo(
+    () =>
+      firstWebPreset
+        ? validateEmbeddableUrl(firstWebPreset.url, {
+            allowLocalhostHttp: import.meta.env.DEV,
+          })
+        : null,
+    [firstWebPreset]
+  )
 
   const { data: activeKey, error: keyError } = useActiveChatKey(
-    Boolean(firstWebPreset)
+    Boolean(validatedTemplate)
   )
 
   useEffect(() => {
@@ -49,6 +62,12 @@ function Chat2LinkPage() {
       if (chatPresets.length > 0) {
         toast.error(t('No available Web chat links'))
       }
+      return
+    }
+
+    if (!validatedTemplate) {
+      toast.error(t('Unable to open this URL safely.'))
+      navigate({ to: '/dashboard' })
       return
     }
 
@@ -64,17 +83,26 @@ function Chat2LinkPage() {
       return
     }
 
-    const url = resolveChatUrl({
-      template: firstWebPreset.url,
-      apiKey: activeKey,
-      serverAddress,
-    })
+    const url = resolveEmbeddableUrl(
+      validatedTemplate,
+      () =>
+        resolveChatUrl({
+          template: validatedTemplate,
+          apiKey: activeKey,
+          serverAddress,
+        }),
+      { allowLocalhostHttp: import.meta.env.DEV }
+    )
 
     if (url) {
       window.location.href = url
+      return
     }
+
+    toast.error(t('Unable to open this URL safely.'))
   }, [
     firstWebPreset,
+    validatedTemplate,
     activeKey,
     keyError,
     serverAddress,

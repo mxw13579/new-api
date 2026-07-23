@@ -29,6 +29,10 @@ import {
   chatLinkRequiresApiKey,
   resolveChatUrl,
 } from '@/features/chat/lib/chat-links'
+import {
+  resolveEmbeddableUrl,
+  validateEmbeddableUrl,
+} from '@/lib/embeddable-url'
 
 export const Route = createFileRoute('/_authenticated/chat/$chatId')({
   loader: async ({ params }) => {
@@ -50,11 +54,17 @@ function ChatRouteComponent() {
   }, [chatId, chatPresets])
 
   const isWebLink = preset?.type === 'web'
+  const validatedTemplate = useMemo(() => {
+    if (!preset || !isWebLink) return null
+    return validateEmbeddableUrl(preset.url, {
+      allowLocalhostHttp: import.meta.env.DEV,
+    })
+  }, [isWebLink, preset])
 
   const requiresActiveKey = useMemo(() => {
-    if (!preset || !isWebLink) return false
-    return chatLinkRequiresApiKey(preset.url ?? '')
-  }, [isWebLink, preset])
+    if (!validatedTemplate) return false
+    return chatLinkRequiresApiKey(validatedTemplate)
+  }, [validatedTemplate])
 
   const {
     data: activeKey,
@@ -64,14 +74,28 @@ function ChatRouteComponent() {
   } = useActiveChatKey(Boolean(preset && requiresActiveKey))
 
   const iframeSrc = useMemo(() => {
-    if (!preset || !isWebLink) return ''
+    if (!preset || !isWebLink || !validatedTemplate) return ''
     if (requiresActiveKey && !activeKey) return ''
-    return resolveChatUrl({
-      template: preset.url,
-      apiKey: requiresActiveKey ? activeKey : undefined,
-      serverAddress,
-    })
-  }, [activeKey, isWebLink, preset, requiresActiveKey, serverAddress])
+    return (
+      resolveEmbeddableUrl(
+        validatedTemplate,
+        () =>
+          resolveChatUrl({
+            template: validatedTemplate,
+            apiKey: requiresActiveKey ? activeKey : undefined,
+            serverAddress,
+          }),
+        { allowLocalhostHttp: import.meta.env.DEV }
+      ) ?? ''
+    )
+  }, [
+    activeKey,
+    isWebLink,
+    preset,
+    requiresActiveKey,
+    serverAddress,
+    validatedTemplate,
+  ])
 
   if (!preset) {
     return (
@@ -159,6 +183,8 @@ function ChatRouteComponent() {
       key={iframeSrc}
       className='h-full w-full border-0'
       allow='camera; microphone'
+      referrerPolicy='no-referrer'
+      sandbox='allow-scripts allow-forms allow-popups allow-presentation'
       title={`Chat preset: ${preset.name}`}
     />
   )

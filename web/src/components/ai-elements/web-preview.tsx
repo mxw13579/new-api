@@ -43,6 +43,7 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import dayjs from '@/lib/dayjs'
+import { validateEmbeddableUrl } from '@/lib/embeddable-url'
 import { cn } from '@/lib/utils'
 
 export type WebPreviewContextValue = {
@@ -195,7 +196,10 @@ export const WebPreviewUrl = ({
   )
 }
 
-export type WebPreviewBodyProps = ComponentProps<'iframe'> & {
+export type WebPreviewBodyProps = Omit<
+  ComponentProps<'iframe'>,
+  'referrerPolicy' | 'sandbox' | 'srcDoc'
+> & {
   loading?: ReactNode
 }
 
@@ -207,15 +211,27 @@ export const WebPreviewBody = ({
 }: WebPreviewBodyProps) => {
   const { t } = useTranslation()
   const { url } = useWebPreview()
+  const iframeSrc = validateEmbeddableUrl(src ?? url, {
+    allowLocalhostHttp: import.meta.env.DEV,
+  })
+
+  if (!iframeSrc) {
+    return (
+      <div className='text-destructive flex flex-1 items-center justify-center p-4 text-sm'>
+        {t('Unable to open this URL safely.')}
+      </div>
+    )
+  }
 
   return (
     <div className='flex-1'>
       <iframe
         className={cn('size-full', className)}
-        sandbox='allow-scripts allow-same-origin allow-forms allow-popups allow-presentation'
-        src={(src ?? url) || undefined}
         title={t('Preview')}
         {...props}
+        referrerPolicy='no-referrer'
+        sandbox='allow-scripts allow-forms allow-popups allow-presentation'
+        src={iframeSrc}
       />
       {loading}
     </div>
@@ -272,7 +288,7 @@ export const WebPreviewConsole = ({
           {logs.length === 0 ? (
             <p className='text-muted-foreground'>{t('No console output')}</p>
           ) : (
-            logs.map((log, index) => (
+            logs.map((log) => (
               <div
                 className={cn(
                   'text-xs',
@@ -280,7 +296,7 @@ export const WebPreviewConsole = ({
                   log.level === 'warn' && 'text-warning',
                   log.level === 'log' && 'text-foreground'
                 )}
-                key={`${log.timestamp.getTime()}-${index}`}
+                key={`${log.timestamp.getTime()}-${log.level}-${log.message}`}
               >
                 <span className='text-muted-foreground'>
                   {dayjs(log.timestamp).format('HH:mm:ss')}
