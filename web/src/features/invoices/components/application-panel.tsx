@@ -16,6 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+/* oxlint-disable eslint/no-nested-ternary */
 import { InvoiceIcon } from '@hugeicons/core-free-icons'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
@@ -73,22 +74,39 @@ import {
   calculateSelectedAmountMinor,
   getInvoiceErrorMessageKey,
 } from '../contract'
-import { invoiceQueryKeys } from '../queries'
 import type {
   EligibleInvoiceOrder,
   InvoiceApi,
   InvoiceConfig,
+  InvoicePage,
   InvoiceProfile,
 } from '../types'
+import {
+  createInvoiceDraftIdentity,
+  invalidateUserInvoiceMutationQueries,
+  invoicePageCount,
+  isInvoiceProfileEnabled,
+} from '../user-workspace'
 
 interface ApplicationPanelProps {
   invoiceApi: InvoiceApi
   config: InvoiceConfig | undefined
   profiles: InvoiceProfile[] | undefined
-  orders: EligibleInvoiceOrder[] | undefined
-  loading: boolean
-  error: boolean
-  walletQuota: number
+  profilesLoading: boolean
+  profilesError: boolean
+  retryProfiles: () => void
+  ordersPage: InvoicePage<EligibleInvoiceOrder> | undefined
+  ordersLoading: boolean
+  ordersError: boolean
+  retryOrders: () => void
+  onOrdersPageChange: (page: number) => void
+  configLoading: boolean
+  configError: boolean
+  retryConfig: () => void
+  walletQuota: number | undefined
+  quotaLoading: boolean
+  quotaError: boolean
+  retryQuota: () => void
 }
 
 function formatCny(minor: number): string {
@@ -115,7 +133,9 @@ export function ApplicationPanel(props: ApplicationPanelProps) {
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [liveMessageKey, setLiveMessageKey] = useState('')
   const reviewButtonRef = useRef<HTMLButtonElement>(null)
-  const orders = props.orders || []
+  const draftIdentityRef = useRef(createInvoiceDraftIdentity())
+  const orders = props.ordersPage?.items || []
+  const ordersPage = props.ordersPage
   const profiles = props.profiles || []
   const selectedProfile = profiles.find(
     (profile) => profile.id === selectedProfileId
@@ -127,33 +147,47 @@ export function ApplicationPanel(props: ApplicationPanelProps) {
   const minimumReached =
     !!props.config && selectedAmountMinor >= props.config.minimum_amount_minor
   const quotaAvailable =
-    !!props.config && props.walletQuota >= props.config.fee_quota
+    !!props.config &&
+    props.walletQuota !== undefined &&
+    props.walletQuota >= props.config.fee_quota
+  const selectedProfileEnabled =
+    !!props.config &&
+    !!selectedProfile &&
+    isInvoiceProfileEnabled(props.config, selectedProfile.type)
 
   const createMutation = useMutation({
     mutationFn: () => {
       if (!selectedProfile) throw new Error('profile-required')
+      const topupIds = [...selectedTopUpIds].sort((left, right) => left - right)
+      const fingerprint = JSON.stringify({
+        profileId: selectedProfile.id,
+        profileVersion: selectedProfile.version,
+        topupIds,
+        feeQuota: props.config?.fee_quota,
+      })
       return props.invoiceApi.createApplication({
-        request_id: crypto.randomUUID(),
+        request_id: draftIdentityRef.current.forDraft(fingerprint),
         profile_id: selectedProfile.id,
         profile_version: selectedProfile.version,
-        topup_ids: [...selectedTopUpIds].sort((left, right) => left - right),
+        topup_ids: topupIds,
       })
     },
-    onSuccess: async () => {
-      await Promise.all([
-        queryClient.invalidateQueries({
-          queryKey: invoiceQueryKeys.eligibleOrders(1, 100),
-        }),
-        queryClient.invalidateQueries({
-          queryKey: invoiceQueryKeys.applications(1, 50),
-        }),
-      ])
+    onSuccess: async (application) => {
+      await invalidateUserInvoiceMutationQueries(queryClient, application.id)
+      draftIdentityRef.current.reset()
       setSelectedTopUpIds(new Set())
       setConfirmOpen(false)
       setLiveMessageKey('Invoice application submitted successfully')
     },
-    onError: (error) => {
+    onError: async (error) => {
       if (error instanceof InvoiceApiError) {
+        if (
+          error.code === 'INVOICE_STATE_CONFLICT' ||
+          error.code === 'INVOICE_TOPUP_INELIGIBLE' ||
+          error.code === 'INVOICE_PAYMENT_EVIDENCE_CONFLICT'
+        ) {
+          await invalidateUserInvoiceMutationQueries(queryClient)
+        }
         setLiveMessageKey(getInvoiceErrorMessageKey(error.code))
         return
       }
@@ -188,7 +222,7 @@ export function ApplicationPanel(props: ApplicationPanelProps) {
     </div>
   )
 
-  if (props.loading) {
+  if (props.configLoading && props.profilesLoading && props.ordersLoading) {
     return (
       <Card>
         <CardHeader>
@@ -200,15 +234,6 @@ export function ApplicationPanel(props: ApplicationPanelProps) {
           <Skeleton className='h-28 w-full' />
         </CardContent>
       </Card>
-    )
-  }
-
-  if (props.error) {
-    return (
-      <Alert variant='destructive'>
-        <AlertTitle>{t('Invoice data failed to load')}</AlertTitle>
-        <AlertDescription>{t('Please refresh and try again')}</AlertDescription>
-      </Alert>
     )
   }
 
@@ -224,20 +249,33 @@ export function ApplicationPanel(props: ApplicationPanelProps) {
           </CardDescription>
         </CardHeader>
         <CardContent className='space-y-5'>
-          <Alert>
-            <AlertTitle>{t('Invoice policy')}</AlertTitle>
-            <AlertDescription>
-              {t(
-                'Orders from the last {{days}} days are eligible. Minimum {{minimum}}, fee {{fee}} wallet quota, PDF retention {{retention}} days.',
-                {
-                  days: props.config?.application_window_days,
-                  minimum: formatCny(props.config?.minimum_amount_minor ?? 0),
-                  fee: props.config?.fee_quota,
-                  retention: props.config?.pdf_retention_days,
-                }
-              )}
-            </AlertDescription>
-          </Alert>
+          {props.configError ? (
+            <Alert variant='destructive'>
+              <AlertTitle>{t('Invoice policy failed to load')}</AlertTitle>
+              <AlertDescription>
+                <Button variant='outline' size='sm' onClick={props.retryConfig}>
+                  {t('Retry')}
+                </Button>
+              </AlertDescription>
+            </Alert>
+          ) : props.configLoading ? (
+            <Skeleton className='h-20 w-full' />
+          ) : (
+            <Alert>
+              <AlertTitle>{t('Invoice policy')}</AlertTitle>
+              <AlertDescription>
+                {t(
+                  'Orders from the last {{days}} days are eligible. Minimum {{minimum}}, fee {{fee}} wallet quota, PDF retention {{retention}} days.',
+                  {
+                    days: props.config?.application_window_days,
+                    minimum: formatCny(props.config?.minimum_amount_minor ?? 0),
+                    fee: props.config?.fee_quota,
+                    retention: props.config?.pdf_retention_days,
+                  }
+                )}
+              </AlertDescription>
+            </Alert>
+          )}
 
           <Field>
             <FieldLabel htmlFor='invoice-profile'>
@@ -254,22 +292,62 @@ export function ApplicationPanel(props: ApplicationPanelProps) {
               <NativeSelectOption value=''>
                 {t('Select an invoice profile')}
               </NativeSelectOption>
-              {profiles.map((profile) => (
-                <NativeSelectOption key={profile.id} value={profile.id}>
-                  {profile.title} · v{profile.version}
-                </NativeSelectOption>
-              ))}
+              {profiles.map((profile) => {
+                const enabled =
+                  !props.config ||
+                  isInvoiceProfileEnabled(props.config, profile.type)
+                return (
+                  <NativeSelectOption
+                    key={profile.id}
+                    value={profile.id}
+                    disabled={!enabled}
+                  >
+                    {profile.title} · v{profile.version}
+                    {!enabled ? ` (${t('Disabled for new applications')})` : ''}
+                  </NativeSelectOption>
+                )
+              })}
             </NativeSelect>
             <FieldDescription>
               {t(
                 'The selected profile version is submitted with the application.'
               )}
             </FieldDescription>
+            {props.profilesLoading ? <Skeleton className='h-8 w-full' /> : null}
+            {props.profilesError ? (
+              <Alert variant='destructive'>
+                <AlertTitle>{t('Invoice profiles failed to load')}</AlertTitle>
+                <AlertDescription>
+                  <Button
+                    variant='outline'
+                    size='sm'
+                    onClick={props.retryProfiles}
+                  >
+                    {t('Retry')}
+                  </Button>
+                </AlertDescription>
+              </Alert>
+            ) : null}
           </Field>
 
           <FieldSet>
             <FieldLegend>{t('Eligible paid orders')}</FieldLegend>
-            {orders.length === 0 ? (
+            {props.ordersLoading ? (
+              <Skeleton className='h-28 w-full' />
+            ) : props.ordersError ? (
+              <Alert variant='destructive'>
+                <AlertTitle>{t('Eligible orders failed to load')}</AlertTitle>
+                <AlertDescription>
+                  <Button
+                    variant='outline'
+                    size='sm'
+                    onClick={props.retryOrders}
+                  >
+                    {t('Retry')}
+                  </Button>
+                </AlertDescription>
+              </Alert>
+            ) : orders.length === 0 ? (
               <Empty className='border'>
                 <EmptyHeader>
                   <EmptyMedia variant='icon'>
@@ -332,9 +410,52 @@ export function ApplicationPanel(props: ApplicationPanelProps) {
                 </table>
               </div>
             )}
+            {ordersPage ? (
+              <div className='flex items-center justify-end gap-2'>
+                <Button
+                  variant='outline'
+                  size='sm'
+                  disabled={ordersPage.page <= 1}
+                  onClick={() => props.onOrdersPageChange(ordersPage.page - 1)}
+                >
+                  {t('Previous')}
+                </Button>
+                <span className='text-muted-foreground text-sm'>
+                  {t('Page {{page}} of {{pages}}', {
+                    page: ordersPage.page,
+                    pages: invoicePageCount(
+                      ordersPage.total,
+                      ordersPage.page_size
+                    ),
+                  })}
+                </span>
+                <Button
+                  variant='outline'
+                  size='sm'
+                  disabled={
+                    ordersPage.page >=
+                    invoicePageCount(ordersPage.total, ordersPage.page_size)
+                  }
+                  onClick={() => props.onOrdersPageChange(ordersPage.page + 1)}
+                >
+                  {t('Next')}
+                </Button>
+              </div>
+            ) : null}
           </FieldSet>
 
-          {!quotaAvailable ? (
+          {props.quotaError ? (
+            <Alert variant='destructive'>
+              <AlertTitle>{t('Wallet quota failed to load')}</AlertTitle>
+              <AlertDescription>
+                <Button variant='outline' size='sm' onClick={props.retryQuota}>
+                  {t('Retry')}
+                </Button>
+              </AlertDescription>
+            </Alert>
+          ) : props.quotaLoading ? (
+            <Skeleton className='h-16 w-full' />
+          ) : !quotaAvailable ? (
             <Alert variant='destructive'>
               <AlertTitle>
                 {t('Insufficient wallet quota for invoice fee')}
@@ -364,9 +485,13 @@ export function ApplicationPanel(props: ApplicationPanelProps) {
             onClick={() => setConfirmOpen(true)}
             disabled={
               !selectedProfile ||
+              !selectedProfileEnabled ||
               selectedTopUpIds.size === 0 ||
               !minimumReached ||
-              !quotaAvailable
+              !quotaAvailable ||
+              props.configError ||
+              props.ordersError ||
+              props.profilesError
             }
           >
             <HugeiconsIcon

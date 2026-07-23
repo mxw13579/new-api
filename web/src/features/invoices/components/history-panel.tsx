@@ -19,10 +19,21 @@ For commercial licensing, please contact support@quantumnous.com
 import { Download01Icon, InvoiceIcon } from '@hugeicons/core-free-icons'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import {
   Card,
@@ -40,18 +51,29 @@ import {
   EmptyTitle,
 } from '@/components/ui/empty'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Spinner } from '@/components/ui/spinner'
 
 import { InvoiceApiError } from '../api'
 import { canDownloadInvoice, getInvoiceErrorMessageKey } from '../contract'
-import { invoiceQueryKeys } from '../queries'
-import type { InvoiceApi, InvoiceApplicationSummary } from '../types'
+import type {
+  InvoiceApi,
+  InvoiceApplicationSummary,
+  InvoicePage,
+} from '../types'
+import {
+  invalidateUserInvoiceMutationQueries,
+  invoicePageCount,
+} from '../user-workspace'
+import { ApplicationDetail } from './application-detail'
 import { InvoiceStatusBadges } from './status-badges'
 
 interface HistoryPanelProps {
   invoiceApi: InvoiceApi
-  applications: InvoiceApplicationSummary[] | undefined
+  applicationsPage: InvoicePage<InvoiceApplicationSummary> | undefined
   loading: boolean
   error: boolean
+  retry: () => void
+  onPageChange: (page: number) => void
 }
 
 function formatCny(minor: number): string {
@@ -70,28 +92,60 @@ function formatCny(minor: number): string {
 export function HistoryPanel(props: HistoryPanelProps) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
+  const [nowSeconds, setNowSeconds] = useState(() =>
+    Math.floor(Date.now() / 1000)
+  )
+  const [cancelTarget, setCancelTarget] =
+    useState<InvoiceApplicationSummary | null>(null)
+  const [detailId, setDetailId] = useState<number | null>(null)
+  const [downloadPendingId, setDownloadPendingId] = useState<number | null>(
+    null
+  )
+  useEffect(() => {
+    const interval = window.setInterval(
+      () => setNowSeconds(Math.floor(Date.now() / 1000)),
+      30_000
+    )
+    return () => window.clearInterval(interval)
+  }, [])
   const cancelMutation = useMutation({
     mutationFn: (applicationId: number) =>
       props.invoiceApi.cancelApplication(applicationId),
-    onSuccess: async () => {
-      await Promise.all([
-        queryClient.invalidateQueries({
-          queryKey: invoiceQueryKeys.applications(1, 50),
-        }),
-        queryClient.invalidateQueries({
-          queryKey: invoiceQueryKeys.eligibleOrders(1, 100),
-        }),
-      ])
+    onSuccess: async (application) => {
+      await invalidateUserInvoiceMutationQueries(queryClient, application.id)
+      setCancelTarget(null)
       toast.success(t('Invoice application cancelled'))
     },
-    onError: (error) => {
+    onError: async (error, applicationId) => {
       if (error instanceof InvoiceApiError) {
+        if (error.code === 'INVOICE_STATE_CONFLICT') {
+          await invalidateUserInvoiceMutationQueries(queryClient, applicationId)
+        }
         toast.error(t(getInvoiceErrorMessageKey(error.code)))
         return
       }
       toast.error(t('Invoice error: service unavailable'))
     },
   })
+  async function downloadDocument(applicationId: number): Promise<void> {
+    setDownloadPendingId(applicationId)
+    try {
+      if (!props.invoiceApi.requestDocumentDownloadUrl) {
+        throw new Error('authenticated-download-unavailable')
+      }
+      const downloadUrl =
+        await props.invoiceApi.requestDocumentDownloadUrl(applicationId)
+      window.location.assign(downloadUrl)
+    } catch (error) {
+      if (error instanceof InvoiceApiError) {
+        toast.error(t(getInvoiceErrorMessageKey(error.code)))
+      } else {
+        toast.error(t('Invoice error: service unavailable'))
+      }
+    } finally {
+      setDownloadPendingId(null)
+    }
+  }
 
   if (props.loading) {
     return (
@@ -106,12 +160,17 @@ export function HistoryPanel(props: HistoryPanelProps) {
     return (
       <Alert variant='destructive'>
         <AlertTitle>{t('Invoice history failed to load')}</AlertTitle>
-        <AlertDescription>{t('Please refresh and try again')}</AlertDescription>
+        <AlertDescription>
+          <Button variant='outline' size='sm' onClick={props.retry}>
+            {t('Retry')}
+          </Button>
+        </AlertDescription>
       </Alert>
     )
   }
 
-  const applications = props.applications || []
+  const applications = props.applicationsPage?.items || []
+  const applicationsPage = props.applicationsPage
   if (applications.length === 0) {
     return (
       <Empty className='border'>
@@ -130,11 +189,14 @@ export function HistoryPanel(props: HistoryPanelProps) {
 
   return (
     <div className='grid gap-4'>
+      <div className='flex items-center justify-between gap-3'>
+        <h2 className='text-lg font-semibold'>{t('Invoice history')}</h2>
+        <Button variant='outline' size='sm' onClick={props.retry}>
+          {t('Refresh')}
+        </Button>
+      </div>
       {applications.map((application) => {
-        const downloadable = canDownloadInvoice(
-          application,
-          Math.floor(Date.now() / 1000)
-        )
+        const downloadable = canDownloadInvoice(application, nowSeconds)
         return (
           <Card key={application.id}>
             <CardHeader>
@@ -191,31 +253,38 @@ export function HistoryPanel(props: HistoryPanelProps) {
               ) : null}
             </CardContent>
             <CardFooter className='justify-end gap-2'>
+              <Button
+                variant='outline'
+                onClick={() => setDetailId(application.id)}
+              >
+                {t('Details')}
+              </Button>
               {application.can_cancel ? (
                 <Button
                   variant='outline'
-                  disabled={cancelMutation.isPending}
-                  onClick={() => cancelMutation.mutate(application.id)}
+                  disabled={
+                    cancelMutation.isPending &&
+                    cancelMutation.variables === application.id
+                  }
+                  onClick={() => setCancelTarget(application)}
                 >
                   {t('Cancel application')}
                 </Button>
               ) : null}
               {downloadable ? (
                 <Button
-                  render={
-                    <a
-                      href={props.invoiceApi.getDocumentDownloadUrl(
-                        application.id
-                      )}
-                    />
-                  }
-                  nativeButton={false}
+                  disabled={downloadPendingId === application.id}
+                  onClick={() => downloadDocument(application.id)}
                 >
-                  <HugeiconsIcon
-                    icon={Download01Icon}
-                    strokeWidth={2}
-                    data-icon='inline-start'
-                  />
+                  {downloadPendingId === application.id ? (
+                    <Spinner data-icon='inline-start' />
+                  ) : (
+                    <HugeiconsIcon
+                      icon={Download01Icon}
+                      strokeWidth={2}
+                      data-icon='inline-start'
+                    />
+                  )}
                   {t('Download PDF')}
                 </Button>
               ) : null}
@@ -223,6 +292,84 @@ export function HistoryPanel(props: HistoryPanelProps) {
           </Card>
         )
       })}
+      {applicationsPage ? (
+        <div className='flex items-center justify-end gap-2'>
+          <Button
+            variant='outline'
+            size='sm'
+            disabled={applicationsPage.page <= 1}
+            onClick={() => props.onPageChange(applicationsPage.page - 1)}
+          >
+            {t('Previous')}
+          </Button>
+          <span className='text-muted-foreground text-sm'>
+            {t('Page {{page}} of {{pages}}', {
+              page: applicationsPage.page,
+              pages: invoicePageCount(
+                applicationsPage.total,
+                applicationsPage.page_size
+              ),
+            })}
+          </span>
+          <Button
+            variant='outline'
+            size='sm'
+            disabled={
+              applicationsPage.page >=
+              invoicePageCount(
+                applicationsPage.total,
+                applicationsPage.page_size
+              )
+            }
+            onClick={() => props.onPageChange(applicationsPage.page + 1)}
+          >
+            {t('Next')}
+          </Button>
+        </div>
+      ) : null}
+      <ApplicationDetail
+        invoiceApi={props.invoiceApi}
+        applicationId={detailId}
+        onOpenChange={(open) => {
+          if (!open) setDetailId(null)
+        }}
+      />
+      <AlertDialog
+        open={cancelTarget !== null}
+        onOpenChange={(open) => {
+          if (!open && !cancelMutation.isPending) setCancelTarget(null)
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {t('Cancel invoice application?')}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {t(
+                'The selected paid orders will become eligible again after cancellation.'
+              )}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={cancelMutation.isPending}>
+              {t('Keep application')}
+            </AlertDialogCancel>
+            <AlertDialogAction
+              variant='destructive'
+              disabled={cancelMutation.isPending}
+              onClick={() => {
+                if (cancelTarget) cancelMutation.mutate(cancelTarget.id)
+              }}
+            >
+              {cancelMutation.isPending ? (
+                <Spinner data-icon='inline-start' />
+              ) : null}
+              {t('Cancel application')}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }

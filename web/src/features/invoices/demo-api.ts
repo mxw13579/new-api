@@ -200,8 +200,9 @@ export function createInvoiceDemoApi(): InvoiceApi {
       )
     },
     async listEligibleOrders(request) {
+      const offset = (request.page - 1) * request.page_size
       return {
-        items: orders,
+        items: orders.slice(offset, offset + request.page_size),
         page: request.page,
         page_size: request.page_size,
         total: orders.length,
@@ -217,8 +218,9 @@ export function createInvoiceDemoApi(): InvoiceApi {
       return detailFromSummary(created)
     },
     async listApplications(request) {
+      const offset = (request.page - 1) * request.page_size
       return {
-        items: applications,
+        items: applications.slice(offset, offset + request.page_size),
         page: request.page,
         page_size: request.page_size,
         total: applications.length,
@@ -244,6 +246,9 @@ export function createInvoiceDemoApi(): InvoiceApi {
       return detailFromSummary(cancelled)
     },
     getDocumentDownloadUrl(applicationId) {
+      return `/demo/invoices/${applicationId}.pdf`
+    },
+    async requestDocumentDownloadUrl(applicationId) {
       return `/demo/invoices/${applicationId}.pdf`
     },
   }

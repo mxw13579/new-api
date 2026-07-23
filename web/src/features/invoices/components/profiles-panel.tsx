@@ -28,6 +28,17 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -69,12 +80,21 @@ import { Spinner } from '@/components/ui/spinner'
 import { InvoiceApiError } from '../api'
 import { getInvoiceErrorMessageKey } from '../contract'
 import { invoiceQueryKeys } from '../queries'
-import type { InvoiceApi, InvoiceProfile, InvoiceType } from '../types'
+import type {
+  InvoiceApi,
+  InvoiceConfig,
+  InvoiceProfile,
+  InvoiceType,
+} from '../types'
+import { isInvoiceProfileEnabled } from '../user-workspace'
 
 interface ProfilesPanelProps {
   invoiceApi: InvoiceApi
   profiles: InvoiceProfile[] | undefined
   loading: boolean
+  error: boolean
+  retry: () => void
+  config: InvoiceConfig | undefined
 }
 
 interface ProfileDraft {
@@ -106,6 +126,7 @@ export function ProfilesPanel(props: ProfilesPanelProps) {
   const queryClient = useQueryClient()
   const [draft, setDraft] = useState<ProfileDraft>(EMPTY_PROFILE_DRAFT)
   const [dialogOpen, setDialogOpen] = useState(false)
+  const [deleteTarget, setDeleteTarget] = useState<InvoiceProfile | null>(null)
 
   const saveMutation = useMutation({
     mutationFn: () => {
@@ -158,6 +179,7 @@ export function ProfilesPanel(props: ProfilesPanelProps) {
         queryKey: invoiceQueryKeys.profiles(),
       })
       toast.success(t('Invoice profile deleted'))
+      setDeleteTarget(null)
     },
     onError: async (error) => {
       if (error instanceof InvoiceApiError) {
@@ -180,6 +202,19 @@ export function ProfilesPanel(props: ProfilesPanelProps) {
     )
   }
 
+  if (props.error) {
+    return (
+      <Alert variant='destructive'>
+        <AlertTitle>{t('Invoice profiles failed to load')}</AlertTitle>
+        <AlertDescription>
+          <Button variant='outline' size='sm' onClick={props.retry}>
+            {t('Retry')}
+          </Button>
+        </AlertDescription>
+      </Alert>
+    )
+  }
+
   const profiles = props.profiles || []
   return (
     <>
@@ -193,8 +228,18 @@ export function ProfilesPanel(props: ProfilesPanelProps) {
           </p>
         </div>
         <Button
+          disabled={
+            !props.config ||
+            (!props.config.personal_enabled && !props.config.company_enabled)
+          }
           onClick={() => {
-            setDraft(EMPTY_PROFILE_DRAFT)
+            setDraft({
+              ...EMPTY_PROFILE_DRAFT,
+              type:
+                props.config && !props.config.personal_enabled
+                  ? 'company'
+                  : 'personal',
+            })
             setDialogOpen(true)
           }}
         >
@@ -232,6 +277,12 @@ export function ProfilesPanel(props: ProfilesPanelProps) {
                 </CardDescription>
                 <CardAction className='flex gap-1'>
                   {profile.is_default ? <Badge>{t('Default')}</Badge> : null}
+                  {props.config &&
+                  !isInvoiceProfileEnabled(props.config, profile.type) ? (
+                    <Badge variant='secondary'>
+                      {t('Disabled for new applications')}
+                    </Badge>
+                  ) : null}
                   <Badge variant='outline'>v{profile.version}</Badge>
                 </CardAction>
               </CardHeader>
@@ -270,8 +321,11 @@ export function ProfilesPanel(props: ProfilesPanelProps) {
                 </Button>
                 <Button
                   variant='destructive'
-                  disabled={deleteMutation.isPending}
-                  onClick={() => deleteMutation.mutate(profile)}
+                  disabled={
+                    deleteMutation.isPending &&
+                    deleteMutation.variables?.id === profile.id
+                  }
+                  onClick={() => setDeleteTarget(profile)}
                 >
                   <HugeiconsIcon
                     icon={Delete02Icon}
@@ -321,10 +375,24 @@ export function ProfilesPanel(props: ProfilesPanelProps) {
                   }))
                 }
               >
-                <NativeSelectOption value='personal'>
+                <NativeSelectOption
+                  value='personal'
+                  disabled={
+                    draft.id === null &&
+                    !!props.config &&
+                    !props.config.personal_enabled
+                  }
+                >
                   {t('Personal')}
                 </NativeSelectOption>
-                <NativeSelectOption value='company'>
+                <NativeSelectOption
+                  value='company'
+                  disabled={
+                    draft.id === null &&
+                    !!props.config &&
+                    !props.config.company_enabled
+                  }
+                >
                   {t('Company')}
                 </NativeSelectOption>
               </NativeSelect>
@@ -399,6 +467,41 @@ export function ProfilesPanel(props: ProfilesPanelProps) {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <AlertDialog
+        open={deleteTarget !== null}
+        onOpenChange={(open) => {
+          if (!open && !deleteMutation.isPending) setDeleteTarget(null)
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t('Delete invoice profile?')}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {t(
+                'This profile cannot be restored. Existing invoice applications remain available.'
+              )}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleteMutation.isPending}>
+              {t('Cancel')}
+            </AlertDialogCancel>
+            <AlertDialogAction
+              variant='destructive'
+              disabled={deleteMutation.isPending}
+              onClick={() => {
+                if (deleteTarget) deleteMutation.mutate(deleteTarget)
+              }}
+            >
+              {deleteMutation.isPending ? (
+                <Spinner data-icon='inline-start' />
+              ) : null}
+              {t('Delete')}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   )
 }
