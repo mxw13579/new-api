@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { Tag as TagIcon } from 'lucide-react'
-import { useMemo } from 'react'
+import { useMemo, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { StaticDataTable } from '@/components/data-table'
@@ -43,7 +43,7 @@ import {
   type RequestRuleGroup,
   type TierCondition,
 } from '../lib/billing-expr'
-import { withStablePricingKeys } from '../lib/stable-pricing-keys'
+import { StablePricingKeyRegistry } from '../lib/stable-pricing-keys'
 
 type DynamicPricingBreakdownProps = {
   billingExpr: string | null | undefined
@@ -163,6 +163,11 @@ export function DynamicPricingBreakdown({
   const { t } = useTranslation()
   const expr = billingExpr || ''
   const currency = useSystemConfigStore((s) => s.config.currency)
+  const keyRegistryRef = useRef<StablePricingKeyRegistry | null>(null)
+  if (keyRegistryRef.current === null) {
+    keyRegistryRef.current = new StablePricingKeyRegistry()
+  }
+  const keyRegistry = keyRegistryRef.current
 
   const { symbol, rate } = useMemo(() => {
     if (currency.quotaDisplayType === 'CNY') {
@@ -190,12 +195,12 @@ export function DynamicPricingBreakdown({
   const hasTiers = tiers.length > 0
   const hasRules = ruleGroups.length > 0
   const keyedTiers = useMemo(
-    () => withStablePricingKeys(tiers, 'tier'),
-    [tiers]
+    () => keyRegistry.withKeys(tiers, 'tier'),
+    [keyRegistry, tiers]
   )
   const keyedRuleGroups = useMemo(
-    () => withStablePricingKeys(ruleGroups, 'rule-group'),
-    [ruleGroups]
+    () => keyRegistry.withKeys(ruleGroups, 'rule-group'),
+    [keyRegistry, ruleGroups]
   )
   const normalizedMatchedTierLabel = normalizeTierLabel(
     matchedTierLabel ?? undefined
@@ -341,7 +346,7 @@ export function DynamicPricingBreakdown({
             }
             headerRowClassName='hover:bg-transparent'
             data={tiers}
-            getRowKey={(_tier, index) => `tier-${index}`}
+            getRowKey={(tier) => keyRegistry.keyFor(tier, 'tier')}
             getRowClassName={(tier) => {
               const isMatched =
                 normalizedMatchedTierLabel !== '' &&

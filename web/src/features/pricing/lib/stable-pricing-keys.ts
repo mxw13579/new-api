@@ -21,19 +21,35 @@ export type KeyedPricingItem<T> = {
   key: string
 }
 
-/** Adds a content-local occurrence identity without coupling keys to list position. */
-export function withStablePricingKeys<T>(
-  items: readonly T[],
-  namespace: string
-): Array<KeyedPricingItem<T>> {
-  const occurrences = new Map<string, number>()
-  return items.map((item) => {
-    const content = JSON.stringify(item) ?? String(item)
-    const occurrence = occurrences.get(content) ?? 0
-    occurrences.set(content, occurrence + 1)
-    return {
-      item,
-      key: `${namespace}:${content}:${occurrence}`,
+/** Maintains React keys for object identities over one component lifecycle. */
+export class StablePricingKeyRegistry {
+  private readonly keys = new WeakMap<object, Map<string, string>>()
+  private readonly nextIds = new Map<string, number>()
+
+  keyFor(item: object, namespace: string): string {
+    let itemKeys = this.keys.get(item)
+    if (!itemKeys) {
+      itemKeys = new Map<string, string>()
+      this.keys.set(item, itemKeys)
     }
-  })
+
+    const existingKey = itemKeys.get(namespace)
+    if (existingKey) return existingKey
+
+    const nextId = this.nextIds.get(namespace) ?? 0
+    const key = `${namespace}:${nextId}`
+    this.nextIds.set(namespace, nextId + 1)
+    itemKeys.set(namespace, key)
+    return key
+  }
+
+  withKeys<T extends object>(
+    items: readonly T[],
+    namespace: string
+  ): Array<KeyedPricingItem<T>> {
+    return items.map((item) => ({
+      item,
+      key: this.keyFor(item, namespace),
+    }))
+  }
 }

@@ -20,7 +20,7 @@ import { describe, it } from 'bun:test'
 import assert from 'node:assert/strict'
 
 import { normalizeCondition } from './billing-expr'
-import { withStablePricingKeys } from './stable-pricing-keys'
+import { StablePricingKeyRegistry } from './stable-pricing-keys'
 
 describe('pricing behavior contracts', () => {
   it('normalizes every condition-source branch without changing valid input', () => {
@@ -46,7 +46,8 @@ describe('pricing behavior contracts', () => {
     )
   })
 
-  it('keeps duplicate-content keys distinct through insertion and reorder', () => {
+  it('keeps existing duplicate-object keys through identical insertion and reorder', () => {
+    const registry = new StablePricingKeyRegistry()
     const first = {
       label: 'small',
       conditions: [{ var: 'p', op: '<', value: 10 }],
@@ -56,29 +57,26 @@ describe('pricing behavior contracts', () => {
       conditions: [{ var: 'p', op: '>=', value: 10 }],
     }
     const duplicate = structuredClone(first)
-    const inserted = { label: 'medium', conditions: [] }
+    const insertedDuplicate = structuredClone(first)
 
-    const before = withStablePricingKeys([first, duplicate, second], 'tier')
-    const afterInsert = withStablePricingKeys(
-      [inserted, first, duplicate, second],
+    const before = registry.withKeys([first, duplicate, second], 'tier')
+    const afterInsert = registry.withKeys(
+      [insertedDuplicate, first, duplicate, second],
       'tier'
     )
-    const afterReorder = withStablePricingKeys(
-      [second, first, duplicate, inserted],
+    const afterReorder = registry.withKeys(
+      [second, duplicate, insertedDuplicate, first],
       'tier'
     )
 
     assert.equal(new Set(before.map(({ key }) => key)).size, before.length)
-    assert.deepEqual(
-      before.map(({ key }) => key),
-      afterInsert.slice(1).map(({ key }) => key)
-    )
-    assert.deepEqual(
-      before.map(({ key }) => key).sort(),
-      afterReorder
-        .filter(({ item }) => item !== inserted)
-        .map(({ key }) => key)
-        .sort()
-    )
+    assert.notEqual(afterInsert[0].key, before[0].key)
+    assert.equal(afterInsert[1].key, before[0].key)
+    assert.equal(afterInsert[2].key, before[1].key)
+    assert.equal(afterInsert[3].key, before[2].key)
+    assert.equal(afterReorder[0].key, before[2].key)
+    assert.equal(afterReorder[1].key, before[1].key)
+    assert.equal(afterReorder[2].key, afterInsert[0].key)
+    assert.equal(afterReorder[3].key, before[0].key)
   })
 })
