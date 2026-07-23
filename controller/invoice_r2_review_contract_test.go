@@ -169,3 +169,29 @@ func TestInvoiceUploadMultipartBoundaryAndCardinality(t *testing.T) {
 		})
 	}
 }
+
+func TestInvoiceUploadHTTPResponseRedactsAllDocumentSentinels(t *testing.T) {
+	sentinels := []string{
+		"endpoint-http-sentinel-rw2", "bucket-http-sentinel-rw2", "access-key-http-sentinel-rw2",
+		"secret-http-sentinel-rw2", "final-key-http-sentinel-rw2", "staging-key-http-sentinel-rw2",
+		"provider-http-sentinel-rw2", "filename-http-sentinel-rw2.pdf", "signed-url-http-sentinel-rw2",
+		"pdf-bytes-http-sentinel-rw2",
+	}
+	parts := validInvoiceUploadParts(constant.InvoiceApplicationStatusApproved, []byte(sentinels[9]))
+	parts[len(parts)-1].filename = sentinels[7]
+	parts[1].value = sentinels[4]
+	request := invoiceUploadRequest(t, parts)
+	request.Header.Set("X-Sentinel-Endpoint", sentinels[0])
+	request.Header.Set("X-Sentinel-Bucket", sentinels[1])
+	request.Header.Set("X-Sentinel-Access-Key", sentinels[2])
+	request.Header.Set("X-Sentinel-Secret", sentinels[3])
+	request.Header.Set("X-Sentinel-Staging-Key", sentinels[5])
+	request.Header.Set("X-Sentinel-Provider", sentinels[6])
+	request.Header.Set("X-Sentinel-Signed-URL", sentinels[8])
+
+	recorder := performInvoiceUploadController(request)
+	assert.Equal(t, http.StatusConflict, recorder.Code)
+	for _, sentinel := range sentinels {
+		assert.NotContains(t, recorder.Body.String(), sentinel)
+	}
+}

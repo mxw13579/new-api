@@ -23,6 +23,8 @@ type invoiceObjectStoreStub struct {
 	deleteErrors map[string]error
 	deletedKeys  []string
 	bucket       string
+	copyError    error
+	headError    error
 }
 
 type invoiceDeleteFailureStore struct {
@@ -63,6 +65,9 @@ func (s *invoiceObjectStoreStub) Put(_ context.Context, key string, body io.Read
 }
 
 func (s *invoiceObjectStoreStub) Copy(_ context.Context, sourceKey, destinationKey string) error {
+	if s.copyError != nil {
+		return s.copyError
+	}
 	data, ok := s.objects[sourceKey]
 	if !ok {
 		return ErrInvoiceObjectNotFound
@@ -72,6 +77,9 @@ func (s *invoiceObjectStoreStub) Copy(_ context.Context, sourceKey, destinationK
 }
 
 func (s *invoiceObjectStoreStub) Head(_ context.Context, key string) (InvoiceObjectHead, error) {
+	if s.headError != nil {
+		return InvoiceObjectHead{}, s.headError
+	}
 	data, ok := s.objects[key]
 	if !ok {
 		return InvoiceObjectHead{}, ErrInvoiceObjectNotFound
@@ -85,6 +93,20 @@ func (s *invoiceObjectStoreStub) Head(_ context.Context, key string) (InvoiceObj
 		return InvoiceObjectHead{}, err
 	}
 	return InvoiceObjectHead{SizeBytes: int64(len(data)), ChecksumSHA256: checksum}, nil
+}
+
+type invoicePromotionCASLossStore struct {
+	*invoiceObjectStoreStub
+	db         *gorm.DB
+	documentID int64
+}
+
+func (s *invoicePromotionCASLossStore) Delete(ctx context.Context, key string) error {
+	if err := s.invoiceObjectStoreStub.Delete(ctx, key); err != nil {
+		return err
+	}
+	return s.db.Model(&model.InvoiceDocument{}).Where("id = ?", s.documentID).
+		Update("operation_token", "claim-won-after-staging-delete").Error
 }
 
 func (s *invoiceObjectStoreStub) Delete(_ context.Context, key string) error {
@@ -240,6 +262,57 @@ func TestPromoteInvoiceDocumentRequiresStagingDeletionBeforeFinalize(t *testing.
 				PDFFactsAttested: true, AttestedBy: 9, Now: 200,
 			})
 			require.ErrorIs(t, finalizeErr, model.ErrInvoiceDocumentConflict)
+		})
+	}
+}
+
+func TestPromoteInvoiceDocumentCASLossAfterStagingDeleteConverges(t *testing.T) {
+	db := openInvoiceDocumentServiceTestDB(t)
+	base := newInvoiceObjectStoreStub()
+	document, err := CreateInvoiceDocumentUpload(db, "private", 1, 9, 100)
+	require.NoError(t, err)
+	store := &invoicePromotionCASLossStore{invoiceObjectStoreStub: base, db: db, documentID: document.ID}
+
+	_, err = PromoteInvoiceDocument(context.Background(), db, store, document.ID, document.OperationToken, bytes.NewReader(buildInvoiceTestPDF(t, "")), 101)
+	require.ErrorIs(t, err, model.ErrInvoiceDocumentConflict)
+	var claimed model.InvoiceDocument
+	require.NoError(t, db.First(&claimed, document.ID).Error)
+	assert.Equal(t, model.InvoiceDocumentStatusUploading, claimed.Status)
+	assert.Equal(t, "claim-won-after-staging-delete", claimed.OperationToken)
+	require.NotNil(t, claimed.StagingObjectKey)
+	require.NotNil(t, claimed.ObjectKey)
+	assert.NotContains(t, base.objects, *claimed.StagingObjectKey)
+	assert.Contains(t, base.objects, *claimed.ObjectKey)
+
+	reconciled, err := ReconcileInvoiceDocument(context.Background(), db, base, claimed.ID, 200, 150)
+	require.NoError(t, err)
+	assert.Equal(t, model.InvoiceDocumentStatusUploadFailed, reconciled.Status)
+	assert.NotContains(t, base.objects, *claimed.ObjectKey)
+}
+
+func TestPromoteInvoiceDocumentCrashBoundariesConverge(t *testing.T) {
+	for _, testCase := range []struct {
+		name      string
+		configure func(*invoiceObjectStoreStub)
+	}{
+		{name: "copy failure", configure: func(store *invoiceObjectStoreStub) { store.copyError = ErrInvoiceObjectRetryable }},
+		{name: "head failure", configure: func(store *invoiceObjectStoreStub) { store.headError = ErrInvoiceObjectRetryable }},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			db := openInvoiceDocumentServiceTestDB(t)
+			store := newInvoiceObjectStoreStub()
+			testCase.configure(store)
+			document, err := CreateInvoiceDocumentUpload(db, "private", 1, 9, 100)
+			require.NoError(t, err)
+			_, err = PromoteInvoiceDocument(context.Background(), db, store, document.ID, document.OperationToken, bytes.NewReader(buildInvoiceTestPDF(t, "")), 101)
+			require.ErrorIs(t, err, ErrInvoiceObjectRetryable)
+
+			store.copyError = nil
+			store.headError = nil
+			reconciled, err := ReconcileInvoiceDocument(context.Background(), db, store, document.ID, 200, 150)
+			require.NoError(t, err)
+			assert.Equal(t, model.InvoiceDocumentStatusUploadFailed, reconciled.Status)
+			assert.Empty(t, store.objects)
 		})
 	}
 }
@@ -404,6 +477,67 @@ func TestInvoiceDocumentReplacementRequiresFreshAttestation(t *testing.T) {
 	assert.Equal(t, model.InvoiceDocumentStatusSuperseded, unchangedFirst.Status)
 	assert.Equal(t, 9, *unchangedFirst.AttestedBy)
 	assert.Equal(t, firstAttestedAt, *unchangedFirst.AttestedAt)
+}
+
+func TestReconcileClaimWinsAgainstInitialFinalize(t *testing.T) {
+	db := openInvoiceDocumentServiceTestDB(t)
+	store := newInvoiceObjectStoreStub()
+	document := createPromotedInvoiceDocument(t, db, store, 100)
+	require.NoError(t, db.Model(&model.InvoiceDocument{}).Where("id = ?", document.ID).Update("operation_started_at", 1).Error)
+	lifecycle := NewInvoiceDocumentLifecycle(db, store, validInvoiceDocumentApplicationStub(), 30)
+	lifecycle.runTransaction = func(db *gorm.DB, operation func(*gorm.DB) error) error {
+		_, err := ReconcileInvoiceDocument(context.Background(), db, store, document.ID, 200, 150)
+		require.NoError(t, err)
+		return db.Transaction(operation)
+	}
+
+	_, err := lifecycle.Finalize(context.Background(), FinalizeInvoiceDocumentOperation{
+		ApplicationID: 1, DocumentID: document.ID, OperationToken: document.OperationToken,
+		ExpectedStatus: "approved", ExpectedPaymentReviewStatus: "none", Issuance: validInvoiceFacts(),
+		PDFFactsAttested: true, AttestedBy: 9, Now: 200,
+	})
+	require.ErrorIs(t, err, model.ErrInvoiceDocumentConflict)
+	var current model.InvoiceDocument
+	require.NoError(t, db.First(&current, document.ID).Error)
+	assert.Equal(t, model.InvoiceDocumentStatusUploadFailed, current.Status)
+	assert.Empty(t, store.objects)
+}
+
+func TestReconcileClaimWinsAgainstReplacement(t *testing.T) {
+	db := openInvoiceDocumentServiceTestDB(t)
+	store := newInvoiceObjectStoreStub()
+	application := validInvoiceDocumentApplicationStub()
+	lifecycle := NewInvoiceDocumentLifecycle(db, store, application, 30)
+	first := createPromotedInvoiceDocument(t, db, store, 100)
+	first, err := lifecycle.Finalize(context.Background(), FinalizeInvoiceDocumentOperation{
+		ApplicationID: 1, DocumentID: first.ID, OperationToken: first.OperationToken,
+		ExpectedStatus: "approved", ExpectedPaymentReviewStatus: "none", Issuance: validInvoiceFacts(),
+		PDFFactsAttested: true, AttestedBy: 9, Now: 200,
+	})
+	require.NoError(t, err)
+	seedInvoiceDocumentApplication(t, db, 1, "issued", &first.ID)
+
+	second := createPromotedInvoiceDocument(t, db, store, 300)
+	require.NoError(t, db.Model(&model.InvoiceDocument{}).Where("id = ?", second.ID).Update("operation_started_at", 1).Error)
+	application.replace = model.ReplaceInvoiceDocumentResult{SupersededDocumentID: first.ID, ActiveDocumentID: second.ID}
+	lifecycle.runTransaction = func(db *gorm.DB, operation func(*gorm.DB) error) error {
+		_, err := ReconcileInvoiceDocument(context.Background(), db, store, second.ID, 500, 450)
+		require.NoError(t, err)
+		return db.Transaction(operation)
+	}
+
+	_, err = lifecycle.Replace(context.Background(), ReplaceInvoiceDocumentOperation{
+		ApplicationID: 1, NewDocumentID: second.ID, OperationToken: second.OperationToken,
+		ExpectedStatus: "issued", ExpectedPaymentReviewStatus: "none",
+		ExpectedActiveDocumentID: first.ID, ExpectedIssuanceID: *first.IssuanceID,
+		PDFFactsAttested: true, AttestedBy: 10, Now: 500,
+	})
+	require.ErrorIs(t, err, model.ErrInvoiceDocumentConflict)
+	var previous, candidate model.InvoiceDocument
+	require.NoError(t, db.First(&previous, first.ID).Error)
+	require.NoError(t, db.First(&candidate, second.ID).Error)
+	assert.Equal(t, model.InvoiceDocumentStatusAvailable, previous.Status)
+	assert.Equal(t, model.InvoiceDocumentStatusUploadFailed, candidate.Status)
 }
 
 func TestReconcileInvoiceDocumentTerminalizesCrashAfterCopyWhenActivationDidNotCommit(t *testing.T) {

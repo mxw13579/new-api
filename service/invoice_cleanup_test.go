@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -269,4 +271,63 @@ func TestReconcileStaleInvoiceDocumentsBoundsA501RowBacklog(t *testing.T) {
 	var remaining int64
 	require.NoError(t, db.Model(&model.InvoiceDocument{}).Where("last_recovery_error = ?", model.InvoiceDocumentRecoveryDeleteRetryable).Count(&remaining).Error)
 	assert.Equal(t, int64(401), remaining)
+}
+
+func TestInvoiceRecoverySentinelsNeverReachTaskStateOrCapturedLogs(t *testing.T) {
+	sentinels := []string{
+		"endpoint-sentinel-rw2", "bucket-sentinel-rw2", "access-key-sentinel-rw2",
+		"secret-sentinel-rw2", "final-key-sentinel-rw2", "staging-key-sentinel-rw2",
+		"provider-text-sentinel-rw2", "filename-sentinel-rw2.pdf", "signed-url-sentinel-rw2",
+		"pdf-bytes-sentinel-rw2",
+	}
+	db := openInvoiceDocumentServiceTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.SystemTask{}, &model.SystemTaskLock{}))
+	previousDB := model.DB
+	model.DB = db
+	t.Cleanup(func() { model.DB = previousDB })
+	store := newInvoiceObjectStoreStub()
+	seedInvoiceDocumentApplication(t, db, 1, "approved", nil)
+	finalKey, stagingKey := sentinels[4], sentinels[5]
+	document := model.InvoiceDocument{
+		ApplicationID: 1, R2Bucket: "private", ObjectKey: &finalKey, StagingObjectKey: &stagingKey,
+		ContentType: model.InvoicePDFContentType, Status: model.InvoiceDocumentStatusValidating,
+		OperationToken: "sentinel-operation-token", OperationStartedAt: 1, UploadedBy: 1, UploadedAt: 1,
+		CreatedAt: 1, UpdatedAt: 1,
+	}
+	require.NoError(t, db.Create(&document).Error)
+	store.objects[finalKey] = []byte(sentinels[9])
+	store.objects[stagingKey] = []byte(sentinels[9])
+	store.deleteErrors[finalKey] = fmt.Errorf("%w: %s", ErrInvoiceObjectRetryable, strings.Join(sentinels, "|"))
+
+	var logs bytes.Buffer
+	common.LogWriterMu.Lock()
+	previousWriter, previousErrorWriter := gin.DefaultWriter, gin.DefaultErrorWriter
+	gin.DefaultWriter, gin.DefaultErrorWriter = &logs, &logs
+	common.LogWriterMu.Unlock()
+	t.Cleanup(func() {
+		common.LogWriterMu.Lock()
+		gin.DefaultWriter, gin.DefaultErrorWriter = previousWriter, previousErrorWriter
+		common.LogWriterMu.Unlock()
+	})
+
+	task, err := model.CreateSystemTask(model.InvoiceDocumentCleanupTaskType, nil, nil)
+	require.NoError(t, err)
+	claimed, ok, err := model.ClaimSystemTask(task.ID, task.Type, "sentinel-runner", common.GetTimestamp()+60)
+	require.NoError(t, err)
+	require.True(t, ok)
+	handler := invoiceDocumentCleanupHandler{db: db, store: store, now: func() int64 { return 1000 }}
+	handler.Run(context.Background(), claimed, "sentinel-runner")
+
+	var current model.InvoiceDocument
+	require.NoError(t, db.First(&current, document.ID).Error)
+	finished, err := model.GetSystemTaskByTaskID(task.TaskID)
+	require.NoError(t, err)
+	storedSurface := strings.Join([]string{
+		current.LastRecoveryError, current.LastDeleteError,
+		finished.Payload, finished.State, finished.Result, finished.Error, logs.String(),
+	}, "|")
+	for _, sentinel := range sentinels {
+		assert.NotContains(t, storedSurface, sentinel)
+	}
+	assert.Equal(t, model.InvoiceDocumentRecoveryDeleteRetryable, current.LastRecoveryError)
 }

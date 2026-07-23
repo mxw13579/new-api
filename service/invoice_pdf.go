@@ -94,16 +94,19 @@ type invoicePDFTraversal struct {
 
 func rejectInvoicePDFActiveGraph(ctx *pdfmodel.Context, object types.Object) error {
 	traversal := invoicePDFTraversal{ctx: ctx, indirect: map[string]struct{}{}, compound: map[uintptr]struct{}{}}
-	return traversal.walk(object, 0, false, invoicePDFLocationGeneric)
+	return traversal.walk(object, 0, false, invoicePDFLocationCatalog)
 }
 
 type invoicePDFLocation uint8
 
 const (
-	invoicePDFLocationGeneric invoicePDFLocation = iota
+	invoicePDFLocationCatalog invoicePDFLocation = iota
+	invoicePDFLocationGeneric
 	invoicePDFLocationAction
 	invoicePDFLocationActionMap
 	invoicePDFLocationNames
+	invoicePDFLocationOutlineRoot
+	invoicePDFLocationOutlineItem
 )
 
 func (traversal *invoicePDFTraversal) walk(object types.Object, depth int, count bool, location invoicePDFLocation) error {
@@ -190,6 +193,12 @@ func (traversal *invoicePDFTraversal) walkDict(dict types.Dict, depth int, locat
 			return ErrInvoicePDFActiveContent
 		}
 	}
+	typeName := invoicePDFDictName(dict, "Type")
+	subtypeName := invoicePDFDictName(dict, "Subtype")
+	legalAdditionalActions := location == invoicePDFLocationCatalog || typeName == "Page" || typeName == "Annot" || subtypeName == "Widget"
+	if _, field := dict["FT"]; field {
+		legalAdditionalActions = true
+	}
 	for key, child := range dict {
 		next := invoicePDFLocationGeneric
 		switch {
@@ -197,18 +206,33 @@ func (traversal *invoicePDFTraversal) walkDict(dict types.Dict, depth int, locat
 			next = invoicePDFLocationAction
 		case location == invoicePDFLocationActionMap:
 			next = invoicePDFLocationAction
-		case key == "OpenAction":
+		case location == invoicePDFLocationCatalog && key == "OpenAction":
 			next = invoicePDFLocationAction
-		case key == "AA":
+		case legalAdditionalActions && key == "AA":
 			next = invoicePDFLocationActionMap
-		case key == "Names":
+		case location == invoicePDFLocationCatalog && key == "Names":
 			next = invoicePDFLocationNames
+		case location == invoicePDFLocationCatalog && key == "Outlines":
+			next = invoicePDFLocationOutlineRoot
+		case location == invoicePDFLocationOutlineRoot && (key == "First" || key == "Last"):
+			next = invoicePDFLocationOutlineItem
+		case location == invoicePDFLocationOutlineItem && key == "A":
+			next = invoicePDFLocationAction
+		case location == invoicePDFLocationOutlineItem && (key == "First" || key == "Last" || key == "Next" || key == "Prev"):
+			next = invoicePDFLocationOutlineItem
+		case (subtypeName == "Link" || subtypeName == "Widget") && key == "A":
+			next = invoicePDFLocationAction
 		}
 		if err := traversal.walk(child, depth+1, true, next); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func invoicePDFDictName(dict types.Dict, key string) string {
+	name, _ := dict[key].(types.Name)
+	return name.Value()
 }
 
 func dangerousInvoicePDFAction(action string) bool {

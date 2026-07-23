@@ -14,11 +14,15 @@ import (
 )
 
 func buildInvoiceTestPDF(t *testing.T, catalogExtra string, extraObjects ...string) []byte {
+	return buildInvoiceTestPDFWithPageExtra(t, catalogExtra, "", extraObjects...)
+}
+
+func buildInvoiceTestPDFWithPageExtra(t *testing.T, catalogExtra, pageExtra string, extraObjects ...string) []byte {
 	t.Helper()
 	objects := []string{
 		"<< /Type /Catalog /Pages 2 0 R " + catalogExtra + " >>",
 		"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
-		"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources <<>> /Contents 4 0 R >>",
+		"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources <<>> /Contents 4 0 R " + pageExtra + " >>",
 		"<< /Length 0 >>\nstream\n\nendstream",
 	}
 	objects = append(objects, extraObjects...)
@@ -151,4 +155,56 @@ func TestValidateInvoicePDFAcceptsExactTenMiBAndRejectsOneByteOver(t *testing.T)
 
 	_, err = ValidateInvoicePDF(bytes.NewReader(append(exact, 0)))
 	require.ErrorIs(t, err, ErrInvoicePDFTooLarge)
+}
+
+func TestValidateInvoicePDFRejectsParsedActionsAtLegalAEntries(t *testing.T) {
+	tests := []struct {
+		name         string
+		catalogExtra string
+		extra        []string
+	}{
+		{
+			name: "link annotation",
+			extra: []string{
+				"<< /Type /Annot /Subtype /Link /Rect [0 0 10 10] /A 6 0 R >>",
+				"<< /S /URI /URI (https://sentinel.invalid) >>",
+			},
+		},
+		{
+			name: "widget annotation",
+			extra: []string{
+				"<< /Type /Annot /Subtype /Widget /FT /Btn /T (widget) /Rect [0 0 10 10] /A 6 0 R >>",
+				"<< /S /JavaScript /JS (app.alert('x')) >>",
+			},
+		},
+		{
+			name:         "outline item",
+			catalogExtra: "/Outlines 5 0 R",
+			extra: []string{
+				"<< /Type /Outlines /First 6 0 R /Last 6 0 R /Count 1 >>",
+				"<< /Title (danger) /Parent 5 0 R /A 7 0 R >>",
+				"<< /S /GoToE >>",
+			},
+		},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			pdf := buildInvoiceTestPDF(t, testCase.catalogExtra, testCase.extra...)
+			// Annotation cases attach object 5 to the page after the PDF is built below.
+			if testCase.catalogExtra == "" {
+				pdf = buildInvoiceTestPDFWithPageExtra(t, "", "/Annots [5 0 R]", testCase.extra...)
+			}
+			_, err := ValidateInvoicePDF(bytes.NewReader(pdf))
+			assert.ErrorIs(t, err, ErrInvoicePDFActiveContent)
+		})
+	}
+}
+
+func TestValidateInvoicePDFDoesNotTreatArbitraryAKeyAsActionEntry(t *testing.T) {
+	benign := buildInvoiceTestPDF(t, "/Benign 5 0 R",
+		"<< /A 6 0 R >>",
+		"<< /S /URI /URI (ordinary metadata value) >>",
+	)
+	_, err := ValidateInvoicePDF(bytes.NewReader(benign))
+	require.NoError(t, err)
 }
