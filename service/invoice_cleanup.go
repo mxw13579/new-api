@@ -101,6 +101,7 @@ func ReconcileStaleInvoiceDocuments(ctx context.Context, db *gorm.DB, store Invo
 	if db == nil || store == nil || now <= 0 || staleBefore <= 0 || limit <= 0 {
 		return 0, model.ErrInvoiceDocumentConflict
 	}
+	db = db.WithContext(ctx)
 	var documents []model.InvoiceDocument
 	if err := db.Where("(status IN ? AND operation_started_at <= ?) OR (status = ? AND last_recovery_error = ? AND last_recovery_at <= ?)", []string{
 		model.InvoiceDocumentStatusUploading, model.InvoiceDocumentStatusValidating,
@@ -130,6 +131,7 @@ func CleanupInvoiceDocuments(ctx context.Context, db *gorm.DB, store InvoiceObje
 	if db == nil || store == nil || now <= 0 || staleBefore <= 0 || limit <= 0 {
 		return result, model.ErrInvoiceDocumentConflict
 	}
+	db = db.WithContext(ctx)
 	documents, err := findInvoiceDocumentCleanupCandidates(db, now, staleBefore, limit)
 	if err != nil {
 		return result, err
