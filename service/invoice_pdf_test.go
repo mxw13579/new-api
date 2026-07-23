@@ -223,3 +223,57 @@ func TestValidateInvoicePDFDoesNotTreatArbitraryAKeyAsActionEntry(t *testing.T) 
 	_, err := ValidateInvoicePDF(bytes.NewReader(benign))
 	require.NoError(t, err)
 }
+
+func TestValidateInvoicePDFRejectsParsedIndirectPolicyNames(t *testing.T) {
+	tests := []struct {
+		name         string
+		catalogExtra string
+		pageExtra    string
+		extra        []string
+	}{
+		{
+			name:         "dangerous action S",
+			catalogExtra: "/OpenAction 5 0 R",
+			extra: []string{
+				"<< /S 6 0 R /JS (app.alert('x')) >>",
+				"/JavaScript",
+			},
+		},
+		{
+			name:      "annotation Subtype",
+			pageExtra: "/Annots [5 0 R]",
+			extra: []string{
+				"<< /Type /Annot /Subtype 6 0 R /Rect [0 0 10 10] /A 7 0 R >>",
+				"/Link",
+				"<< /S /URI /URI (https://sentinel.invalid) >>",
+			},
+		},
+		{
+			name:         "Filespec Type",
+			catalogExtra: "/AF [5 0 R]",
+			extra: []string{
+				"<< /Type 6 0 R /F (payload.bin) /AFRelationship /Data /EF << /F 7 0 R >> >>",
+				"/Filespec",
+				"<< /Type /EmbeddedFile /Length 0 >>\nstream\n\nendstream",
+			},
+		},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			pdf := buildInvoiceTestPDFWithPageExtra(t, testCase.catalogExtra, testCase.pageExtra, testCase.extra...)
+			_, err := ValidateInvoicePDF(bytes.NewReader(pdf))
+			assert.ErrorIs(t, err, ErrInvoicePDFActiveContent)
+		})
+	}
+}
+
+func TestValidateInvoicePDFAcceptsBenignMetadataWithIndirectNames(t *testing.T) {
+	benign := buildInvoiceTestPDF(t, "/Benign 5 0 R",
+		"<< /S 6 0 R /Subtype 7 0 R /Type 8 0 R >>",
+		"/JavaScript",
+		"/Link",
+		"/Metadata",
+	)
+	_, err := ValidateInvoicePDF(bytes.NewReader(benign))
+	require.NoError(t, err)
+}

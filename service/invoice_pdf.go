@@ -176,7 +176,11 @@ func (traversal *invoicePDFTraversal) seenCompound(value any) bool {
 
 func (traversal *invoicePDFTraversal) walkDict(dict types.Dict, depth int, location invoicePDFLocation) error {
 	if location == invoicePDFLocationAction {
-		if action, ok := dict["S"].(types.Name); ok && dangerousInvoicePDFAction(action.Value()) {
+		action, err := traversal.policyName(dict["S"])
+		if err != nil {
+			return err
+		}
+		if dangerousInvoicePDFAction(action) {
 			return ErrInvoicePDFActiveContent
 		}
 	}
@@ -188,13 +192,19 @@ func (traversal *invoicePDFTraversal) walkDict(dict types.Dict, depth int, locat
 			return ErrInvoicePDFActiveContent
 		}
 	}
-	if kind, ok := dict["Type"].(types.Name); ok && kind.Value() == "Filespec" {
+	typeName, err := traversal.policyName(dict["Type"])
+	if err != nil {
+		return err
+	}
+	if typeName == "Filespec" {
 		if _, ok := dict["EF"]; ok {
 			return ErrInvoicePDFActiveContent
 		}
 	}
-	typeName := invoicePDFDictName(dict, "Type")
-	subtypeName := invoicePDFDictName(dict, "Subtype")
+	subtypeName, err := traversal.policyName(dict["Subtype"])
+	if err != nil {
+		return err
+	}
 	legalAdditionalActions := location == invoicePDFLocationCatalog || typeName == "Page" || typeName == "Annot" || subtypeName == "Widget"
 	if _, field := dict["FT"]; field {
 		legalAdditionalActions = true
@@ -232,9 +242,31 @@ func (traversal *invoicePDFTraversal) walkDict(dict types.Dict, depth int, locat
 	return nil
 }
 
-func invoicePDFDictName(dict types.Dict, key string) string {
-	name, _ := dict[key].(types.Name)
-	return name.Value()
+func (traversal *invoicePDFTraversal) policyName(object types.Object) (string, error) {
+	if name, ok := object.(types.Name); ok {
+		return name.Value(), nil
+	}
+	reference, ok := object.(types.IndirectRef)
+	if !ok {
+		return "", nil
+	}
+	key := reference.PDFString()
+	if _, seen := traversal.indirect[key]; !seen {
+		traversal.indirect[key] = struct{}{}
+		traversal.nodes++
+		if traversal.nodes > invoicePDFMaxNodes {
+			return "", fmt.Errorf("%w: object graph node budget exceeded", ErrInvoicePDFInvalid)
+		}
+	}
+	if traversal.ctx == nil {
+		return "", fmt.Errorf("%w: object graph dereference failed", ErrInvoicePDFInvalid)
+	}
+	dereferenced, err := traversal.ctx.Dereference(reference)
+	if err != nil {
+		return "", fmt.Errorf("%w: object graph failure", ErrInvoicePDFInvalid)
+	}
+	name, _ := dereferenced.(types.Name)
+	return name.Value(), nil
 }
 
 func dangerousInvoicePDFAction(action string) bool {
