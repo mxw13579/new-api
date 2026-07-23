@@ -156,30 +156,27 @@ export function UptimeStatusRow(props: {
     return 'major'
   }, [summary.uptime_pct])
 
-  const StatusIcon =
-    status === 'operational'
-      ? CheckCircle2
-      : status === 'minor'
-        ? Activity
-        : AlertCircle
-
-  const statusColour =
-    status === 'operational'
-      ? 'text-emerald-600 dark:text-emerald-400'
-      : status === 'minor'
-        ? 'text-emerald-600 dark:text-emerald-400'
-        : status === 'degraded'
-          ? 'text-amber-600 dark:text-amber-400'
-          : 'text-rose-600 dark:text-rose-400'
-
-  const statusLabel =
-    status === 'operational'
-      ? t('All systems operational')
-      : status === 'minor'
-        ? t('Minor blips in the last 30 days')
-        : status === 'degraded'
-          ? t('Degraded performance recently')
-          : t('Significant outages detected')
+  const statusIcons = {
+    operational: CheckCircle2,
+    minor: Activity,
+    degraded: AlertCircle,
+    major: AlertCircle,
+  }
+  const statusColours = {
+    operational: 'text-emerald-600 dark:text-emerald-400',
+    minor: 'text-emerald-600 dark:text-emerald-400',
+    degraded: 'text-amber-600 dark:text-amber-400',
+    major: 'text-rose-600 dark:text-rose-400',
+  }
+  const statusLabels = {
+    operational: 'All systems operational',
+    minor: 'Minor blips in the last 30 days',
+    degraded: 'Degraded performance recently',
+    major: 'Significant outages detected',
+  }
+  const StatusIcon = statusIcons[status]
+  const statusColour = statusColours[status]
+  const statusLabel = t(statusLabels[status])
 
   return (
     <div

@@ -34,6 +34,7 @@ import {
   MATCH_LT,
   MATCH_RANGE,
   SOURCE_TIME,
+  getPricingItemIdentity,
   normalizeTierLabel,
   parseTiersFromExpr,
   splitBillingExprAndRequestRules,
@@ -260,7 +261,7 @@ export function DynamicPricingBreakdown({
             {t('Tiered price table')}
           </div>
           <div className='space-y-1.5 sm:hidden'>
-            {tiers.map((tier, i) => {
+            {tiers.map((tier) => {
               const condSummary = formatConditionSummary(tier.conditions, t)
               const isMatched =
                 matchedTierLabel != null &&
@@ -268,7 +269,7 @@ export function DynamicPricingBreakdown({
                 tier.label === matchedTierLabel
               return (
                 <div
-                  key={`tier-mobile-${i}`}
+                  key={`tier-mobile-${getPricingItemIdentity(tier)}`}
                   className={cn(
                     'rounded-md border p-2',
                     isMatched && 'border-emerald-500/40 bg-emerald-500/10'
@@ -425,9 +426,9 @@ export function DynamicPricingBreakdown({
             {t('Conditional multipliers')}
           </div>
           <ul className='space-y-1.5'>
-            {ruleGroups.map((group, gi) => (
+            {ruleGroups.map((group) => (
               <li
-                key={`group-${gi}`}
+                key={`group-${getPricingItemIdentity(group)}`}
                 className='bg-muted/50 flex items-center justify-between gap-3 rounded-md px-3 py-2'
               >
                 <span

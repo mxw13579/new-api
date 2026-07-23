@@ -31,3 +31,4 @@ export {
   transformFormDataToPayload,
   transformRedemptionToFormDefaults,
 } from './redemption-form'
+export { loadRedemptionForEdit } from './redemption-edit-loader'

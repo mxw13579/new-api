@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { Loader2 } from 'lucide-react'
-import { useCallback, useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
@@ -34,6 +34,15 @@ interface UserInfoDialogProps {
   onOpenChange: (open: boolean) => void
 }
 
+function InfoItem(props: { label: string; value: string | number }) {
+  return (
+    <div className='space-y-1.5'>
+      <Label className='text-muted-foreground text-xs'>{props.label}</Label>
+      <div className='text-sm font-semibold'>{props.value}</div>
+    </div>
+  )
+}
+
 export function UserInfoDialog({
   userId,
   open,
@@ -43,45 +52,40 @@ export function UserInfoDialog({
   const [userInfo, setUserInfo] = useState<UserInfo | null>(null)
   const [isLoading, setIsLoading] = useState(false)
 
-  const fetchUserInfo = useCallback(
-    async (id: number) => {
+  useEffect(() => {
+    if (!open || !userId) {
+      return
+    }
+
+    let active = true
+    const fetchUserInfo = async () => {
       setIsLoading(true)
+      setUserInfo(null)
       try {
-        const result = await getUserInfo(id)
+        const result = await getUserInfo(userId)
+        if (!active) {
+          return
+        }
         if (result.success) {
           setUserInfo(result.data || null)
         } else {
           toast.error(result.message || t('Failed to fetch user information'))
         }
-      } catch (error) {
-        // eslint-disable-next-line no-console
-        console.error('Failed to fetch user info:', error)
-        toast.error(t('Failed to fetch user information'))
+      } catch {
+        if (active) {
+          toast.error(t('Failed to fetch user information'))
+        }
       } finally {
-        setIsLoading(false)
+        if (active) {
+          setIsLoading(false)
+        }
       }
-    },
-    [t]
-  )
-
-  useEffect(() => {
-    if (open && userId) {
-      fetchUserInfo(userId)
     }
-  }, [open, userId, fetchUserInfo])
-
-  const InfoItem = ({
-    label,
-    value,
-  }: {
-    label: string
-    value: string | number
-  }) => (
-    <div className='space-y-1.5'>
-      <Label className='text-muted-foreground text-xs'>{label}</Label>
-      <div className='text-sm font-semibold'>{value}</div>
-    </div>
-  )
+    void fetchUserInfo()
+    return () => {
+      active = false
+    }
+  }, [open, userId, t])
 
   return (
     <Dialog
@@ -95,11 +99,12 @@ export function UserInfoDialog({
       contentHeight='auto'
       bodyClassName='space-y-4'
     >
-      {isLoading ? (
+      {isLoading && (
         <div className='flex items-center justify-center py-8'>
           <Loader2 className='text-muted-foreground size-6 animate-spin' />
         </div>
-      ) : userInfo ? (
+      )}
+      {!isLoading && userInfo && (
         <div className='space-y-4 py-4'>
           {/* Basic Info */}
           <div className='grid grid-cols-2 gap-4'>
@@ -176,7 +181,8 @@ export function UserInfoDialog({
             </div>
           )}
         </div>
-      ) : (
+      )}
+      {!isLoading && !userInfo && (
         <div className='text-muted-foreground py-8 text-center text-sm'>
           {t('No user information available')}
         </div>

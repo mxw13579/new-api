@@ -16,19 +16,15 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-/**
- * Get plain text preview (strip HTML tags and Markdown formatting)
- */
-export function getPreviewText(
-  content: string,
-  maxLength: number = 60
-): string {
-  if (!content) return ''
-  const plainText = content
-    .replaceAll(/<[^>]*>/g, '') // Remove HTML tags
-    .replaceAll(/[#*_]/g, '') // Remove Markdown formatting symbols
-    .trim()
-  return plainText.length > maxLength
-    ? `${plainText.slice(0, maxLength)}...`
-    : plainText
+// Builds query parameters while preserving zero as a valid value.
+export function buildQueryParams(
+  params: Record<string, unknown>
+): URLSearchParams {
+  const queryParams = new URLSearchParams()
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== null && value !== '') {
+      queryParams.append(key, String(value))
+    }
+  }
+  return queryParams
 }

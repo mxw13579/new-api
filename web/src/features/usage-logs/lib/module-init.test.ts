@@ -16,19 +16,23 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-/**
- * Get plain text preview (strip HTML tags and Markdown formatting)
- */
-export function getPreviewText(
-  content: string,
-  maxLength: number = 60
-): string {
-  if (!content) return ''
-  const plainText = content
-    .replaceAll(/<[^>]*>/g, '') // Remove HTML tags
-    .replaceAll(/[#*_]/g, '') // Remove Markdown formatting symbols
-    .trim()
-  return plainText.length > maxLength
-    ? `${plainText.slice(0, maxLength)}...`
-    : plainText
-}
+import { describe, it } from 'bun:test'
+import assert from 'node:assert/strict'
+
+import { buildQueryParams } from './query-params'
+
+describe('usage-log module initialization', () => {
+  it('initializes query construction independently from API fetchers', async () => {
+    assert.equal(
+      buildQueryParams({ page: 0, empty: '', missing: undefined }).toString(),
+      'page=0'
+    )
+
+    const [apiModule, utilsModule] = await Promise.all([
+      import('../api'),
+      import('./utils'),
+    ])
+    assert.equal(typeof apiModule.getUserLogs, 'function')
+    assert.equal(typeof utilsModule.fetchLogsByCategory, 'function')
+  })
+})
