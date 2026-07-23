@@ -85,9 +85,10 @@ func ReconcileStaleInvoiceDocuments(ctx context.Context, db *gorm.DB, store Invo
 		return 0, model.ErrInvoiceDocumentConflict
 	}
 	var documents []model.InvoiceDocument
-	if err := db.Where("status IN ? AND operation_started_at <= ?", []string{
+	if err := db.Where("(status IN ? AND operation_started_at <= ?) OR (status = ? AND last_recovery_error = ? AND last_recovery_at <= ?)", []string{
 		model.InvoiceDocumentStatusUploading, model.InvoiceDocumentStatusValidating,
-	}, staleBefore).Order("id asc").Limit(limit).Find(&documents).Error; err != nil {
+	}, staleBefore, model.InvoiceDocumentStatusUploadFailed, model.InvoiceDocumentRecoveryDeleteRetryable, staleBefore).
+		Order("last_recovery_at asc").Order("id asc").Limit(limit).Find(&documents).Error; err != nil {
 		return 0, err
 	}
 	processed := 0
@@ -95,10 +96,10 @@ func ReconcileStaleInvoiceDocuments(ctx context.Context, db *gorm.DB, store Invo
 		if err := ctx.Err(); err != nil {
 			return processed, err
 		}
-		if !invoiceObjectStoreMatchesBucket(store, document.R2Bucket) {
-			return processed, ErrInvoiceObjectTerminal
-		}
 		if _, err := ReconcileInvoiceDocument(ctx, db, store, document.ID, now, staleBefore); err != nil {
+			if errors.Is(err, model.ErrInvoiceDocumentConflict) {
+				continue
+			}
 			return processed, err
 		}
 		processed++

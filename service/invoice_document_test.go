@@ -25,6 +25,28 @@ type invoiceObjectStoreStub struct {
 	bucket       string
 }
 
+type invoiceDeleteFailureStore struct {
+	*invoiceObjectStoreStub
+	failure        error
+	db             *gorm.DB
+	documentID     int64
+	statusAtDelete string
+}
+
+func (s *invoiceDeleteFailureStore) Delete(ctx context.Context, key string) error {
+	if strings.HasPrefix(key, "tmp/invoices/") && s.failure != nil {
+		if s.db != nil && s.documentID > 0 {
+			var document model.InvoiceDocument
+			if err := s.db.First(&document, s.documentID).Error; err != nil {
+				return err
+			}
+			s.statusAtDelete = document.Status
+		}
+		return s.failure
+	}
+	return s.invoiceObjectStoreStub.Delete(ctx, key)
+}
+
 func newInvoiceObjectStoreStub() *invoiceObjectStoreStub {
 	return &invoiceObjectStoreStub{objects: map[string][]byte{}, deleteErrors: map[string]error{}, bucket: "private"}
 }
@@ -183,6 +205,76 @@ func TestCreateInvoiceDocumentUploadPersistsRandomPrivateKeys(t *testing.T) {
 	assert.NotEqual(t, *first.ObjectKey, *second.ObjectKey)
 }
 
+func TestPromoteInvoiceDocumentRequiresStagingDeletionBeforeFinalize(t *testing.T) {
+	for _, testCase := range []struct {
+		name     string
+		failure  error
+		status   string
+		category string
+	}{
+		{name: "retryable", failure: ErrInvoiceObjectRetryable, status: model.InvoiceDocumentStatusValidating, category: model.InvoiceDocumentRecoveryDeleteRetryable},
+		{name: "terminal", failure: ErrInvoiceObjectTerminal, status: model.InvoiceDocumentStatusUploadFailed, category: model.InvoiceDocumentRecoveryDeleteTerminal},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			db := openInvoiceDocumentServiceTestDB(t)
+			base := newInvoiceObjectStoreStub()
+			store := &invoiceDeleteFailureStore{invoiceObjectStoreStub: base, failure: testCase.failure}
+			document, err := CreateInvoiceDocumentUpload(db, "private", 1, 9, 100)
+			require.NoError(t, err)
+			store.db = db
+			store.documentID = document.ID
+
+			_, err = PromoteInvoiceDocument(context.Background(), db, store, document.ID, document.OperationToken, bytes.NewReader(buildInvoiceTestPDF(t, "")), 101)
+			require.ErrorIs(t, err, testCase.failure)
+			assert.Equal(t, model.InvoiceDocumentStatusUploading, store.statusAtDelete)
+			var current model.InvoiceDocument
+			require.NoError(t, db.First(&current, document.ID).Error)
+			assert.Equal(t, testCase.status, current.Status)
+			assert.Equal(t, testCase.category, current.LastRecoveryError)
+			assert.Equal(t, 1, current.RecoveryAttempts)
+
+			lifecycle := NewInvoiceDocumentLifecycle(db, store, validInvoiceDocumentApplicationStub(), 30)
+			_, finalizeErr := lifecycle.Finalize(context.Background(), FinalizeInvoiceDocumentOperation{
+				ApplicationID: 1, DocumentID: current.ID, OperationToken: current.OperationToken,
+				ExpectedStatus: "approved", ExpectedPaymentReviewStatus: "none", Issuance: validInvoiceFacts(),
+				PDFFactsAttested: true, AttestedBy: 9, Now: 200,
+			})
+			require.ErrorIs(t, finalizeErr, model.ErrInvoiceDocumentConflict)
+		})
+	}
+}
+
+func TestActivateInvoiceDocumentRejectsExpiryOverflowWithoutWrites(t *testing.T) {
+	db := openInvoiceDocumentServiceTestDB(t)
+	store := newInvoiceObjectStoreStub()
+	document := createPromotedInvoiceDocument(t, db, store, 100)
+	lifecycle := NewInvoiceDocumentLifecycle(db, store, validInvoiceDocumentApplicationStub(), 1)
+
+	_, err := lifecycle.Finalize(context.Background(), FinalizeInvoiceDocumentOperation{
+		ApplicationID: 1, DocumentID: document.ID, OperationToken: document.OperationToken,
+		ExpectedStatus: "approved", ExpectedPaymentReviewStatus: "none", Issuance: validInvoiceFacts(),
+		PDFFactsAttested: true, AttestedBy: 9, Now: int64(^uint64(0) >> 1),
+	})
+	require.ErrorIs(t, err, model.ErrInvoiceDocumentConflict)
+	var current model.InvoiceDocument
+	require.NoError(t, db.First(&current, document.ID).Error)
+	assert.Equal(t, model.InvoiceDocumentStatusUploadFailed, current.Status)
+	assert.Nil(t, current.ExpiresAt)
+}
+
+func TestInvoiceDocumentExpiryChecksExactArithmeticBoundary(t *testing.T) {
+	now := int64(100)
+	maxDays := int((int64(^uint64(0)>>1) - now) / 86400)
+	expiresAt, err := invoiceDocumentExpiry(now, maxDays)
+	require.NoError(t, err)
+	assert.Equal(t, now+int64(maxDays)*86400, expiresAt)
+
+	_, err = invoiceDocumentExpiry(now, maxDays+1)
+	require.ErrorIs(t, err, model.ErrInvoiceDocumentConflict)
+	_, err = invoiceDocumentExpiry(int64(^uint64(0)>>1), 1)
+	require.ErrorIs(t, err, model.ErrInvoiceDocumentConflict)
+}
+
 func TestInvoiceDocumentCrashAfterCopyCanFinalizeWithPerVersionAttestation(t *testing.T) {
 	db := openInvoiceDocumentServiceTestDB(t)
 	store := newInvoiceObjectStoreStub()
@@ -339,6 +431,7 @@ func TestReconcileInvoiceDocumentNeverDeletesWhenApplicationPointsAtDocument(t *
 	reconciled, err := ReconcileInvoiceDocument(context.Background(), db, store, document.ID, 50, 60)
 	require.NoError(t, err)
 	assert.Equal(t, model.InvoiceDocumentStatusUploadFailed, reconciled.Status)
+	assert.Equal(t, model.InvoiceDocumentRecoveryActivationIncomplete, reconciled.LastRecoveryError)
 	assert.Contains(t, store.objects, *document.ObjectKey)
 }
 
@@ -359,11 +452,34 @@ func TestReconcileInvoiceDocumentSafelyReplaysDurableActivationFacts(t *testing.
 		"available_at": availableAt, "retention_days_snapshot": 30, "expires_at": expiresAt, "operation_started_at": 1,
 	}).Error)
 	require.NoError(t, db.Model(&model.InvoiceApplication{}).Where("id = ?", 1).Update("active_document_id", document.ID).Error)
+	require.NotNil(t, document.StagingObjectKey)
+	store.objects[*document.StagingObjectKey] = []byte("residual staging")
 
 	reconciled, err := ReconcileInvoiceDocument(context.Background(), db, store, document.ID, 50, 60)
 	require.NoError(t, err)
 	assert.Equal(t, model.InvoiceDocumentStatusAvailable, reconciled.Status)
 	assert.Contains(t, store.objects, *document.ObjectKey)
+	assert.NotContains(t, store.objects, *document.StagingObjectKey)
+	assert.Empty(t, reconciled.LastRecoveryError)
+}
+
+func TestReconcileInvoiceDocumentPersistsDormantBucketMismatch(t *testing.T) {
+	db := openInvoiceDocumentServiceTestDB(t)
+	store := newInvoiceObjectStoreStub()
+	seedInvoiceDocumentApplication(t, db, 1, "approved", nil)
+	document := createPromotedInvoiceDocument(t, db, store, 100)
+	require.NoError(t, db.Model(&model.InvoiceDocument{}).Where("id = ?", document.ID).Updates(map[string]any{
+		"r2_bucket": "another-private-bucket", "operation_started_at": 1,
+	}).Error)
+
+	reconciled, err := ReconcileInvoiceDocument(context.Background(), db, store, document.ID, 50, 60)
+	require.NoError(t, err)
+	assert.Equal(t, model.InvoiceDocumentStatusUploadFailed, reconciled.Status)
+	assert.Equal(t, model.InvoiceDocumentRecoveryBucketMismatch, reconciled.LastRecoveryError)
+	assert.Contains(t, store.objects, *document.ObjectKey)
+
+	_, err = ReconcileInvoiceDocument(context.Background(), db, store, document.ID, 100, 90)
+	require.ErrorIs(t, err, model.ErrInvoiceDocumentConflict)
 }
 
 func TestInvoiceTransactionRunnerClassifiesCommitErrorAsAmbiguous(t *testing.T) {

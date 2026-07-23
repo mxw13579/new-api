@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"reflect"
 	"strings"
 
 	"github.com/pdfcpu/pdfcpu/pkg/api"
@@ -16,6 +17,11 @@ import (
 
 // InvoicePDFMaxBytes is the maximum PDF upload size accepted by the invoice document pipeline.
 const InvoicePDFMaxBytes int64 = 10 << 20
+
+const (
+	invoicePDFMaxDepth = 64
+	invoicePDFMaxNodes = 10000
+)
 
 var (
 	// ErrInvoicePDFTooLarge indicates that an uploaded PDF exceeds InvoicePDFMaxBytes.
@@ -64,46 +70,88 @@ func ValidateInvoicePDF(reader io.Reader) (InvoicePDFValidation, error) {
 	if ctx.Encrypt != nil {
 		return InvoicePDFValidation{}, ErrInvoicePDFEncrypted
 	}
-	if err := api.ValidateContext(ctx); err != nil {
-		return InvoicePDFValidation{}, fmt.Errorf("%w: structural validation failed", ErrInvoicePDFInvalid)
-	}
 	root, err := ctx.Catalog()
 	if err != nil {
 		return InvoicePDFValidation{}, fmt.Errorf("%w: catalog unavailable", ErrInvoicePDFInvalid)
 	}
-	if err := rejectInvoicePDFActiveGraph(ctx, root, map[string]struct{}{}); err != nil {
+	if err := rejectInvoicePDFActiveGraph(ctx, root); err != nil {
 		return InvoicePDFValidation{}, err
+	}
+	if err := api.ValidateContext(ctx); err != nil {
+		return InvoicePDFValidation{}, fmt.Errorf("%w: structural validation failed", ErrInvoicePDFInvalid)
 	}
 
 	digest := sha256.Sum256(data)
 	return InvoicePDFValidation{SizeBytes: int64(len(data)), SHA256: hex.EncodeToString(digest[:])}, nil
 }
 
-func rejectInvoicePDFActiveGraph(ctx *pdfmodel.Context, object types.Object, visited map[string]struct{}) error {
+type invoicePDFTraversal struct {
+	ctx      *pdfmodel.Context
+	nodes    int
+	indirect map[string]struct{}
+	compound map[uintptr]struct{}
+}
+
+func rejectInvoicePDFActiveGraph(ctx *pdfmodel.Context, object types.Object) error {
+	traversal := invoicePDFTraversal{ctx: ctx, indirect: map[string]struct{}{}, compound: map[uintptr]struct{}{}}
+	return traversal.walk(object, 0, false, invoicePDFLocationGeneric)
+}
+
+type invoicePDFLocation uint8
+
+const (
+	invoicePDFLocationGeneric invoicePDFLocation = iota
+	invoicePDFLocationAction
+	invoicePDFLocationActionMap
+	invoicePDFLocationNames
+)
+
+func (traversal *invoicePDFTraversal) walk(object types.Object, depth int, count bool, location invoicePDFLocation) error {
+	if depth > invoicePDFMaxDepth {
+		return fmt.Errorf("%w: object graph depth exceeded", ErrInvoicePDFInvalid)
+	}
+	if count {
+		traversal.nodes++
+		if traversal.nodes > invoicePDFMaxNodes {
+			return fmt.Errorf("%w: object graph node budget exceeded", ErrInvoicePDFInvalid)
+		}
+	}
 	if reference, ok := object.(types.IndirectRef); ok {
 		key := reference.PDFString()
-		if _, seen := visited[key]; seen {
+		if _, seen := traversal.indirect[key]; seen {
 			return nil
 		}
-		visited[key] = struct{}{}
+		traversal.indirect[key] = struct{}{}
+		traversal.nodes++
+		if traversal.nodes > invoicePDFMaxNodes || traversal.ctx == nil {
+			return fmt.Errorf("%w: object graph dereference failed", ErrInvoicePDFInvalid)
+		}
 	}
-
-	dereferenced, err := ctx.Dereference(object)
-	if err != nil {
-		return fmt.Errorf("%w: object graph failure", ErrInvoicePDFInvalid)
+	dereferenced := object
+	if traversal.ctx != nil {
+		var err error
+		dereferenced, err = traversal.ctx.Dereference(object)
+		if err != nil {
+			return fmt.Errorf("%w: object graph failure", ErrInvoicePDFInvalid)
+		}
 	}
 	switch value := dereferenced.(type) {
-	case types.Name:
-		if value.Value() == "JavaScript" || value.Value() == "Launch" || value.Value() == "EmbeddedFile" {
-			return ErrInvoicePDFActiveContent
-		}
 	case types.Dict:
-		return rejectInvoicePDFActiveDict(ctx, value, visited)
+		if traversal.seenCompound(value) {
+			return nil
+		}
+		return traversal.walkDict(value, depth, location)
 	case types.StreamDict:
-		return rejectInvoicePDFActiveDict(ctx, value.Dict, visited)
+		if traversal.seenCompound(value.Dict) {
+			return nil
+		}
+		return traversal.walkDict(value.Dict, depth, location)
 	case types.Array:
+		if traversal.seenCompound(value) {
+			return nil
+		}
 		for _, item := range value {
-			if err := rejectInvoicePDFActiveGraph(ctx, item, visited); err != nil {
+			if err := traversal.walk(item, depth+1, true, location); err != nil {
 				return err
 			}
 		}
@@ -111,18 +159,63 @@ func rejectInvoicePDFActiveGraph(ctx *pdfmodel.Context, object types.Object, vis
 	return nil
 }
 
-func rejectInvoicePDFActiveDict(ctx *pdfmodel.Context, dict types.Dict, visited map[string]struct{}) error {
-	for key, object := range dict {
-		switch key {
-		case "OpenAction", "AA", "JavaScript", "EmbeddedFiles", "EF":
+func (traversal *invoicePDFTraversal) seenCompound(value any) bool {
+	pointer := reflect.ValueOf(value).Pointer()
+	if pointer == 0 {
+		return false
+	}
+	if _, seen := traversal.compound[pointer]; seen {
+		return true
+	}
+	traversal.compound[pointer] = struct{}{}
+	return false
+}
+
+func (traversal *invoicePDFTraversal) walkDict(dict types.Dict, depth int, location invoicePDFLocation) error {
+	if location == invoicePDFLocationAction {
+		if action, ok := dict["S"].(types.Name); ok && dangerousInvoicePDFAction(action.Value()) {
 			return ErrInvoicePDFActiveContent
 		}
-		if name, ok := object.(types.Name); ok && (name.Value() == "JavaScript" || name.Value() == "Launch" || name.Value() == "EmbeddedFile") {
+	}
+	if location == invoicePDFLocationNames {
+		if _, ok := dict["JavaScript"]; ok {
 			return ErrInvoicePDFActiveContent
 		}
-		if err := rejectInvoicePDFActiveGraph(ctx, object, visited); err != nil {
+		if _, ok := dict["EmbeddedFiles"]; ok {
+			return ErrInvoicePDFActiveContent
+		}
+	}
+	if kind, ok := dict["Type"].(types.Name); ok && kind.Value() == "Filespec" {
+		if _, ok := dict["EF"]; ok {
+			return ErrInvoicePDFActiveContent
+		}
+	}
+	for key, child := range dict {
+		next := invoicePDFLocationGeneric
+		switch {
+		case location == invoicePDFLocationAction && key == "Next":
+			next = invoicePDFLocationAction
+		case location == invoicePDFLocationActionMap:
+			next = invoicePDFLocationAction
+		case key == "OpenAction":
+			next = invoicePDFLocationAction
+		case key == "AA":
+			next = invoicePDFLocationActionMap
+		case key == "Names":
+			next = invoicePDFLocationNames
+		}
+		if err := traversal.walk(child, depth+1, true, next); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func dangerousInvoicePDFAction(action string) bool {
+	switch action {
+	case "JavaScript", "Launch", "URI", "GoToR", "GoToE", "SubmitForm", "ImportData", "Rendition", "RichMediaExecute":
+		return true
+	default:
+		return false
+	}
 }

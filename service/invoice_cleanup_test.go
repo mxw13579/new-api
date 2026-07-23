@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -186,8 +187,8 @@ func TestInvoiceCleanupHandlerReconcilesStaleUploadOperationsWithinBudget(t *tes
 
 	for id, expected := range map[int64]string{
 		crashAfterCopy.ID: model.InvoiceDocumentStatusUploadFailed,
-		missing.ID:        model.InvoiceDocumentStatusMissing,
-		uploading.ID:      model.InvoiceDocumentStatusMissing,
+		missing.ID:        model.InvoiceDocumentStatusUploadFailed,
+		uploading.ID:      model.InvoiceDocumentStatusUploadFailed,
 	} {
 		var current model.InvoiceDocument
 		require.NoError(t, db.First(&current, id).Error)
@@ -196,4 +197,76 @@ func TestInvoiceCleanupHandlerReconcilesStaleUploadOperationsWithinBudget(t *tes
 	finished, err := model.GetSystemTaskByTaskID(task.TaskID)
 	require.NoError(t, err)
 	assert.Equal(t, model.SystemTaskStatusSucceeded, finished.Status)
+}
+
+func TestReconcileStaleInvoiceDocumentsIsolatesRetryableRowsAndSkipsDormantTerminalRows(t *testing.T) {
+	db := openInvoiceDocumentServiceTestDB(t)
+	store := newInvoiceObjectStoreStub()
+	seedInvoiceDocumentApplication(t, db, 1, "approved", nil)
+
+	retryKey := "tmp/invoices/retry.pdf"
+	retry := model.InvoiceDocument{ApplicationID: 1, R2Bucket: "private", StagingObjectKey: &retryKey,
+		ContentType: model.InvoicePDFContentType, Status: model.InvoiceDocumentStatusUploadFailed,
+		OperationToken: "retry-token", OperationStartedAt: 1, UploadedBy: 1, UploadedAt: 1,
+		RecoveryAttempts: 1, LastRecoveryAt: 1, LastRecoveryError: model.InvoiceDocumentRecoveryDeleteRetryable,
+		CreatedAt: 1, UpdatedAt: 1}
+	require.NoError(t, db.Create(&retry).Error)
+	store.objects[retryKey] = []byte("staging")
+	providerSentinel := "provider-error-sentinel-must-not-persist"
+	store.deleteErrors[retryKey] = fmt.Errorf("%w: %s", ErrInvoiceObjectRetryable, providerSentinel)
+
+	terminalKey := "tmp/invoices/terminal.pdf"
+	terminal := retry
+	terminal.ID = 0
+	terminal.StagingObjectKey = &terminalKey
+	terminal.OperationToken = "terminal-token"
+	terminal.LastRecoveryError = model.InvoiceDocumentRecoveryDeleteTerminal
+	require.NoError(t, db.Create(&terminal).Error)
+
+	goodKey := "tmp/invoices/good.pdf"
+	good := retry
+	good.ID = 0
+	good.StagingObjectKey = &goodKey
+	good.OperationToken = "good-token"
+	require.NoError(t, db.Create(&good).Error)
+	store.objects[goodKey] = []byte("staging")
+
+	processed, err := ReconcileStaleInvoiceDocuments(context.Background(), db, store, 100, 50, 100)
+	require.NoError(t, err)
+	assert.Equal(t, 2, processed)
+
+	var retried, dormant, completed model.InvoiceDocument
+	require.NoError(t, db.First(&retried, retry.ID).Error)
+	require.NoError(t, db.First(&dormant, terminal.ID).Error)
+	require.NoError(t, db.First(&completed, good.ID).Error)
+	assert.Equal(t, model.InvoiceDocumentRecoveryDeleteRetryable, retried.LastRecoveryError)
+	assert.NotContains(t, retried.LastRecoveryError, providerSentinel)
+	assert.Equal(t, 2, retried.RecoveryAttempts)
+	assert.Equal(t, model.InvoiceDocumentRecoveryDeleteTerminal, dormant.LastRecoveryError)
+	assert.Equal(t, 1, dormant.RecoveryAttempts)
+	assert.Empty(t, completed.LastRecoveryError)
+	assert.NotContains(t, store.objects, goodKey)
+}
+
+func TestReconcileStaleInvoiceDocumentsBoundsA501RowBacklog(t *testing.T) {
+	db := openInvoiceDocumentServiceTestDB(t)
+	store := newInvoiceObjectStoreStub()
+	seedInvoiceDocumentApplication(t, db, 1, "approved", nil)
+	for index := 0; index < 501; index++ {
+		key := fmt.Sprintf("tmp/invoices/%03d.pdf", index)
+		document := model.InvoiceDocument{ApplicationID: 1, R2Bucket: "private", StagingObjectKey: &key,
+			ContentType: model.InvoicePDFContentType, Status: model.InvoiceDocumentStatusUploadFailed,
+			OperationToken: fmt.Sprintf("token-%03d", index), OperationStartedAt: 1, UploadedBy: 1, UploadedAt: 1,
+			RecoveryAttempts: 1, LastRecoveryAt: int64(index + 1), LastRecoveryError: model.InvoiceDocumentRecoveryDeleteRetryable,
+			CreatedAt: 1, UpdatedAt: 1}
+		require.NoError(t, db.Create(&document).Error)
+		store.objects[key] = []byte("staging")
+	}
+
+	processed, err := ReconcileStaleInvoiceDocuments(context.Background(), db, store, 1000, 900, 100)
+	require.NoError(t, err)
+	assert.Equal(t, 100, processed)
+	var remaining int64
+	require.NoError(t, db.Model(&model.InvoiceDocument{}).Where("last_recovery_error = ?", model.InvoiceDocumentRecoveryDeleteRetryable).Count(&remaining).Error)
+	assert.Equal(t, int64(401), remaining)
 }

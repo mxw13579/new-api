@@ -24,6 +24,15 @@ const (
 	InvoiceDocumentStatusDeleteFailed = "delete_failed"
 	// InvoiceDocumentStatusMissing indicates that the expected private object no longer exists.
 	InvoiceDocumentStatusMissing = "missing"
+
+	// InvoiceDocumentRecoveryDeleteRetryable records a transient staging/final object deletion failure.
+	InvoiceDocumentRecoveryDeleteRetryable = "object_delete_retryable"
+	// InvoiceDocumentRecoveryDeleteTerminal records a non-retryable object deletion failure.
+	InvoiceDocumentRecoveryDeleteTerminal = "object_delete_terminal"
+	// InvoiceDocumentRecoveryBucketMismatch records a configured/persisted bucket identity mismatch.
+	InvoiceDocumentRecoveryBucketMismatch = "bucket_mismatch"
+	// InvoiceDocumentRecoveryActivationIncomplete records an active pointer without complete durable activation facts.
+	InvoiceDocumentRecoveryActivationIncomplete = "activation_incomplete"
 )
 
 // InvoiceDocument tracks a private PDF object's staged promotion, attestation, retention, and deletion state.
@@ -52,6 +61,9 @@ type InvoiceDocument struct {
 	ExpiresAt                     *int64  `json:"expires_at,omitempty" gorm:"index:idx_invoice_documents_status_expiry,priority:2"`
 	DeleteAttempts                int     `json:"delete_attempts" gorm:"not null"`
 	LastDeleteError               string  `json:"last_delete_error" gorm:"type:varchar(512)"`
+	RecoveryAttempts              int     `json:"recovery_attempts" gorm:"not null"`
+	LastRecoveryAt                int64   `json:"last_recovery_at" gorm:"not null"`
+	LastRecoveryError             string  `json:"last_recovery_error" gorm:"type:varchar(32);not null"`
 	DeletedAt                     *int64  `json:"deleted_at,omitempty"`
 	CreatedAt                     int64   `json:"created_at" gorm:"not null"`
 	UpdatedAt                     int64   `json:"updated_at" gorm:"not null"`
