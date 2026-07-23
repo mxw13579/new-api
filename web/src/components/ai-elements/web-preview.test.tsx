@@ -16,9 +16,9 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import * as bunTest from 'bun:test'
 import assert from 'node:assert/strict'
 
-import * as bunTest from 'bun:test'
 import { createElement } from 'react'
 import { renderToReadableStream } from 'react-dom/server.browser'
 
@@ -28,9 +28,8 @@ type MockModule = (
 ) => void
 
 const { describe, it } = bunTest
-const mockModule = (
-  bunTest as unknown as { mock: { module: MockModule } }
-).mock.module
+const mockModule = (bunTest as unknown as { mock: { module: MockModule } }).mock
+  .module
 
 mockModule('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
