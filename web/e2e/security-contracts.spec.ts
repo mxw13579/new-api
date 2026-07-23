@@ -233,7 +233,7 @@ test('footer strips active content and preserves hardened safe links', async ({
   await installSecurityBackend(page, {
     chats: [],
     footerHtml:
-      '<svg><script>window.pwned=1</script></svg><math><mi>x</mi></math><form><input autofocus></form><a href="javascript:alert(1)" onclick="window.pwned=2">bad</a><strong>safe emphasis</strong><a id="safe-link" href="https://safe.example/" target="_blank">safe link</a>',
+      '<svg><script>window.pwned=1</script></svg><math><mi>x</mi></math><form><input autofocus></form><a href="javascript:alert(1)" onclick="window.pwned=2">bad</a><strong>safe emphasis</strong><a id="safe-link" href="https://safe.example/" target="_blank">safe link</a><a id="unsafe-target" href="https://safe.example/other" target="popup">other link</a>',
   })
 
   await page.goto('/')
@@ -251,6 +251,9 @@ test('footer strips active content and preserves hardened safe links', async ({
   await expect(customFooter.locator('#safe-link')).toHaveAttribute(
     'rel',
     'noopener noreferrer'
+  )
+  await expect(customFooter.locator('#unsafe-target')).not.toHaveAttribute(
+    'target'
   )
   expect(
     await page.evaluate(() => Reflect.get(window, 'pwned'))

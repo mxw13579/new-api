@@ -88,7 +88,7 @@ const isolatedSanitizeOptions = {
 } satisfies Config
 
 const inlineSanitizeOptions = {
-  ADD_ATTR: ['rel', 'target'],
+  ADD_ATTR: ['data-sanitized-target-blank', 'rel'],
   ALLOWED_URI_REGEXP: /^(?:https?:|mailto:)/i,
   FORBID_ATTR: ['srcdoc', 'style'],
   FORBID_TAGS: [
@@ -107,16 +107,6 @@ const inlineSanitizeOptions = {
     'textarea',
   ],
 } satisfies Config
-
-DOMPurify.addHook('uponSanitizeAttribute', (node, data) => {
-  if (
-    node instanceof HTMLAnchorElement &&
-    data.attrName === 'target' &&
-    data.attrValue === '_blank'
-  ) {
-    data.forceKeepAttr = true
-  }
-})
 
 function hardenIsolatedHtml(html: string): string {
   if (typeof document === 'undefined') {
@@ -157,7 +147,14 @@ function hardenInlineHtml(html: string): string {
   const template = document.createElement('template')
   template.innerHTML = html
 
-  template.content.querySelectorAll('a[target="_blank"]').forEach((link) => {
+  template.content.querySelectorAll('a').forEach((link) => {
+    if (!link.hasAttribute('data-sanitized-target-blank')) {
+      link.removeAttribute('target')
+      return
+    }
+
+    link.removeAttribute('data-sanitized-target-blank')
+    link.setAttribute('target', '_blank')
     link.setAttribute('rel', 'noopener noreferrer')
   })
 
@@ -174,7 +171,25 @@ function sanitizeHtmlContent(
     return hardenIsolatedHtml(html)
   }
 
-  return hardenInlineHtml(DOMPurify.sanitize(content, inlineSanitizeOptions))
+  let inlineContent = content
+  if (typeof document !== 'undefined') {
+    const template = document.createElement('template')
+    template.innerHTML = content
+
+    template.content.querySelectorAll('a').forEach((link) => {
+      const opensBlank = link.getAttribute('target')?.toLowerCase() === '_blank'
+      link.removeAttribute('data-sanitized-target-blank')
+      link.removeAttribute('target')
+      if (opensBlank) {
+        link.setAttribute('data-sanitized-target-blank', '')
+      }
+    })
+    inlineContent = template.innerHTML
+  }
+
+  return hardenInlineHtml(
+    DOMPurify.sanitize(inlineContent, inlineSanitizeOptions)
+  )
 }
 
 function syncDarkClass(wrapper: HTMLElement): void {
