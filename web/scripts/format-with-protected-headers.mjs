@@ -49,7 +49,7 @@ const headerExtensions = new Set([
   '.tsx',
 ])
 const protectedHeaderPattern =
-  /^\/\*\nCopyright \(C\)[\s\S]*?QuantumNous[\s\S]*?\*\/\n+/
+  /^\/\*\r?\nCopyright \(C\)[\s\S]*?QuantumNous[\s\S]*?\*\/(?:\r?\n)+/
 
 function extensionOf(path) {
   const index = path.lastIndexOf('.')
@@ -101,7 +101,7 @@ function stripProtectedHeaders(files) {
       continue
     }
 
-    headers.set(file, match[0])
+    headers.set(file, match[0].replaceAll('\r\n', '\n'))
     writeFileSync(file, content.slice(match[0].length))
   }
 
