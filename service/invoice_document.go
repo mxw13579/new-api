@@ -288,11 +288,20 @@ func (lifecycle *InvoiceDocumentLifecycle) Replace(ctx context.Context, operatio
 		if err := tx.Where("id = ? AND application_id = ? AND operation_token = ? AND status = ?", operation.NewDocumentID, operation.ApplicationID, operation.OperationToken, model.InvoiceDocumentStatusValidating).First(&current).Error; err != nil {
 			return invoiceDocumentLookupError(err)
 		}
-		if err := tx.Where("id = ? AND application_id = ? AND issuance_id = ? AND status = ?", operation.ExpectedActiveDocumentID, operation.ApplicationID, operation.ExpectedIssuanceID, model.InvoiceDocumentStatusAvailable).First(&previous).Error; err != nil {
+		if err := tx.Where("id = ? AND application_id = ? AND issuance_id = ? AND status IN ?", operation.ExpectedActiveDocumentID, operation.ApplicationID, operation.ExpectedIssuanceID,
+			[]string{model.InvoiceDocumentStatusAvailable, model.InvoiceDocumentStatusMissing}).First(&previous).Error; err != nil {
 			return invoiceDocumentLookupError(err)
 		}
-		if previous.Version == nil {
+		if previous.Version == nil || previous.ExpiresAt == nil || *previous.ExpiresAt <= operation.Now {
 			return model.ErrInvoiceDocumentConflict
+		}
+		oldStatus := model.InvoiceDocumentStatusSuperseded
+		if previous.Status == model.InvoiceDocumentStatusMissing {
+			if previous.DeleteErrorCategory == nil {
+				oldStatus = model.InvoiceDocumentStatusMissing
+			} else if *previous.DeleteErrorCategory != model.InvoiceDocumentDeleteErrorObjectIntegrityMismatch {
+				return model.ErrInvoiceDocumentConflict
+			}
 		}
 		if *previous.Version == int64(^uint64(0)>>1) {
 			return model.ErrInvoiceDocumentConflict
@@ -317,14 +326,16 @@ func (lifecycle *InvoiceDocumentLifecycle) Replace(ctx context.Context, operatio
 		if replaced.SupersededDocumentID != previous.ID || replaced.ActiveDocumentID != current.ID {
 			return model.ErrInvoiceDocumentConflict
 		}
-		superseded := tx.Model(&model.InvoiceDocument{}).
-			Where("id = ? AND status = ?", previous.ID, model.InvoiceDocumentStatusAvailable).
-			Updates(map[string]any{"status": model.InvoiceDocumentStatusSuperseded, "updated_at": operation.Now})
-		if superseded.Error != nil {
-			return superseded.Error
-		}
-		if superseded.RowsAffected != 1 {
-			return model.ErrInvoiceDocumentConflict
+		if oldStatus == model.InvoiceDocumentStatusSuperseded {
+			oldDocument := tx.Model(&model.InvoiceDocument{}).
+				Where("id = ? AND status = ? AND operation_token = ?", previous.ID, previous.Status, previous.OperationToken).
+				Updates(map[string]any{"status": oldStatus, "updated_at": operation.Now})
+			if oldDocument.Error != nil {
+				return oldDocument.Error
+			}
+			if oldDocument.RowsAffected != 1 {
+				return model.ErrInvoiceDocumentConflict
+			}
 		}
 		return activateInvoiceDocumentTx(tx, &current, operation.ExpectedIssuanceID, *previous.Version+1, operation.AttestedBy, operation.Now, prepared.ProfileSnapshot, lifecycle.retentionDays)
 	})

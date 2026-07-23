@@ -479,6 +479,64 @@ func TestInvoiceDocumentReplacementRequiresFreshAttestation(t *testing.T) {
 	assert.Equal(t, firstAttestedAt, *unchangedFirst.AttestedAt)
 }
 
+func TestInvoiceDocumentReplacementThreeWayOldDocumentTransition(t *testing.T) {
+	for _, testCase := range []struct {
+		name, oldStatus, oldCategory, expectedStatus string
+		expiresAt                                    int64
+		wantErr                                      bool
+	}{
+		{name: "available becomes superseded", oldStatus: model.InvoiceDocumentStatusAvailable, expectedStatus: model.InvoiceDocumentStatusSuperseded, expiresAt: 1000},
+		{name: "integrity mismatch becomes superseded", oldStatus: model.InvoiceDocumentStatusMissing, oldCategory: model.InvoiceDocumentDeleteErrorObjectIntegrityMismatch, expectedStatus: model.InvoiceDocumentStatusSuperseded, expiresAt: 1000},
+		{name: "confirmed absent remains missing", oldStatus: model.InvoiceDocumentStatusMissing, expectedStatus: model.InvoiceDocumentStatusMissing, expiresAt: 1000},
+		{name: "unknown missing category conflicts", oldStatus: model.InvoiceDocumentStatusMissing, oldCategory: model.InvoiceDocumentDeleteErrorTerminal, expectedStatus: model.InvoiceDocumentStatusMissing, expiresAt: 1000, wantErr: true},
+		{name: "expired conflicts", oldStatus: model.InvoiceDocumentStatusAvailable, expectedStatus: model.InvoiceDocumentStatusAvailable, expiresAt: 400, wantErr: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			db := openInvoiceDocumentServiceTestDB(t)
+			store := newInvoiceObjectStoreStub()
+			application := validInvoiceDocumentApplicationStub()
+			lifecycle := NewInvoiceDocumentLifecycle(db, store, application, 30)
+			first := createPromotedInvoiceDocument(t, db, store, 100)
+			first, err := lifecycle.Finalize(context.Background(), FinalizeInvoiceDocumentOperation{
+				ApplicationID: 1, DocumentID: first.ID, OperationToken: first.OperationToken,
+				ExpectedStatus: "approved", ExpectedPaymentReviewStatus: "none", Issuance: validInvoiceFacts(),
+				PDFFactsAttested: true, AttestedBy: 9, Now: 200,
+			})
+			require.NoError(t, err)
+			updates := map[string]any{"status": testCase.oldStatus, "expires_at": testCase.expiresAt}
+			if testCase.oldCategory == "" {
+				updates["delete_error_category"] = nil
+			} else {
+				updates["delete_error_category"] = testCase.oldCategory
+			}
+			require.NoError(t, db.Model(&model.InvoiceDocument{}).Where("id = ?", first.ID).Updates(updates).Error)
+
+			second := createPromotedInvoiceDocument(t, db, store, 300)
+			application.replace = model.ReplaceInvoiceDocumentResult{SupersededDocumentID: first.ID, ActiveDocumentID: second.ID}
+			_, err = lifecycle.Replace(context.Background(), ReplaceInvoiceDocumentOperation{
+				ApplicationID: 1, NewDocumentID: second.ID, OperationToken: second.OperationToken,
+				ExpectedStatus: "issued", ExpectedPaymentReviewStatus: "none",
+				ExpectedActiveDocumentID: first.ID, ExpectedIssuanceID: *first.IssuanceID,
+				PDFFactsAttested: true, AttestedBy: 10, Now: 500,
+			})
+			if testCase.wantErr {
+				require.ErrorIs(t, err, model.ErrInvoiceDocumentConflict)
+			} else {
+				require.NoError(t, err)
+			}
+			var old model.InvoiceDocument
+			require.NoError(t, db.First(&old, first.ID).Error)
+			assert.Equal(t, testCase.expectedStatus, old.Status)
+			if testCase.oldStatus == model.InvoiceDocumentStatusMissing && testCase.oldCategory == "" && !testCase.wantErr {
+				result, cleanupErr := CleanupInvoiceDocuments(context.Background(), db, store, 2000, 1000, 10)
+				require.NoError(t, cleanupErr)
+				assert.Zero(t, result.Processed)
+				assert.NotContains(t, store.deletedKeys, *old.ObjectKey)
+			}
+		})
+	}
+}
+
 func TestReconcileClaimWinsAgainstInitialFinalize(t *testing.T) {
 	db := openInvoiceDocumentServiceTestDB(t)
 	store := newInvoiceObjectStoreStub()
