@@ -22,9 +22,7 @@ import { AdminInvoices } from '@/features/invoice-admin'
 import { getInvoiceAdminCapabilities } from '@/features/invoice-admin/contract'
 import { useAuthStore } from '@/stores/auth-store'
 
-export const Route = createFileRoute(
-  '/_authenticated/admin-invoices/' as never
-)({
+export const Route = createFileRoute('/_authenticated/admin-invoices/')({
   beforeLoad: () => {
     const user = useAuthStore.getState().auth.user
     if (!getInvoiceAdminCapabilities(user).canReview) {

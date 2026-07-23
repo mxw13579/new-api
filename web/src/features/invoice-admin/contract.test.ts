@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import assert from 'node:assert/strict'
+import { readFile } from 'node:fs/promises'
 import { describe, test } from 'node:test'
 
 import type { AuthUser } from '@/stores/auth-store'
@@ -279,5 +280,27 @@ describe('invoice admin contracts', () => {
       'invoices',
       'settings',
     ])
+  })
+
+  test('hand-authored routes expose literal IDs to the TanStack generator', async () => {
+    const routes = [
+      {
+        file: '../../routes/_authenticated/admin-invoices/index.tsx',
+        id: '/_authenticated/admin-invoices/',
+      },
+      {
+        file: '../../routes/_authenticated/invoice-settings/index.tsx',
+        id: '/_authenticated/invoice-settings/',
+      },
+    ]
+
+    for (const route of routes) {
+      const source = await readFile(
+        new URL(route.file, import.meta.url),
+        'utf8'
+      )
+      assert.match(source, new RegExp(`createFileRoute\\('${route.id}'\\)`))
+      assert.doesNotMatch(source, /createFileRoute\([^)]*as never/)
+    }
   })
 })

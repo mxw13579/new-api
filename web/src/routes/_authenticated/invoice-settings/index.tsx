@@ -22,9 +22,7 @@ import { InvoiceSettings } from '@/features/invoice-admin'
 import { getInvoiceAdminCapabilities } from '@/features/invoice-admin/contract'
 import { useAuthStore } from '@/stores/auth-store'
 
-export const Route = createFileRoute(
-  '/_authenticated/invoice-settings/' as never
-)({
+export const Route = createFileRoute('/_authenticated/invoice-settings/')({
   beforeLoad: () => {
     const user = useAuthStore.getState().auth.user
     if (!getInvoiceAdminCapabilities(user).canManageSettings) {
