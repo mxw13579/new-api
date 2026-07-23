@@ -15,6 +15,8 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+var getInvoiceDocumentDownload = service.GetInvoiceDocumentDownload
+
 func invoiceErrorCode(err error) (string, int) {
 	switch {
 	case errors.Is(err, model.ErrInvoiceInvalidProfile), errors.Is(err, model.ErrInvoicePaymentSourceInvalidRequest):
@@ -212,7 +214,7 @@ func DownloadInvoiceDocument(c *gin.Context) {
 		writeInvoiceError(c, err)
 		return
 	}
-	url, err := service.GetInvoiceDocumentDownload(c.Request.Context(), c.GetInt("id"), id)
+	url, err := getInvoiceDocumentDownload(c.Request.Context(), c.GetInt("id"), id)
 	if err != nil {
 		writeInvoiceError(c, err)
 		return

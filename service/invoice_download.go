@@ -50,9 +50,14 @@ func GetInvoiceDocumentDownload(ctx context.Context, userID int, applicationID i
 	if err != nil {
 		return "", err
 	}
-	ttl, err := invoiceDocumentDownloadTTL(application, document, invoiceDownloadNow())
+	now := invoiceDownloadNow()
+	ttl, err := invoiceDocumentDownloadTTL(application, document, now)
 	if err != nil {
 		return "", err
+	}
+	expectedChecksum, err := invoiceObjectChecksum(document.SHA256)
+	if err != nil {
+		return "", ErrInvoiceObjectTerminal
 	}
 	store, err := newInvoiceDownloadStore()
 	if err != nil {
@@ -61,5 +66,33 @@ func GetInvoiceDocumentDownload(ctx context.Context, userID int, applicationID i
 	if !invoiceObjectStoreMatchesBucket(store, document.R2Bucket) {
 		return "", ErrInvoiceObjectTerminal
 	}
+	head, err := store.Head(ctx, *document.ObjectKey)
+	if errors.Is(err, ErrInvoiceObjectNotFound) {
+		return "", markInvoiceDocumentMissing(document, nil, now.Unix())
+	}
+	if err != nil {
+		return "", err
+	}
+	if head.SizeBytes != document.SizeBytes || head.ChecksumSHA256 != expectedChecksum {
+		category := model.InvoiceDocumentDeleteErrorObjectIntegrityMismatch
+		return "", markInvoiceDocumentMissing(document, &category, now.Unix())
+	}
 	return store.PresignGet(ctx, *document.ObjectKey, ttl)
+}
+
+func markInvoiceDocumentMissing(document *model.InvoiceDocument, category *string, now int64) error {
+	updated := model.DB.Model(&model.InvoiceDocument{}).
+		Where("id = ? AND status = ? AND operation_token = ?", document.ID, model.InvoiceDocumentStatusAvailable, document.OperationToken).
+		Updates(map[string]any{
+			"status": model.InvoiceDocumentStatusMissing, "delete_error_category": category, "updated_at": now,
+		})
+	if updated.Error != nil {
+		return updated.Error
+	}
+	if updated.RowsAffected != 1 {
+		if _, err := model.GetInvoiceDocument(&document.ID); err != nil {
+			return err
+		}
+	}
+	return ErrInvoiceDocumentUnavailable
 }

@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -104,15 +105,46 @@ func TestInvoiceDownloadControllerMasksCrossUserAndDoesNotLeakURLs(t *testing.T)
 		FeeStatus: constant.InvoiceFeeStatusNotRequired, ProfileSnapshot: `{}`, PolicySnapshot: `{}`, SubmittedAt: 1,
 	}
 	require.NoError(t, model.DB.Create(&application).Error)
-	context, recorder := invoiceControllerContext(http.MethodGet, "/", "")
-	context.Params = gin.Params{{Key: "id", Value: strconv.FormatInt(application.ID, 10)}}
-	context.Set("id", 12)
+	for _, applicationID := range []int64{application.ID, application.ID + 999} {
+		context, recorder := invoiceControllerContext(http.MethodGet, "/", "")
+		context.Params = gin.Params{{Key: "id", Value: strconv.FormatInt(applicationID, 10)}}
+		context.Set("id", 12)
 
-	DownloadInvoiceDocument(context)
+		DownloadInvoiceDocument(context)
 
-	assert.Equal(t, http.StatusNotFound, recorder.Code)
-	assert.NotContains(t, recorder.Body.String(), "http")
-	assert.NotContains(t, recorder.Body.String(), "token")
+		assert.Equal(t, http.StatusNotFound, recorder.Code)
+		assert.NotContains(t, recorder.Body.String(), "http")
+		assert.NotContains(t, recorder.Body.String(), "token")
+		assert.Contains(t, recorder.Body.String(), constant.InvoiceCodeNotFound)
+	}
+}
+
+func TestInvoiceDownloadControllerRedirectsWithoutLeakingErrors(t *testing.T) {
+	previous := getInvoiceDocumentDownload
+	t.Cleanup(func() { getInvoiceDocumentDownload = previous })
+
+	getInvoiceDocumentDownload = func(context.Context, int, int64) (string, error) {
+		return "https://private.example.test/invoice.pdf?signature=test-only", nil
+	}
+	requestContext, recorder := invoiceControllerContext(http.MethodGet, "/", "")
+	requestContext.Params = gin.Params{{Key: "id", Value: "7"}}
+	requestContext.Set("id", 11)
+	DownloadInvoiceDocument(requestContext)
+	assert.Equal(t, http.StatusFound, recorder.Code)
+	assert.Equal(t, "https://private.example.test/invoice.pdf?signature=test-only", recorder.Header().Get("Location"))
+
+	getInvoiceDocumentDownload = func(context.Context, int, int64) (string, error) {
+		return "", fmt.Errorf("%w: https://private.example.test/invoice.pdf?signature=secret", service.ErrInvoiceObjectRetryable)
+	}
+	requestContext, recorder = invoiceControllerContext(http.MethodGet, "/", "")
+	requestContext.Params = gin.Params{{Key: "id", Value: "7"}}
+	requestContext.Set("id", 11)
+	DownloadInvoiceDocument(requestContext)
+	assert.Equal(t, http.StatusInternalServerError, recorder.Code)
+	assert.Empty(t, recorder.Header().Get("Location"))
+	assert.NotContains(t, recorder.Body.String(), "private.example.test")
+	assert.NotContains(t, recorder.Body.String(), "signature")
+	assert.Contains(t, recorder.Body.String(), constant.InvoiceCodeInternalError)
 }
 
 func TestInvoiceErrorMappingDistinguishesUnavailableFromInfrastructure(t *testing.T) {
