@@ -28,6 +28,35 @@ export const CHANNEL_TYPE_ADVANCED_CUSTOM = 58
 export const ADVANCED_CUSTOM_MODEL_LIST_PATH = '/v1/models'
 export const ADVANCED_CUSTOM_MODEL_LIST_LABEL = 'OpenAI Models'
 
+export function getParameterOverrideView(
+  editMode: 'visual' | 'json',
+  visualMode: 'legacy' | 'operations'
+): 'json' | 'legacy' | 'operations' {
+  if (editMode === 'json') return 'json'
+  return visualMode
+}
+
+export function getParameterOverrideValueEditor(
+  mode: string,
+  hasReturnErrorDraft: boolean,
+  hasPruneObjectsDraft: boolean
+): 'return-error' | 'prune-objects' | 'default' {
+  if (mode === 'return_error' && hasReturnErrorDraft) return 'return-error'
+  if (mode === 'prune_objects' && hasPruneObjectsDraft) return 'prune-objects'
+  return 'default'
+}
+
+export function getParameterOverrideFieldEditor(
+  mode: string,
+  hasSyncTargets: boolean,
+  hasFromOrToFields: boolean
+): 'sync-fields' | 'fields' | 'none' {
+  if (mode === 'sync_fields') {
+    return hasSyncTargets ? 'sync-fields' : 'none'
+  }
+  return hasFromOrToFields ? 'fields' : 'none'
+}
+
 export const ADVANCED_CUSTOM_CONVERTER_OPTIONS: Array<{
   value: AdvancedCustomConverter
   label: string
@@ -336,7 +365,7 @@ export const ADVANCED_CUSTOM_TEMPLATE_OPTIONS: AdvancedCustomTemplateOption[] =
 export function cloneAdvancedCustomConfig(
   config: AdvancedCustomConfig
 ): AdvancedCustomConfig {
-  return JSON.parse(JSON.stringify(config)) as AdvancedCustomConfig
+  return structuredClone(config)
 }
 
 export function getAdvancedCustomTemplateConfig(

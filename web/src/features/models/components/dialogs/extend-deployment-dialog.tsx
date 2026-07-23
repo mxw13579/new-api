@@ -29,6 +29,7 @@ import { Separator } from '@/components/ui/separator'
 
 import { estimatePrice, extendDeployment, getDeployment } from '../../api'
 import { deploymentsQueryKeys } from '../../lib'
+import { getDeploymentPriceState } from '../../lib/deployments-utils'
 
 function toInt(value: unknown, fallback: number) {
   const n = typeof value === 'number' ? value : Number(value)
@@ -131,6 +132,11 @@ export function ExtendDeploymentDialog({
   }, [priceRes])
 
   const canSubmit = Boolean(deploymentId) && hours > 0 && !isSubmitting
+  const priceState = getDeploymentPriceState(
+    isLoadingPrice || isFetchingPrice,
+    Boolean(priceParams),
+    priceSummary
+  )
 
   const onSubmit = async () => {
     if (!deploymentId) return
@@ -211,16 +217,14 @@ export function ExtendDeploymentDialog({
           <div className='space-y-1'>
             <div className='text-sm font-medium'>{t('Estimated cost')}</div>
             <div className='text-muted-foreground text-sm'>
-              {isLoadingPrice || isFetchingPrice ? (
+              {priceState === 'loading' && (
                 <span className='inline-flex items-center gap-2'>
                   <Loader2 className='h-4 w-4 animate-spin' />
                   {t('Calculating...')}
                 </span>
-              ) : priceParams ? (
-                priceSummary || t('Not available')
-              ) : (
-                t('Not available')
               )}
+              {priceState === 'ready' && priceSummary}
+              {priceState === 'unavailable' && t('Not available')}
             </div>
             {!priceParams ? (
               <div className='text-muted-foreground text-xs'>

@@ -21,12 +21,10 @@ export function normalizeDeploymentStatus(status: unknown) {
 }
 
 export function formatRemainingMinutes(mins: unknown) {
-  const n =
-    typeof mins === 'string'
-      ? Number(mins)
-      : typeof mins === 'number'
-        ? mins
-        : NaN
+  let n = Number.NaN
+  if (typeof mins === 'string' || typeof mins === 'number') {
+    n = Number(mins)
+  }
   if (!Number.isFinite(n)) return null
 
   const total = Math.max(0, Math.round(n))
@@ -39,4 +37,32 @@ export function formatRemainingMinutes(mins: unknown) {
   if (hours > 0) parts.push(`${hours}h`)
   if (parts.length === 0 || minutes > 0) parts.push(`${minutes}m`)
   return parts.join(' ')
+}
+
+export type DeploymentNameAvailabilityState =
+  | 'checking'
+  | 'available'
+  | 'unavailable'
+  | 'unknown'
+
+export function getDeploymentNameAvailabilityState(
+  isChecking: boolean,
+  isAvailable: boolean | undefined
+): DeploymentNameAvailabilityState {
+  if (isChecking) return 'checking'
+  if (isAvailable === true) return 'available'
+  if (isAvailable === false) return 'unavailable'
+  return 'unknown'
+}
+
+export type DeploymentPriceState = 'loading' | 'ready' | 'unavailable'
+
+export function getDeploymentPriceState(
+  isLoading: boolean,
+  hasPriceParameters: boolean,
+  priceSummary: string
+): DeploymentPriceState {
+  if (isLoading) return 'loading'
+  if (hasPriceParameters && priceSummary) return 'ready'
+  return 'unavailable'
 }

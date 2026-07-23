@@ -17,11 +17,43 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 export function normalizeModelList(models: unknown[] = []): string[] {
-  return Array.from(
-    new Set(
+  return [
+    ...new Set(
       (models || []).map((model) => String(model || '').trim()).filter(Boolean)
-    )
-  )
+    ),
+  ]
+}
+
+export type FetchModelsContentState = 'missing' | 'loading' | 'empty' | 'models'
+
+export function resolveFetchChannelId(
+  hasCustomFetcher: boolean,
+  channel: { id: number } | null
+): number | null {
+  if (hasCustomFetcher || !channel) return null
+  return channel.id
+}
+
+export function getFetchModelsContentState(
+  hasChannel: boolean,
+  hasCustomFetcher: boolean,
+  isFetching: boolean,
+  fetchedModelCount: number,
+  removedModelCount: number
+): FetchModelsContentState {
+  if (!hasChannel && !hasCustomFetcher) return 'missing'
+  if (isFetching) return 'loading'
+  if (fetchedModelCount === 0 && removedModelCount === 0) return 'empty'
+  return 'models'
+}
+
+export function getFetchModelsDefaultTab(
+  newModelCount: number,
+  removedModelCount: number
+): 'new' | 'removed' | 'existing' {
+  if (newModelCount > 0) return 'new'
+  if (removedModelCount > 0) return 'removed'
+  return 'existing'
 }
 
 export function parseUpstreamUpdateMeta(settings: unknown): {
