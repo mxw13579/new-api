@@ -57,6 +57,7 @@ var personalInvoiceDeclaredIndexes = map[string]map[string]personalInvoiceIndexE
 		"idx_invoice_documents_application":      {Columns: []string{"application_id"}},
 		"idx_invoice_documents_status_expiry":    {Columns: []string{"status", "expires_at"}},
 		"idx_invoice_documents_status_operation": {Columns: []string{"status", "operation_started_at"}},
+		"idx_invoice_documents_delete_retry":     {Columns: []string{"status", "delete_error_category", "next_delete_attempt_at"}},
 	},
 }
 
@@ -67,6 +68,7 @@ func TestPersonalInvoicePostgreSQLMigrationShape(t *testing.T) {
 	}
 	installPersonalInvoicePostgreSQLTestDatabase(t, database)
 
+	require.NoError(t, migratePersonalInvoiceStructures(DB))
 	require.NoError(t, migratePersonalInvoiceStructures(DB))
 	assertPersonalInvoicePostgreSQLSchema(t, DB)
 }
@@ -137,4 +139,25 @@ ORDER BY tbl.relname, idx.relname, ord.key_order`
 		actual[row.TableName][row.IndexName] = index
 	}
 	assert.Equal(t, personalInvoiceDeclaredIndexes, actual)
+
+	type columnShape struct {
+		ColumnName string `gorm:"column:column_name"`
+		DataType   string `gorm:"column:data_type"`
+		Nullable   string `gorm:"column:is_nullable"`
+		MaxLength  *int64 `gorm:"column:character_maximum_length"`
+	}
+	var columns []columnShape
+	require.NoError(t, db.Raw(`SELECT column_name, data_type, is_nullable, character_maximum_length
+FROM information_schema.columns
+WHERE table_schema = current_schema()
+  AND table_name = 'invoice_documents'
+  AND column_name IN ('delete_error_category', 'next_delete_attempt_at')
+ORDER BY column_name`).Scan(&columns).Error)
+	require.Len(t, columns, 2)
+	assert.Equal(t, "delete_error_category", columns[0].ColumnName)
+	assert.Equal(t, "character varying", columns[0].DataType)
+	assert.Equal(t, "YES", columns[0].Nullable)
+	require.NotNil(t, columns[0].MaxLength)
+	assert.Equal(t, int64(32), *columns[0].MaxLength)
+	assert.Equal(t, columnShape{ColumnName: "next_delete_attempt_at", DataType: "bigint", Nullable: "YES"}, columns[1])
 }

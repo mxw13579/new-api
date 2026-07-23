@@ -33,6 +33,17 @@ const (
 	InvoiceDocumentRecoveryBucketMismatch = "bucket_mismatch"
 	// InvoiceDocumentRecoveryActivationIncomplete records an active pointer without complete durable activation facts.
 	InvoiceDocumentRecoveryActivationIncomplete = "activation_incomplete"
+
+	// InvoiceDocumentDeleteErrorRetryable identifies a physical-delete failure eligible for a bounded retry.
+	InvoiceDocumentDeleteErrorRetryable = "object_delete_retryable"
+	// InvoiceDocumentDeleteErrorTerminal identifies a dormant physical-delete failure.
+	InvoiceDocumentDeleteErrorTerminal = "object_delete_terminal"
+	// InvoiceDocumentDeleteErrorBucketMismatch identifies a persisted bucket outside the trusted store authority.
+	InvoiceDocumentDeleteErrorBucketMismatch = "bucket_mismatch"
+	// InvoiceDocumentDeleteErrorMissingObjectKey identifies a document without a final object key.
+	InvoiceDocumentDeleteErrorMissingObjectKey = "missing_object_key"
+	// InvoiceDocumentDeleteErrorObjectIntegrityMismatch identifies an object that disagrees with immutable document facts.
+	InvoiceDocumentDeleteErrorObjectIntegrityMismatch = "object_integrity_mismatch"
 )
 
 // InvoiceDocument tracks a private PDF object's staged promotion, attestation, retention, and deletion state.
@@ -47,7 +58,7 @@ type InvoiceDocument struct {
 	ContentType                   string  `json:"content_type" gorm:"type:varchar(64);not null"`
 	SizeBytes                     int64   `json:"size_bytes" gorm:"not null"`
 	SHA256                        string  `json:"sha256" gorm:"type:char(64);not null"`
-	Status                        string  `json:"status" gorm:"type:varchar(32);not null;index:idx_invoice_documents_status_expiry,priority:1;index:idx_invoice_documents_status_operation,priority:1"`
+	Status                        string  `json:"status" gorm:"type:varchar(32);not null;index:idx_invoice_documents_status_expiry,priority:1;index:idx_invoice_documents_status_operation,priority:1;index:idx_invoice_documents_delete_retry,priority:1"`
 	OperationToken                string  `json:"-" gorm:"type:char(64);not null"`
 	OperationStartedAt            int64   `json:"operation_started_at" gorm:"not null;index:idx_invoice_documents_status_operation,priority:2"`
 	UploadedBy                    int     `json:"uploaded_by" gorm:"not null"`
@@ -61,6 +72,8 @@ type InvoiceDocument struct {
 	ExpiresAt                     *int64  `json:"expires_at,omitempty" gorm:"index:idx_invoice_documents_status_expiry,priority:2"`
 	DeleteAttempts                int     `json:"delete_attempts" gorm:"not null"`
 	LastDeleteError               string  `json:"last_delete_error" gorm:"type:varchar(512)"`
+	DeleteErrorCategory           *string `json:"delete_error_category,omitempty" gorm:"type:varchar(32);index:idx_invoice_documents_delete_retry,priority:2"`
+	NextDeleteAttemptAt           *int64  `json:"next_delete_attempt_at,omitempty" gorm:"type:bigint;index:idx_invoice_documents_delete_retry,priority:3"`
 	RecoveryAttempts              int     `json:"recovery_attempts" gorm:"not null;default:0"`
 	LastRecoveryAt                int64   `json:"last_recovery_at" gorm:"not null;default:0"`
 	LastRecoveryError             string  `json:"last_recovery_error" gorm:"type:varchar(32);not null;default:''"`

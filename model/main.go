@@ -463,6 +463,9 @@ func migratePersonalInvoiceStructures(db *gorm.DB) error {
 	if err := migrateInvoiceDocumentRecoveryColumns(db); err != nil {
 		return err
 	}
+	if err := migrateInvoiceDocumentDeletionRetryColumns(db); err != nil {
+		return err
+	}
 	return db.AutoMigrate(
 		&InvoiceProfile{},
 		&InvoiceApplication{},
@@ -486,6 +489,21 @@ func migrateInvoiceDocumentRecoveryColumns(db *gorm.DB) error {
 		return nil
 	}
 	return db.AutoMigrate(&invoiceDocumentRecoveryColumnMigration{})
+}
+
+type invoiceDocumentDeletionRetryColumnMigration struct {
+	Status              string  `gorm:"index:idx_invoice_documents_delete_retry,priority:1"`
+	DeleteErrorCategory *string `gorm:"type:varchar(32);index:idx_invoice_documents_delete_retry,priority:2"`
+	NextDeleteAttemptAt *int64  `gorm:"type:bigint;index:idx_invoice_documents_delete_retry,priority:3"`
+}
+
+func (invoiceDocumentDeletionRetryColumnMigration) TableName() string { return "invoice_documents" }
+
+func migrateInvoiceDocumentDeletionRetryColumns(db *gorm.DB) error {
+	if !db.Migrator().HasTable(&InvoiceDocument{}) {
+		return nil
+	}
+	return db.AutoMigrate(&invoiceDocumentDeletionRetryColumnMigration{})
 }
 
 func migrateLOGDB() error {

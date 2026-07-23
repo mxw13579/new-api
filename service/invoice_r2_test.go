@@ -108,9 +108,12 @@ func TestInvoiceR2AdapterClassifiesProviderErrors(t *testing.T) {
 		provider error
 		expected error
 	}{
-		{name: "not found", provider: &smithy.GenericAPIError{Code: "NoSuchKey", Message: "missing", Fault: smithy.FaultClient}, expected: ErrInvoiceObjectNotFound},
+		{name: "object not found", provider: &smithy.GenericAPIError{Code: "NoSuchKey", Message: "missing", Fault: smithy.FaultClient}, expected: ErrInvoiceObjectNotFound},
+		{name: "bucket unavailable", provider: &smithy.GenericAPIError{Code: "NoSuchBucket", Message: "missing bucket", Fault: smithy.FaultClient}, expected: ErrInvoiceObjectBucketUnavailable},
+		{name: "ambiguous not found is terminal", provider: &smithy.GenericAPIError{Code: "NotFound", Message: "ambiguous", Fault: smithy.FaultClient}, expected: ErrInvoiceObjectTerminal},
+		{name: "unknown client error is terminal", provider: &smithy.GenericAPIError{Code: "InvalidRequest", Message: "bad request", Fault: smithy.FaultClient}, expected: ErrInvoiceObjectTerminal},
 		{name: "retryable", provider: &smithy.GenericAPIError{Code: "SlowDown", Message: "later", Fault: smithy.FaultServer}, expected: ErrInvoiceObjectRetryable},
-		{name: "terminal", provider: &smithy.GenericAPIError{Code: "AccessDenied", Message: "denied", Fault: smithy.FaultClient}, expected: ErrInvoiceObjectTerminal},
+		{name: "access denied is terminal", provider: &smithy.GenericAPIError{Code: "AccessDenied", Message: "denied", Fault: smithy.FaultClient}, expected: ErrInvoiceObjectTerminal},
 	}
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -119,6 +122,9 @@ func TestInvoiceR2AdapterClassifiesProviderErrors(t *testing.T) {
 			require.NoError(t, err)
 			_, err = store.Head(context.Background(), "invoices/random.pdf")
 			require.ErrorIs(t, err, testCase.expected)
+			if testCase.expected == ErrInvoiceObjectBucketUnavailable {
+				assert.ErrorIs(t, err, ErrInvoiceObjectTerminal)
+			}
 			assert.NotContains(t, err.Error(), "invoices/random.pdf")
 		})
 	}

@@ -30,6 +30,8 @@ var (
 	ErrInvoiceObjectRetryable = errors.New("invoice object operation retryable")
 	// ErrInvoiceObjectTerminal classifies invalid configuration, unsafe inputs, or non-retryable provider failures.
 	ErrInvoiceObjectTerminal = errors.New("invoice object operation terminal")
+	// ErrInvoiceObjectBucketUnavailable classifies a terminal response that does not prove an individual object is absent.
+	ErrInvoiceObjectBucketUnavailable = fmt.Errorf("%w: invoice object bucket unavailable", ErrInvoiceObjectTerminal)
 )
 
 type invoiceR2Client interface {
@@ -183,8 +185,10 @@ func classifyInvoiceObjectError(err error) error {
 	var apiError smithy.APIError
 	if errors.As(err, &apiError) {
 		switch apiError.ErrorCode() {
-		case "NoSuchKey", "NotFound", "NoSuchBucket":
+		case "NoSuchKey":
 			return fmt.Errorf("%w: provider not found", ErrInvoiceObjectNotFound)
+		case "NoSuchBucket":
+			return fmt.Errorf("%w: provider bucket unavailable", ErrInvoiceObjectBucketUnavailable)
 		case "SlowDown", "RequestTimeout", "InternalError", "ServiceUnavailable", "Throttling", "ThrottlingException":
 			return fmt.Errorf("%w: provider retryable", ErrInvoiceObjectRetryable)
 		default:
