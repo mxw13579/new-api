@@ -53,7 +53,11 @@ import {
 import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
 
-import { InvoiceApiError } from '../api'
+import {
+  InvoiceApiError,
+  downloadInvoiceDocument,
+  saveInvoiceDocumentBlob,
+} from '../api'
 import {
   canDownloadInvoice,
   formatInvoiceAmount,
@@ -127,12 +131,8 @@ export function HistoryPanel(props: HistoryPanelProps) {
   async function downloadDocument(applicationId: number): Promise<void> {
     setDownloadPendingId(applicationId)
     try {
-      if (!props.invoiceApi.requestDocumentDownloadUrl) {
-        throw new Error('authenticated-download-unavailable')
-      }
-      const downloadUrl =
-        await props.invoiceApi.requestDocumentDownloadUrl(applicationId)
-      window.location.assign(downloadUrl)
+      const documentBlob = await downloadInvoiceDocument(applicationId)
+      saveInvoiceDocumentBlob(documentBlob, applicationId)
     } catch (error) {
       if (error instanceof InvoiceApiError) {
         toast.error(t(getInvoiceErrorMessageKey(error.code)))

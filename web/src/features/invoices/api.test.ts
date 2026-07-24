@@ -22,6 +22,8 @@ import { describe, test } from 'node:test'
 import {
   InvoiceApiError,
   createHttpInvoiceApi,
+  downloadInvoiceDocument,
+  saveInvoiceDocumentBlob,
   type InvoiceHttpTransport,
 } from './api'
 
@@ -44,9 +46,7 @@ describe('HTTP InvoiceApi adapter', () => {
           data: {
             success: true,
             message: '',
-            data: url.endsWith('/document-url')
-              ? { download_url: 'https://private.example.test/invoice.pdf' }
-              : body,
+            data: body,
           },
         }
       },
@@ -87,8 +87,6 @@ describe('HTTP InvoiceApi adapter', () => {
     await invoiceApi.listApplications({ page: 3, page_size: 10 })
     await invoiceApi.getApplication(7)
     await invoiceApi.cancelApplication(7)
-    const downloadUrl = await invoiceApi.requestDocumentDownloadUrl(7)
-
     assert.deepEqual(calls[3].body, {
       id: 4,
       expected_version: 9,
@@ -97,9 +95,9 @@ describe('HTTP InvoiceApi adapter', () => {
       is_default: true,
     })
     assert.deepEqual(calls[4].body, { id: 4, expected_version: 10 })
-    assert.equal(calls.at(-1)?.url, '/api/user/invoices/7/document-url')
-    assert.equal(downloadUrl, 'https://private.example.test/invoice.pdf')
-    assert.equal(calls.length, 11)
+    assert.equal(calls.at(-1)?.url, '/api/user/invoices/7/cancel')
+    assert.equal(calls.length, 10)
+    assert.equal('requestDocumentDownloadUrl' in invoiceApi, false)
     for (const call of calls) {
       assert.equal(
         (call.config as { skipBusinessError?: boolean }).skipBusinessError,
@@ -109,6 +107,155 @@ describe('HTTP InvoiceApi adapter', () => {
         (call.config as { skipErrorHandler?: boolean }).skipErrorHandler,
         true
       )
+    }
+  })
+
+  test('downloads the authenticated document as a blob without a URL envelope', async () => {
+    const expected = new Blob(['%PDF-1.7 test'], { type: 'application/pdf' })
+    const calls: Array<{ url: string; config: unknown }> = []
+    const transport = {
+      get: async (url: string, config: unknown) => {
+        calls.push({ url, config })
+        return { data: expected }
+      },
+    }
+
+    const document = await downloadInvoiceDocument(transport, 7)
+
+    assert.equal(document, expected)
+    assert.deepEqual(calls, [
+      {
+        url: '/api/user/invoices/7/document',
+        config: {
+          skipBusinessError: true,
+          skipErrorHandler: true,
+          responseType: 'blob',
+        },
+      },
+    ])
+  })
+
+  test('decodes a binary-response JSON error without exposing response text', async () => {
+    const transport = {
+      get: async () => {
+        throw {
+          response: {
+            data: new Blob(
+              [
+                JSON.stringify({
+                  success: false,
+                  message: 'provider key must stay hidden',
+                  data: { code: 'INVOICE_NOT_FOUND' },
+                }),
+              ],
+              { type: 'application/json' }
+            ),
+          },
+        }
+      },
+    }
+
+    await assert.rejects(
+      downloadInvoiceDocument(transport, 99),
+      (error: unknown) =>
+        error instanceof InvoiceApiError && error.code === 'INVOICE_NOT_FOUND'
+    )
+  })
+
+  test('uses a detached anchor and revokes the handler-local object URL', () => {
+    const originalDocument = globalThis.document
+    const originalCreateObjectURL = URL.createObjectURL
+    const originalRevokeObjectURL = URL.revokeObjectURL
+    const events: string[] = []
+    const anchor = {
+      download: '',
+      href: '',
+      click() {
+        events.push('click')
+      },
+    }
+    try {
+      Object.defineProperty(globalThis, 'document', {
+        configurable: true,
+        value: {
+          body: {
+            appendChild() {
+              throw new Error('download anchor must remain detached')
+            },
+          },
+          createElement(tagName: string) {
+            assert.equal(tagName, 'a')
+            events.push('create-anchor')
+            return anchor
+          },
+        },
+      })
+      URL.createObjectURL = () => {
+        events.push('create-url')
+        return 'blob:invoice-handler-local'
+      }
+      URL.revokeObjectURL = (url) => {
+        assert.equal(url, 'blob:invoice-handler-local')
+        events.push('revoke-url')
+      }
+
+      saveInvoiceDocumentBlob(new Blob(['%PDF-1.7']), 42)
+
+      assert.equal(anchor.href, 'blob:invoice-handler-local')
+      assert.equal(anchor.download, 'invoice-42.pdf')
+      assert.deepEqual(events, [
+        'create-url',
+        'create-anchor',
+        'click',
+        'revoke-url',
+      ])
+    } finally {
+      Object.defineProperty(globalThis, 'document', {
+        configurable: true,
+        value: originalDocument,
+      })
+      URL.createObjectURL = originalCreateObjectURL
+      URL.revokeObjectURL = originalRevokeObjectURL
+    }
+  })
+
+  test('revokes the object URL when the detached anchor click fails', () => {
+    const originalDocument = globalThis.document
+    const originalCreateObjectURL = URL.createObjectURL
+    const originalRevokeObjectURL = URL.revokeObjectURL
+    let revoked = false
+    try {
+      Object.defineProperty(globalThis, 'document', {
+        configurable: true,
+        value: {
+          createElement() {
+            return {
+              download: '',
+              href: '',
+              click() {
+                throw new Error('browser click failed')
+              },
+            }
+          },
+        },
+      })
+      URL.createObjectURL = () => 'blob:invoice-handler-local'
+      URL.revokeObjectURL = () => {
+        revoked = true
+      }
+
+      assert.throws(
+        () => saveInvoiceDocumentBlob(new Blob(['%PDF-1.7']), 42),
+        /browser click failed/
+      )
+      assert.equal(revoked, true)
+    } finally {
+      Object.defineProperty(globalThis, 'document', {
+        configurable: true,
+        value: originalDocument,
+      })
+      URL.createObjectURL = originalCreateObjectURL
+      URL.revokeObjectURL = originalRevokeObjectURL
     }
   })
 

@@ -16,7 +16,10 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import type { ApiRequestConfig as ProjectApiRequestConfig } from '@/lib/api'
+import {
+  api,
+  type ApiRequestConfig as ProjectApiRequestConfig,
+} from '@/lib/api'
 
 import type {
   AuthenticatedInvoiceApi,
@@ -77,6 +80,13 @@ export interface InvoiceHttpTransport {
   ): Promise<InvoiceTransportResponse>
 }
 
+interface InvoiceDocumentHttpTransport {
+  get(
+    url: string,
+    config: ApiRequestConfig & { responseType: 'blob' }
+  ): Promise<{ data: Blob }>
+}
+
 /** Carries a stable invoice error code across the frontend API boundary. */
 export class InvoiceApiError extends Error {
   code: InvoiceErrorCode
@@ -134,6 +144,76 @@ export async function invoiceRequest<T>(
   }
 }
 
+async function decodeInvoiceDocumentError(
+  error: unknown
+): Promise<InvoiceApiError> {
+  if (typeof error !== 'object' || error === null) {
+    return decodeInvoiceApiError(error)
+  }
+  const responseData = (error as { response?: { data?: unknown } }).response
+    ?.data
+  if (!(responseData instanceof Blob)) return decodeInvoiceApiError(error)
+  try {
+    return decodeInvoiceApiError(JSON.parse(await responseData.text()))
+  } catch {
+    return new InvoiceApiError('INVOICE_INTERNAL_ERROR')
+  }
+}
+
+/** Fetches a verified PDF through the authenticated same-origin route. */
+export async function downloadInvoiceDocument(
+  transport: InvoiceDocumentHttpTransport,
+  applicationId: number
+): Promise<Blob>
+export async function downloadInvoiceDocument(
+  applicationId: number
+): Promise<Blob>
+export async function downloadInvoiceDocument(
+  transportOrApplicationId: InvoiceDocumentHttpTransport | number,
+  maybeApplicationId?: number
+): Promise<Blob> {
+  const transport =
+    typeof transportOrApplicationId === 'number'
+      ? (api as InvoiceDocumentHttpTransport)
+      : transportOrApplicationId
+  const applicationId =
+    typeof transportOrApplicationId === 'number'
+      ? transportOrApplicationId
+      : maybeApplicationId
+  if (applicationId === undefined) {
+    throw new InvoiceApiError('INVOICE_INVALID_REQUEST')
+  }
+  try {
+    const response = await transport.get(
+      `/api/user/invoices/${applicationId}/document`,
+      {
+        ...INVOICE_REQUEST_CONFIG,
+        responseType: 'blob',
+      }
+    )
+    return response.data
+  } catch (error) {
+    if (error instanceof InvoiceApiError) throw error
+    throw await decodeInvoiceDocumentError(error)
+  }
+}
+
+/** Saves one handler-local invoice blob without attaching its anchor to DOM. */
+export function saveInvoiceDocumentBlob(
+  documentBlob: Blob,
+  applicationId: number
+): void {
+  const objectUrl = URL.createObjectURL(documentBlob)
+  try {
+    const anchor = document.createElement('a')
+    anchor.href = objectUrl
+    anchor.download = `invoice-${applicationId}.pdf`
+    anchor.click()
+  } finally {
+    URL.revokeObjectURL(objectUrl)
+  }
+}
+
 function pageUrl(path: string, request: InvoicePageRequest): string {
   const params = new URLSearchParams({
     page: String(request.page),
@@ -150,7 +230,7 @@ function pageUrl(path: string, request: InvoicePageRequest): string {
  */
 export function createHttpInvoiceApi(
   transport: InvoiceHttpTransport
-): AuthenticatedInvoiceApi {
+): Omit<AuthenticatedInvoiceApi, 'requestDocumentDownloadUrl'> {
   return {
     async getConfig() {
       return invoiceRequest<InvoiceConfig>(
@@ -225,16 +305,6 @@ export function createHttpInvoiceApi(
           INVOICE_REQUEST_CONFIG
         )
       )
-    },
-    async requestDocumentDownloadUrl(applicationId: number) {
-      const response = await invoiceRequest<{ download_url: string }>(
-        transport.post(
-          `/api/user/invoices/${applicationId}/document-url`,
-          undefined,
-          INVOICE_REQUEST_CONFIG
-        )
-      )
-      return response.download_url
     },
     getDocumentDownloadUrl(applicationId: number) {
       return `/api/user/invoices/${applicationId}/document`
