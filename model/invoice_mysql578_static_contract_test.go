@@ -1,9 +1,11 @@
 package model
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"database/sql/driver"
+	"log"
 	"strings"
 	"testing"
 
@@ -11,6 +13,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
+	"gorm.io/gorm/schema"
 )
 
 func TestInvoiceMySQL578StaticCompatibility_RuntimeNotRun(t *testing.T) {
@@ -30,6 +34,27 @@ func TestInvoiceMySQL578StaticCompatibility_RuntimeNotRun(t *testing.T) {
 		assert.Equal(t, expectedType, actualType)
 	}
 	assertPersonalInvoiceDeclaredIndexMetadata(t, db)
+
+	var migrationSQL bytes.Buffer
+	migrationDB := openInvoiceMySQL578MigrationCapture(t, &migrationSQL)
+	require.NoError(t, MigratePersonalInvoiceStructures(migrationDB))
+	migrationStatements := strings.ToUpper(migrationSQL.String())
+	assert.Contains(t, migrationStatements, "ALTER TABLE `INVOICE_DOCUMENTS` ADD `R2_AUTHORITY_ID` CHAR(64)")
+	assert.Contains(t, migrationStatements, "ALTER TABLE `INVOICE_DOCUMENTS` ADD `OBJECT_ETAG` VARCHAR(255)")
+	for _, expected := range []string{
+		"CREATE TABLE `INVOICE_DOCUMENTS` (`RECOVERY_ATTEMPTS` BIGINT NOT NULL DEFAULT 0",
+		"`NEXT_DELETE_ATTEMPT_AT` BIGINT",
+		"CREATE TABLE `INVOICE_PROFILES`",
+		"CREATE TABLE `INVOICE_APPLICATIONS`",
+		"CREATE TABLE `INVOICE_ITEMS`",
+		"CREATE TABLE `INVOICE_FEE_LEDGER_ENTRIES`",
+		"CREATE TABLE `INVOICE_ISSUANCES`",
+	} {
+		assert.Contains(t, migrationStatements, expected)
+	}
+	for _, unsupported := range []string{" RETURNING ", "::", " SERIAL", " AUTOINCREMENT", " PRAGMA ", " JSONB"} {
+		assert.NotContains(t, migrationStatements, unsupported)
+	}
 
 	queryShapes := map[string]string{
 		"pending refund": db.ToSQL(func(tx *gorm.DB) *gorm.DB {
@@ -55,6 +80,51 @@ func TestInvoiceMySQL578StaticCompatibility_RuntimeNotRun(t *testing.T) {
 			}
 		})
 	}
+}
+
+func openInvoiceMySQL578MigrationCapture(t *testing.T, output *bytes.Buffer) *gorm.DB {
+	t.Helper()
+	sqlDB := sql.OpenDB(invoiceStaticConnector{})
+	t.Cleanup(func() { require.NoError(t, sqlDB.Close()) })
+	dialector := invoiceStaticMigrationDialector{Dialector: mysql.New(mysql.Config{
+		Conn: sqlDB, SkipInitializeWithVersion: true, ServerVersion: "5.7.8",
+	})}
+	db, err := gorm.Open(dialector, &gorm.Config{
+		DryRun: true, DisableAutomaticPing: true,
+		Logger: logger.New(log.New(output, "", 0), logger.Config{LogLevel: logger.Info}),
+	})
+	require.NoError(t, err)
+	return db
+}
+
+type invoiceStaticMigrationDialector struct {
+	gorm.Dialector
+}
+
+func (dialector invoiceStaticMigrationDialector) Migrator(db *gorm.DB) gorm.Migrator {
+	return invoiceStaticMigrationMigrator{Migrator: dialector.Dialector.Migrator(db)}
+}
+
+type invoiceStaticMigrationMigrator struct {
+	gorm.Migrator
+}
+
+func (invoiceStaticMigrationMigrator) HasTable(any) bool          { return true }
+func (invoiceStaticMigrationMigrator) HasColumn(any, string) bool { return false }
+
+func (migrator invoiceStaticMigrationMigrator) BuildIndexOptions(options []schema.IndexOption, statement *gorm.Statement) []interface{} {
+	return migrator.Migrator.(interface {
+		BuildIndexOptions([]schema.IndexOption, *gorm.Statement) []interface{}
+	}).BuildIndexOptions(options, statement)
+}
+
+func (migrator invoiceStaticMigrationMigrator) AutoMigrate(models ...any) error {
+	for _, schemaModel := range models {
+		if err := migrator.CreateTable(schemaModel); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func openInvoiceMySQL578DryRun(t *testing.T) *gorm.DB {
