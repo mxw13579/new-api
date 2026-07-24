@@ -22,6 +22,7 @@ const port = 4179
 
 export default defineConfig({
   testDir: './e2e',
+  testIgnore: 'invoice-live-*.spec.ts',
   fullyParallel: false,
   workers: 1,
   timeout: 30_000,
