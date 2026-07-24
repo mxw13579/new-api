@@ -129,7 +129,10 @@ export function ReviewActions(props: ReviewActionsProps) {
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <FieldGroup>
-                <Field data-invalid={reasonInvalid || undefined}>
+                <Field
+                  data-invalid={reasonInvalid || undefined}
+                  data-disabled={props.pendingAction === 'reject' || undefined}
+                >
                   <FieldLabel htmlFor='invoice-reject-reason'>
                     {t('Rejection reason')}
                   </FieldLabel>

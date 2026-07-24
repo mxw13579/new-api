@@ -116,7 +116,10 @@ export function SettingsForm(props: SettingsFormProps) {
             />
           </Field>
           <div className='grid gap-4 sm:grid-cols-2'>
-            <Field data-invalid={errorKey ? true : undefined}>
+            <Field
+              data-invalid={errorKey ? true : undefined}
+              data-disabled={props.pending || undefined}
+            >
               <FieldLabel htmlFor='invoice-application-window'>
                 {t('Application window days')}
               </FieldLabel>
@@ -136,7 +139,10 @@ export function SettingsForm(props: SettingsFormProps) {
                 }
               />
             </Field>
-            <Field data-invalid={errorKey ? true : undefined}>
+            <Field
+              data-invalid={errorKey ? true : undefined}
+              data-disabled={props.pending || undefined}
+            >
               <FieldLabel htmlFor='invoice-minimum-amount'>
                 {t('Minimum amount in minor units')}
               </FieldLabel>
@@ -156,7 +162,10 @@ export function SettingsForm(props: SettingsFormProps) {
                 }
               />
             </Field>
-            <Field data-invalid={errorKey ? true : undefined}>
+            <Field
+              data-invalid={errorKey ? true : undefined}
+              data-disabled={props.pending || undefined}
+            >
               <FieldLabel htmlFor='invoice-fee-quota'>
                 {t('Fee quota')}
               </FieldLabel>
@@ -177,7 +186,10 @@ export function SettingsForm(props: SettingsFormProps) {
                 }
               />
             </Field>
-            <Field data-invalid={errorKey ? true : undefined}>
+            <Field
+              data-invalid={errorKey ? true : undefined}
+              data-disabled={props.pending || undefined}
+            >
               <FieldLabel htmlFor='invoice-pdf-retention'>
                 {t('PDF retention days')}
               </FieldLabel>

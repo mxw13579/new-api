@@ -109,7 +109,10 @@ export function DocumentUpload(props: DocumentUploadProps) {
               )}
         </FieldDescription>
         <FieldGroup>
-          <Field data-invalid={errorKey ? true : undefined}>
+          <Field
+            data-invalid={errorKey ? true : undefined}
+            data-disabled={props.pending || undefined}
+          >
             <FieldLabel htmlFor='invoice-pdf-file'>
               {t('PDF document')}
             </FieldLabel>
