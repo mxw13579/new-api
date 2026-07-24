@@ -290,10 +290,6 @@ func (store *invoiceIntegrationStore) Delete(_ context.Context, key string) erro
 	return nil
 }
 
-func (*invoiceIntegrationStore) PresignGet(context.Context, string, time.Duration) (string, error) {
-	return "", nil
-}
-
 func (store *invoiceIntegrationStore) etag(key string) string {
 	digest := sha256.Sum256(store.objects[key])
 	return fmt.Sprintf("\"%x\"", digest[:16])
