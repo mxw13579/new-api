@@ -2,24 +2,24 @@ package controller
 
 import (
 	"bytes"
+	"context"
 	"fmt"
+	"io"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"net/textproto"
 	"strings"
-	"sync/atomic"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
-	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"gorm.io/gorm"
 )
 
 type invoiceUploadPart struct {
@@ -221,7 +221,19 @@ func TestInvoiceUploadHTTPRejectsValidChunkedMultipartBeyondLimit(t *testing.T) 
 }
 
 func TestInvoiceUploadPartContentTypeIsAdvisory(t *testing.T) {
-	db, objectCalls := setupInvoiceUploadAdvisoryFixture(t)
+	previousUpload := uploadInvoiceDocument
+	serviceCalls := 0
+	uploadInvoiceDocument = func(_ context.Context, _ int, _ int64, _ dto.InvoiceDocumentUploadRequest, reader io.Reader) error {
+		serviceCalls++
+		data, err := io.ReadAll(reader)
+		require.NoError(t, err)
+		if _, err = service.ValidateInvoicePDF(bytes.NewReader(data)); err != nil {
+			return err
+		}
+		return model.ErrInvoiceStateConflict
+	}
+	t.Cleanup(func() { uploadInvoiceDocument = previousUpload })
+
 	validPDF := buildInvoiceControllerTestPDF()
 	_, err := service.ValidateInvoicePDF(bytes.NewReader(validPDF))
 	require.NoError(t, err)
@@ -229,21 +241,16 @@ func TestInvoiceUploadPartContentTypeIsAdvisory(t *testing.T) {
 	wrongDeclaration := validInvoiceUploadParts(constant.InvoiceApplicationStatusApproved, validPDF)
 	wrongDeclaration[len(wrongDeclaration)-1].contentType = "text/plain"
 	recorder := performInvoiceUploadControllerAs(invoiceUploadRequest(t, wrongDeclaration), 7)
-	assert.NotEqual(t, http.StatusBadRequest, recorder.Code, "valid PDF bytes must not be rejected because of the declared part type")
-	var accepted model.InvoiceDocument
-	require.NoError(t, db.Order("id DESC").First(&accepted).Error)
-	assert.Equal(t, model.InvoiceDocumentStatusUploading, accepted.Status)
+	assert.Equal(t, http.StatusConflict, recorder.Code, "valid PDF bytes must reach the service regardless of the declared part type")
+	assert.Equal(t, constant.InvoiceCodeStateConflict, invoiceUploadResponseCode(t, recorder))
+	assert.Equal(t, 1, serviceCalls)
 
-	objectCallsBeforeInvalid := objectCalls.Load()
 	invalidDeclaration := validInvoiceUploadParts(constant.InvoiceApplicationStatusApproved, []byte("not a pdf"))
-	invalidDeclaration[len(invalidDeclaration)-1].contentType = model.InvoicePDFContentType
+	invalidDeclaration[len(invalidDeclaration)-1].contentType = service.InvoicePDFContentType
 	recorder = performInvoiceUploadControllerAs(invoiceUploadRequest(t, invalidDeclaration), 7)
 	assert.Equal(t, http.StatusBadRequest, recorder.Code)
 	assert.Equal(t, constant.InvoiceCodeInvalidRequest, invoiceUploadResponseCode(t, recorder))
-	var rejected model.InvoiceDocument
-	require.NoError(t, db.Order("id DESC").First(&rejected).Error)
-	assert.Equal(t, model.InvoiceDocumentStatusUploadFailed, rejected.Status)
-	assert.Equal(t, objectCallsBeforeInvalid, objectCalls.Load(), "invalid PDF bytes must be rejected before object storage")
+	assert.Equal(t, 2, serviceCalls)
 }
 
 func performInvoiceUploadControllerAs(request *http.Request, actorID int) *httptest.ResponseRecorder {
@@ -254,41 +261,6 @@ func performInvoiceUploadControllerAs(request *http.Request, actorID int) *httpt
 	context.Set("id", actorID)
 	AdminUploadInvoiceDocument(context)
 	return recorder
-}
-
-func setupInvoiceUploadAdvisoryFixture(t *testing.T) (*gorm.DB, *atomic.Int32) {
-	t.Helper()
-	previousDB := model.DB
-	db, err := gorm.Open(sqlite.Open("file:"+strings.ReplaceAll(t.Name(), "/", "_")+"?mode=memory&cache=shared"), &gorm.Config{})
-	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&model.InvoiceApplication{}, &model.InvoiceDocument{}))
-	model.DB = db
-	require.NoError(t, db.Create(&model.InvoiceApplication{
-		ID: 1, ApplicationNo: "INV-ADVISORY-1", UserID: 1, RequestID: "advisory-request", RequestFingerprint: strings.Repeat("f", 64),
-		Type: constant.InvoiceTypePersonal, Status: constant.InvoiceApplicationStatusApproved,
-		PaymentReviewStatus: constant.InvoicePaymentReviewStatusNone, Currency: constant.InvoiceCurrencyCNY,
-		AmountMinor: 100, FeeMethod: model.InvoiceFeeMethodWalletQuota, FeeStatus: constant.InvoiceFeeStatusNotRequired,
-		ProfileSnapshot: `{}`, PolicySnapshot: `{}`, SubmittedAt: 1,
-	}).Error)
-	var objectCalls atomic.Int32
-	server := httptest.NewTLSServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		objectCalls.Add(1)
-		response.WriteHeader(http.StatusBadRequest)
-	}))
-	t.Setenv("INVOICE_R2_ENDPOINT", server.URL)
-	t.Setenv("INVOICE_R2_BUCKET", "test-fake-private-bucket")
-	t.Setenv("INVOICE_R2_AUTHORITY_ID", strings.Repeat("a", 64))
-	t.Setenv("INVOICE_R2_ACCESS_KEY_ID", "test-fake-access-key")
-	t.Setenv("INVOICE_R2_SECRET_ACCESS_KEY", "test-fake-secret-key")
-	t.Cleanup(func() {
-		server.Close()
-		sqlDB, sqlErr := db.DB()
-		if sqlErr == nil {
-			require.NoError(t, sqlDB.Close())
-		}
-		model.DB = previousDB
-	})
-	return db, &objectCalls
 }
 
 func buildInvoiceControllerTestPDF() []byte {

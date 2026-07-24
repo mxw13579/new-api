@@ -15,7 +15,10 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-var getInvoiceDocumentDownload = service.GetInvoiceDocumentDownload
+var (
+	getInvoiceDocumentDownload = service.GetInvoiceDocumentDownload
+	uploadInvoiceDocument      = service.UploadInvoiceDocument
+)
 
 func invoiceErrorCode(err error) (string, int) {
 	switch {
@@ -388,7 +391,7 @@ func AdminUploadInvoiceDocument(c *gin.Context) {
 		ExpectedStatus: c.PostForm("expected_status"), InvoiceNumber: c.PostForm("invoice_number"), InvoiceCode: c.PostForm("invoice_code"),
 		InvoiceDate: invoiceDate, FaceAmountMinor: faceAmountMinor, Currency: c.PostForm("currency"), PDFFactsAttested: attested,
 	}
-	if err := service.UploadInvoiceDocument(c.Request.Context(), c.GetInt("id"), id, request, file); err != nil {
+	if err := uploadInvoiceDocument(c.Request.Context(), c.GetInt("id"), id, request, file); err != nil {
 		writeInvoiceError(c, err)
 		return
 	}
