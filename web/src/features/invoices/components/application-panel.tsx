@@ -36,7 +36,7 @@ import {
 import { Skeleton } from '@/components/ui/skeleton'
 
 import { InvoiceApiError } from '../api'
-import { getInvoiceErrorMessageKey } from '../contract'
+import { formatInvoiceAmount, getInvoiceErrorMessageKey } from '../contract'
 import type {
   EligibleInvoiceOrder,
   InvoiceApi,
@@ -78,13 +78,6 @@ interface ApplicationPanelProps {
   quotaLoading: boolean
   quotaError: boolean
   retryQuota: () => void
-}
-
-function formatCny(minor: number): string {
-  return new Intl.NumberFormat(undefined, {
-    style: 'currency',
-    currency: 'CNY',
-  }).format(minor / 100)
 }
 
 /**
@@ -202,7 +195,7 @@ export function ApplicationPanel(props: ApplicationPanelProps) {
             loading={props.configLoading}
             error={props.configError}
             retry={props.retryConfig}
-            formatAmount={formatCny}
+            formatAmount={formatInvoiceAmount}
           />
 
           <ApplicationProfileSelection
@@ -227,7 +220,7 @@ export function ApplicationPanel(props: ApplicationPanelProps) {
               )
             }
             onPageChange={props.onOrdersPageChange}
-            formatAmount={formatCny}
+            formatAmount={formatInvoiceAmount}
           />
 
           {props.quotaError ? (
@@ -258,7 +251,8 @@ export function ApplicationPanel(props: ApplicationPanelProps) {
         <CardFooter className='flex flex-wrap justify-between gap-3'>
           <div>
             <p className='font-medium'>
-              {t('Selected amount')}: {formatCny(selectionSummary.amountMinor)}
+              {t('Selected amount')}:{' '}
+              {formatInvoiceAmount(selectionSummary.amountMinor)}
             </p>
             <p className='text-muted-foreground text-xs'>
               {t('{{count}} complete orders selected', {
@@ -297,7 +291,7 @@ export function ApplicationPanel(props: ApplicationPanelProps) {
         profileTitle={selectedProfile?.title}
         profileVersion={selectedProfile?.version}
         selectedOrderCount={orderSelection.size}
-        formattedAmount={formatCny(selectionSummary.amountMinor)}
+        formattedAmount={formatInvoiceAmount(selectionSummary.amountMinor)}
         feeQuota={props.config?.fee_quota ?? 0}
         pending={createMutation.isPending}
         onSubmit={() => createMutation.mutate()}

@@ -16,6 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+/** Provides administrator-only invoice list and detail cache keys. */
 export const adminInvoiceQueryKeys = {
   all: ['invoices', 'admin'] as const,
   lists: () => [...adminInvoiceQueryKeys.all, 'applications'] as const,
@@ -25,6 +26,7 @@ export const adminInvoiceQueryKeys = {
     [...adminInvoiceQueryKeys.all, 'application', applicationId] as const,
 }
 
+/** Provides the independently permissioned invoice-settings cache key. */
 export const invoiceSettingsQueryKeys = {
   detail: () => ['invoices', 'settings'] as const,
 }

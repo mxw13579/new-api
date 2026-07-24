@@ -54,7 +54,11 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
 
 import { InvoiceApiError } from '../api'
-import { canDownloadInvoice, getInvoiceErrorMessageKey } from '../contract'
+import {
+  canDownloadInvoice,
+  formatInvoiceAmount,
+  getInvoiceErrorMessageKey,
+} from '../contract'
 import type {
   InvoiceApi,
   InvoiceApplicationSummary,
@@ -74,13 +78,6 @@ interface HistoryPanelProps {
   error: boolean
   retry: () => void
   onPageChange: (page: number) => void
-}
-
-function formatCny(minor: number): string {
-  return new Intl.NumberFormat(undefined, {
-    style: 'currency',
-    currency: 'CNY',
-  }).format(minor / 100)
 }
 
 /**
@@ -214,7 +211,7 @@ export function HistoryPanel(props: HistoryPanelProps) {
                     {t('Invoice amount')}
                   </dt>
                   <dd className='font-medium'>
-                    {formatCny(application.amount_minor)}
+                    {formatInvoiceAmount(application.amount_minor)}
                   </dd>
                 </div>
                 <div>

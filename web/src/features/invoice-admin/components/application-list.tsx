@@ -51,18 +51,14 @@ import {
 
 import { InvoiceApiError } from '../../invoices/api'
 import { InvoiceStatusBadges } from '../../invoices/components/status-badges'
-import { getInvoiceErrorMessageKey } from '../../invoices/contract'
+import {
+  formatInvoiceAmount,
+  getInvoiceErrorMessageKey,
+} from '../../invoices/contract'
 import { adminInvoiceQueryKeys } from '../queries'
 import type { AdminInvoiceApi } from '../types'
 
 const PAGE_SIZE = 20
-
-function formatCny(minor: number): string {
-  return new Intl.NumberFormat(undefined, {
-    style: 'currency',
-    currency: 'CNY',
-  }).format(minor / 100)
-}
 
 interface ApplicationListProps {
   invoiceApi: AdminInvoiceApi
@@ -148,7 +144,9 @@ export function ApplicationList(props: ApplicationListProps) {
                   .unix(application.submitted_at)
                   .format('YYYY-MM-DD HH:mm')}
               </TableCell>
-              <TableCell>{formatCny(application.amount_minor)}</TableCell>
+              <TableCell>
+                {formatInvoiceAmount(application.amount_minor)}
+              </TableCell>
               <TableCell>
                 <InvoiceStatusBadges application={application} />
               </TableCell>

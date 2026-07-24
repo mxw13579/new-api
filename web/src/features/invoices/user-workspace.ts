@@ -34,6 +34,7 @@ interface DraftIdentity {
   reset(): void
 }
 
+/** Retains selected order identifiers and exact amounts across pages. */
 export type InvoiceOrderSelection = ReadonlyMap<number, number>
 
 interface InvoiceOrderSelectionSummary {

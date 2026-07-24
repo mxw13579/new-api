@@ -27,8 +27,8 @@ import {
   DOCUMENT_STATUS_CONFIG,
   FEE_STATUS_CONFIG,
   PAYMENT_REVIEW_STATUS_CONFIG,
-  calculateSelectedAmountMinor,
   canDownloadInvoice,
+  formatInvoiceAmount,
   getInvoiceErrorMessageKey,
 } from './contract'
 import { createInvoiceDemoApi } from './demo-api'
@@ -108,17 +108,13 @@ describe('invoice frontend contract', () => {
     )
   })
 
-  test('selects complete orders and sums exact integer minor units', () => {
+  test('formats invoice minor units with the shared CNY presentation', () => {
     assert.equal(
-      calculateSelectedAmountMinor(
-        [
-          { topup_id: 7, paid_amount_minor: 1099 },
-          { topup_id: 8, paid_amount_minor: 2901 },
-          { topup_id: 9, paid_amount_minor: 500 },
-        ],
-        new Set([7, 8])
-      ),
-      4000
+      formatInvoiceAmount(12_345),
+      new Intl.NumberFormat(undefined, {
+        style: 'currency',
+        currency: 'CNY',
+      }).format(123.45)
     )
   })
 

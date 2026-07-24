@@ -17,7 +17,6 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import type {
-  EligibleInvoiceOrder,
   InvoiceApplicationStatus,
   InvoiceApplicationSummary,
   InvoiceDocumentStatus,
@@ -117,26 +116,19 @@ const ERROR_MESSAGE_KEYS: Record<InvoiceErrorCode, string> = {
   INVOICE_INTERNAL_ERROR: 'Invoice error: service unavailable',
 }
 
+const INVOICE_CURRENCY_FORMATTER = new Intl.NumberFormat(undefined, {
+  style: 'currency',
+  currency: 'CNY',
+})
+
 /** Returns the localization key for a stable invoice error code. */
 export function getInvoiceErrorMessageKey(code: InvoiceErrorCode): string {
   return ERROR_MESSAGE_KEYS[code]
 }
 
-/**
- * Sums the full minor-unit amounts for the selected eligible orders.
- *
- * @param orders - Eligible orders available for selection.
- * @param selectedTopUpIds - Identifiers of the selected complete orders.
- * @returns The selected amount in CNY minor units.
- */
-export function calculateSelectedAmountMinor(
-  orders: Array<Pick<EligibleInvoiceOrder, 'topup_id' | 'paid_amount_minor'>>,
-  selectedTopUpIds: ReadonlySet<number>
-): number {
-  return orders.reduce((total, order) => {
-    if (!selectedTopUpIds.has(order.topup_id)) return total
-    return total + order.paid_amount_minor
-  }, 0)
+/** Formats integer CNY minor units for invoice-domain presentation. */
+export function formatInvoiceAmount(minor: number): string {
+  return INVOICE_CURRENCY_FORMATTER.format(minor / 100)
 }
 
 /**

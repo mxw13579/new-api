@@ -30,6 +30,7 @@ import type {
   InvoiceValidationResult,
 } from './types'
 
+/** Maps invoice capabilities to backend-provided permission actions. */
 export const INVOICE_ADMIN_PERMISSIONS = {
   resource: 'invoice',
   review: 'review',
@@ -38,8 +39,13 @@ export const INVOICE_ADMIN_PERMISSIONS = {
   settings: 'settings',
 } as const
 
+/** Maximum PDF size accepted by the invoice upload contract. */
 export const MAX_INVOICE_PDF_BYTES = 10 * 1024 * 1024
+
+/** Maximum invoice fee representable by the backend quota domain. */
 export const MAX_INVOICE_FEE_QUOTA = 2_147_483_647
+
+/** Localization key substituted for permission-protected invoice values. */
 export const PROTECTED_INVOICE_VALUE_KEY = 'Protected invoice value'
 
 /** Resolves each invoice administrator capability independently. */

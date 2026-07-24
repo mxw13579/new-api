@@ -45,6 +45,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { getInvoiceReviewActions } from '../contract'
 import type { InvoiceApplicationDetail } from '../types'
 
+/** Identifies the review mutation whose controls are currently pending. */
 export type ReviewAction = 'reviewing' | 'approve' | 'reject' | null
 
 interface ReviewActionsProps {

@@ -32,6 +32,7 @@ import {
 } from '@/components/ui/sheet'
 import { Skeleton } from '@/components/ui/skeleton'
 
+import { formatInvoiceAmount } from '../contract'
 import { invoiceQueryKeys } from '../queries'
 import type { InvoiceApi } from '../types'
 import { shouldPollInvoiceApplication } from '../user-workspace'
@@ -41,13 +42,6 @@ interface ApplicationDetailProps {
   invoiceApi: InvoiceApi
   applicationId: number | null
   onOpenChange: (open: boolean) => void
-}
-
-function formatCny(minor: number): string {
-  return new Intl.NumberFormat(undefined, {
-    style: 'currency',
-    currency: 'CNY',
-  }).format(minor / 100)
 }
 
 /** Displays the immutable invoice application record in a titled sheet. */
@@ -162,7 +156,9 @@ export function ApplicationDetail(props: ApplicationDetailProps) {
                       {t('Minimum amount')}
                     </dt>
                     <dd>
-                      {formatCny(detail.policy_snapshot.minimum_amount_minor)}
+                      {formatInvoiceAmount(
+                        detail.policy_snapshot.minimum_amount_minor
+                      )}
                     </dd>
                   </div>
                   <div>
@@ -194,7 +190,7 @@ export function ApplicationDetail(props: ApplicationDetailProps) {
                         {item.order_no} · {item.product_description}
                       </span>
                       <span className='shrink-0'>
-                        {formatCny(item.paid_amount_minor)}
+                        {formatInvoiceAmount(item.paid_amount_minor)}
                       </span>
                     </div>
                   ))}

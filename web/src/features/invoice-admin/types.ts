@@ -23,6 +23,7 @@ import type {
   InvoiceSettingsApi,
 } from '../invoices/types'
 
+/** Re-exports shared invoice contracts through the administrator feature. */
 export type {
   AdminInvoiceApi,
   InvoiceApplicationDetail,
@@ -30,6 +31,7 @@ export type {
   InvoiceSettingsApi,
 }
 
+/** Describes the four independent administrator invoice capabilities. */
 export interface InvoiceAdminCapabilities {
   canReview: boolean
   canUploadDocument: boolean
@@ -37,6 +39,7 @@ export interface InvoiceAdminCapabilities {
   canManageSettings: boolean
 }
 
+/** Captures the client-side PDF facts validated before multipart upload. */
 export interface InvoiceDocumentUploadInput {
   file: File | null
   invoice_number: string
@@ -47,6 +50,7 @@ export interface InvoiceDocumentUploadInput {
   pdf_facts_attested: boolean
 }
 
+/** Represents a validated invoice value or its localized error key. */
 export type InvoiceValidationResult<T> =
   | { ok: true; data: T }
   | { ok: false; errorKey: string }

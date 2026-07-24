@@ -41,6 +41,7 @@ import { Spinner } from '@/components/ui/spinner'
 
 import type { InvoiceConfig, InvoiceType } from '../types'
 
+/** Represents the editable state of one versioned invoice identity. */
 export interface ProfileDraft {
   id: number | null
   type: InvoiceType

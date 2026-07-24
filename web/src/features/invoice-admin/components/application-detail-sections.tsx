@@ -19,7 +19,10 @@ For commercial licensing, please contact support@quantumnous.com
 import dayjs from 'dayjs'
 import { useTranslation } from 'react-i18next'
 
-import { DOCUMENT_STATUS_CONFIG } from '../../invoices/contract'
+import {
+  DOCUMENT_STATUS_CONFIG,
+  formatInvoiceAmount,
+} from '../../invoices/contract'
 import { PROTECTED_INVOICE_VALUE_KEY } from '../contract'
 import type { InvoiceApplicationDetail } from '../types'
 
@@ -87,12 +90,7 @@ export function ApplicationItemsSection({
             <p className='text-muted-foreground break-words'>
               {item.product_description}
             </p>
-            <p>
-              {new Intl.NumberFormat(undefined, {
-                style: 'currency',
-                currency: 'CNY',
-              }).format(item.paid_amount_minor / 100)}
-            </p>
+            <p>{formatInvoiceAmount(item.paid_amount_minor)}</p>
           </li>
         ))}
       </ul>
