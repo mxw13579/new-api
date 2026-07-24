@@ -7,7 +7,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/QuantumNous/new-api/constant"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/driver/mysql"
@@ -34,19 +33,16 @@ func TestInvoiceMySQL578StaticCompatibility_RuntimeNotRun(t *testing.T) {
 
 	queryShapes := map[string]string{
 		"pending refund": db.ToSQL(func(tx *gorm.DB) *gorm.DB {
-			return tx.Model(&InvoiceApplication{}).
-				Where("fee_status = ?", constant.InvoiceFeeStatusRefundPending).
-				Order("id asc").Limit(100).Find(&[]InvoiceApplication{})
+			return pendingInvoiceFeeRefundSettlementCandidatesQuery(tx, 100).
+				Find(&[]InvoiceFeeRefundSettlementCandidate{})
 		}),
 		"validating recovery": db.ToSQL(func(tx *gorm.DB) *gorm.DB {
-			return tx.Model(&InvoiceDocument{}).
-				Where("status IN ? AND operation_started_at <= ?", []string{InvoiceDocumentStatusUploading, InvoiceDocumentStatusValidating}, 100).
-				Order("id asc").Limit(100).Find(&[]InvoiceDocument{})
+			return InvoiceDocumentRecoveryCandidatesQuery(tx, 100, 100).
+				Find(&[]InvoiceDocument{})
 		}),
 		"deleting lease": db.ToSQL(func(tx *gorm.DB) *gorm.DB {
-			return tx.Model(&InvoiceDocument{}).
-				Where("status = ? AND operation_started_at <= ?", InvoiceDocumentStatusDeleting, 100).
-				Order("id asc").Limit(100).Find(&[]InvoiceDocument{})
+			return InvoiceDocumentCleanupCandidatesQuery(tx, 200, 100, 100).
+				Find(&[]InvoiceDocument{})
 		}),
 	}
 	for name, query := range queryShapes {

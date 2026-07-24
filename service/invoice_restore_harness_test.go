@@ -143,6 +143,7 @@ func openInvoiceIntegrationPostgreSQLHarness(t *testing.T) (invoiceRestoreHarnes
 				"--exit-on-error", "--no-owner", "--no-privileges", "--dbname", restoredName, dumpPath)
 			restoredDB, restoredSQL := openBoundInvoiceIntegrationPostgreSQL(t, adminConfig, restoredName)
 			connections = append(connections, restoredSQL)
+			migrateInvoiceIntegrationTables(t, restoredDB)
 			return restoredDB
 		},
 	}, true
@@ -187,10 +188,9 @@ func migrateInvoiceIntegrationTables(t *testing.T, db *gorm.DB) {
 	t.Helper()
 	require.NoError(t, db.AutoMigrate(
 		&model.User{}, &model.TopUp{}, &model.SubscriptionOrder{}, &model.InvoicePaymentEvidenceBackfillRun{},
-		&model.InvoicePaymentEvidenceBackfillItem{}, &model.InvoiceProfile{},
-		&model.InvoiceApplication{}, &model.InvoiceItem{}, &model.InvoiceFeeLedgerEntry{},
-		&model.InvoiceIssuance{}, &model.InvoiceDocument{},
+		&model.InvoicePaymentEvidenceBackfillItem{},
 	))
+	require.NoError(t, model.MigratePersonalInvoiceStructures(db))
 }
 
 func closeInvoiceIntegrationSQL(t *testing.T, db *gorm.DB) {

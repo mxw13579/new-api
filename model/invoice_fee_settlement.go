@@ -22,14 +22,18 @@ func FindPendingInvoiceFeeRefundSettlementCandidates(db *gorm.DB, limit int) ([]
 	if db == nil || limit <= 0 {
 		return candidates, ErrInvoiceStateConflict
 	}
-	err := db.Model(&InvoiceFeeLedgerEntry{}).
+	err := pendingInvoiceFeeRefundSettlementCandidatesQuery(db, limit).
+		Scan(&candidates).Error
+	return candidates, err
+}
+
+func pendingInvoiceFeeRefundSettlementCandidatesQuery(db *gorm.DB, limit int) *gorm.DB {
+	return db.Model(&InvoiceFeeLedgerEntry{}).
 		Select("id", "application_id").
 		Where("entry_type = ? AND status = ?", InvoiceFeeEntryTypeRefund, InvoiceFeeEntryStatusPending).
 		Order("last_attempt_at ASC").
 		Order("id ASC").
-		Limit(limit).
-		Scan(&candidates).Error
-	return candidates, err
+		Limit(limit)
 }
 
 // AdvanceInvoiceFeeRefundSettlementAttempt records scheduler progress without

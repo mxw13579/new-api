@@ -103,10 +103,7 @@ func ReconcileStaleInvoiceDocuments(ctx context.Context, db *gorm.DB, store Invo
 	}
 	db = db.WithContext(ctx)
 	var documents []model.InvoiceDocument
-	if err := db.Where("(status IN ? AND operation_started_at <= ?) OR (status = ? AND last_recovery_error = ? AND last_recovery_at <= ?)", []string{
-		model.InvoiceDocumentStatusUploading, model.InvoiceDocumentStatusValidating,
-	}, staleBefore, model.InvoiceDocumentStatusUploadFailed, model.InvoiceDocumentRecoveryDeleteRetryable, staleBefore).
-		Order("last_recovery_at asc").Order("id asc").Limit(limit).Find(&documents).Error; err != nil {
+	if err := model.InvoiceDocumentRecoveryCandidatesQuery(db, staleBefore, limit).Find(&documents).Error; err != nil {
 		return 0, err
 	}
 	processed := 0
@@ -179,18 +176,7 @@ func CleanupInvoiceDocuments(ctx context.Context, db *gorm.DB, store InvoiceObje
 
 func findInvoiceDocumentCleanupCandidates(db *gorm.DB, now, staleBefore int64, limit int) ([]model.InvoiceDocument, error) {
 	var documents []model.InvoiceDocument
-	err := db.Where(
-		"(status = ? AND expires_at IS NOT NULL AND expires_at <= ?) OR "+
-			"(status = ? AND delete_error_category = ? AND expires_at IS NOT NULL AND expires_at <= ?) OR "+
-			"status = ? OR "+
-			"(status = ? AND (delete_error_category IS NULL OR delete_error_category = '' OR (delete_error_category = ? AND next_delete_attempt_at IS NOT NULL AND next_delete_attempt_at <= ?))) OR "+
-			"(status = ? AND operation_started_at <= ?)",
-		model.InvoiceDocumentStatusAvailable, now,
-		model.InvoiceDocumentStatusMissing, model.InvoiceDocumentDeleteErrorObjectIntegrityMismatch, now,
-		model.InvoiceDocumentStatusSuperseded,
-		model.InvoiceDocumentStatusDeleteFailed, model.InvoiceDocumentDeleteErrorRetryable, now,
-		model.InvoiceDocumentStatusDeleting, staleBefore,
-	).Order("id asc").Limit(limit).Find(&documents).Error
+	err := model.InvoiceDocumentCleanupCandidatesQuery(db, now, staleBefore, limit).Find(&documents).Error
 	return documents, err
 }
 

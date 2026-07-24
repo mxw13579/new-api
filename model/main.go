@@ -310,7 +310,7 @@ func migrateDB() error {
 	if err := migrateInvoicePaymentEvidenceStructures(DB); err != nil {
 		return err
 	}
-	if err := migratePersonalInvoiceStructures(DB); err != nil {
+	if err := MigratePersonalInvoiceStructures(DB); err != nil {
 		return err
 	}
 	if err := InitializeUserAuthVersions(); err != nil {
@@ -398,7 +398,7 @@ func migrateDBFast() error {
 	if err := migrateInvoicePaymentEvidenceStructures(DB); err != nil {
 		return err
 	}
-	if err := migratePersonalInvoiceStructures(DB); err != nil {
+	if err := MigratePersonalInvoiceStructures(DB); err != nil {
 		return err
 	}
 	if err := InitializeUserAuthVersions(); err != nil {
@@ -456,7 +456,9 @@ func migrateInvoicePaymentEvidenceStructures(db *gorm.DB) error {
 	return nil
 }
 
-func migratePersonalInvoiceStructures(db *gorm.DB) error {
+// MigratePersonalInvoiceStructures applies the invoice schema used by both
+// startup and restore verification.
+func MigratePersonalInvoiceStructures(db *gorm.DB) error {
 	if db == nil {
 		return fmt.Errorf("personal invoice migration requires database")
 	}
@@ -477,6 +479,10 @@ func migratePersonalInvoiceStructures(db *gorm.DB) error {
 		&InvoiceIssuance{},
 		&InvoiceDocument{},
 	)
+}
+
+func migratePersonalInvoiceStructures(db *gorm.DB) error {
+	return MigratePersonalInvoiceStructures(db)
 }
 
 func migrateInvoiceDocumentObjectAuthorityColumns(db *gorm.DB) error {
@@ -524,6 +530,33 @@ func migrateInvoiceDocumentDeletionRetryColumns(db *gorm.DB) error {
 		return nil
 	}
 	return db.AutoMigrate(&invoiceDocumentDeletionRetryColumnMigration{})
+}
+
+// InvoiceDocumentRecoveryCandidatesQuery builds the bounded recovery scan used
+// by the document reconciler.
+func InvoiceDocumentRecoveryCandidatesQuery(db *gorm.DB, staleBefore int64, limit int) *gorm.DB {
+	return db.Model(&InvoiceDocument{}).
+		Where("(status IN ? AND operation_started_at <= ?) OR (status = ? AND last_recovery_error = ? AND last_recovery_at <= ?)", []string{
+			InvoiceDocumentStatusUploading, InvoiceDocumentStatusValidating,
+		}, staleBefore, InvoiceDocumentStatusUploadFailed, InvoiceDocumentRecoveryDeleteRetryable, staleBefore).
+		Order("last_recovery_at asc").Order("id asc").Limit(limit)
+}
+
+// InvoiceDocumentCleanupCandidatesQuery builds the bounded retention and
+// deletion-retry scan used by invoice cleanup.
+func InvoiceDocumentCleanupCandidatesQuery(db *gorm.DB, now, staleBefore int64, limit int) *gorm.DB {
+	return db.Model(&InvoiceDocument{}).Where(
+		"(status = ? AND expires_at IS NOT NULL AND expires_at <= ?) OR "+
+			"(status = ? AND delete_error_category = ? AND expires_at IS NOT NULL AND expires_at <= ?) OR "+
+			"status = ? OR "+
+			"(status = ? AND (delete_error_category IS NULL OR delete_error_category = '' OR (delete_error_category = ? AND next_delete_attempt_at IS NOT NULL AND next_delete_attempt_at <= ?))) OR "+
+			"(status = ? AND operation_started_at <= ?)",
+		InvoiceDocumentStatusAvailable, now,
+		InvoiceDocumentStatusMissing, InvoiceDocumentDeleteErrorObjectIntegrityMismatch, now,
+		InvoiceDocumentStatusSuperseded,
+		InvoiceDocumentStatusDeleteFailed, InvoiceDocumentDeleteErrorRetryable, now,
+		InvoiceDocumentStatusDeleting, staleBefore,
+	).Order("id asc").Limit(limit)
 }
 
 func migrateLOGDB() error {
