@@ -211,6 +211,7 @@ type invoiceRetentionRaceStore struct {
 }
 
 func (store *invoiceRetentionRaceStore) Bucket() string { return store.bucket }
+func (*invoiceRetentionRaceStore) AuthorityID() string  { return invoiceTestAuthorityID }
 
 func (*invoiceRetentionRaceStore) Put(context.Context, string, io.Reader, int64, string) error {
 	return nil
@@ -220,6 +221,9 @@ func (*invoiceRetentionRaceStore) Copy(context.Context, string, string) error { 
 
 func (*invoiceRetentionRaceStore) Head(context.Context, string) (InvoiceObjectHead, error) {
 	return InvoiceObjectHead{}, nil
+}
+func (*invoiceRetentionRaceStore) Get(context.Context, string, string) (InvoiceObjectGet, error) {
+	return InvoiceObjectGet{Body: io.NopCloser(strings.NewReader(""))}, nil
 }
 
 func (store *invoiceRetentionRaceStore) Delete(ctx context.Context, key string) error {

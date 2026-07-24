@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
@@ -31,6 +32,9 @@ type invoiceDownloadStoreStub struct {
 }
 
 func (s *invoiceDownloadStoreStub) Bucket() string { return s.bucket }
+func (s *invoiceDownloadStoreStub) AuthorityID() string {
+	return invoiceTestAuthorityID
+}
 
 func (s *invoiceDownloadStoreStub) Put(context.Context, string, io.Reader, int64, string) error {
 	return nil
@@ -43,6 +47,9 @@ func (s *invoiceDownloadStoreStub) Head(context.Context, string) (InvoiceObjectH
 		s.beforeHead()
 	}
 	return s.head, s.headErr
+}
+func (s *invoiceDownloadStoreStub) Get(context.Context, string, string) (InvoiceObjectGet, error) {
+	return InvoiceObjectGet{Body: io.NopCloser(bytes.NewReader(nil))}, nil
 }
 func (s *invoiceDownloadStoreStub) Delete(context.Context, string) error { return nil }
 func (s *invoiceDownloadStoreStub) PresignGet(_ context.Context, _ string, ttl time.Duration) (string, error) {

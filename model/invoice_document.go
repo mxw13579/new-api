@@ -52,9 +52,11 @@ type InvoiceDocument struct {
 	ApplicationID                 int64   `json:"application_id" gorm:"not null;index:idx_invoice_documents_application"`
 	IssuanceID                    *int64  `json:"issuance_id,omitempty" gorm:"uniqueIndex:uk_invoice_documents_issuance_version"`
 	Version                       *int64  `json:"version,omitempty" gorm:"uniqueIndex:uk_invoice_documents_issuance_version"`
+	R2AuthorityID                 *string `json:"-" gorm:"type:char(64)"`
 	R2Bucket                      string  `json:"-" gorm:"type:varchar(255);not null"`
 	StagingObjectKey              *string `json:"-" gorm:"type:varchar(191);uniqueIndex:uk_invoice_documents_staging_key"`
 	ObjectKey                     *string `json:"-" gorm:"type:varchar(191);uniqueIndex:uk_invoice_documents_object_key"`
+	ObjectETag                    *string `json:"-" gorm:"column:object_etag;type:varchar(255)"`
 	ContentType                   string  `json:"content_type" gorm:"type:varchar(64);not null"`
 	SizeBytes                     int64   `json:"size_bytes" gorm:"not null"`
 	SHA256                        string  `json:"sha256" gorm:"type:char(64);not null"`

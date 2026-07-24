@@ -30,6 +30,8 @@ var (
 	ErrInvoiceObjectRetryable = errors.New("invoice object operation retryable")
 	// ErrInvoiceObjectTerminal classifies invalid configuration, unsafe inputs, or non-retryable provider failures.
 	ErrInvoiceObjectTerminal = errors.New("invoice object operation terminal")
+	// ErrInvoiceObjectIntegrityUnavailable classifies a failed immutable conditional read.
+	ErrInvoiceObjectIntegrityUnavailable = fmt.Errorf("%w: invoice object integrity unavailable", ErrInvoiceObjectTerminal)
 	// ErrInvoiceObjectBucketUnavailable classifies a terminal response that does not prove an individual object is absent.
 	ErrInvoiceObjectBucketUnavailable = fmt.Errorf("%w: invoice object bucket unavailable", ErrInvoiceObjectTerminal)
 )
@@ -38,6 +40,7 @@ type invoiceR2Client interface {
 	PutObject(context.Context, *s3.PutObjectInput, ...func(*s3.Options)) (*s3.PutObjectOutput, error)
 	CopyObject(context.Context, *s3.CopyObjectInput, ...func(*s3.Options)) (*s3.CopyObjectOutput, error)
 	HeadObject(context.Context, *s3.HeadObjectInput, ...func(*s3.Options)) (*s3.HeadObjectOutput, error)
+	GetObject(context.Context, *s3.GetObjectInput, ...func(*s3.Options)) (*s3.GetObjectOutput, error)
 	DeleteObject(context.Context, *s3.DeleteObjectInput, ...func(*s3.Options)) (*s3.DeleteObjectOutput, error)
 }
 
@@ -49,21 +52,31 @@ type invoiceR2Presigner interface {
 type InvoiceObjectHead struct {
 	SizeBytes      int64
 	ChecksumSHA256 string
+	ETag           string
+}
+
+// InvoiceObjectGet contains a conditional object's stream and immutable provider facts.
+type InvoiceObjectGet struct {
+	Body           io.ReadCloser
+	SizeBytes      int64
+	ChecksumSHA256 string
+	ETag           string
 }
 
 // InvoiceR2Store implements the private invoice object contract for one trusted R2 bucket.
 type InvoiceR2Store struct {
 	client    invoiceR2Client
 	presigner invoiceR2Presigner
+	authority string
 	bucket    string
 }
 
 // NewInvoiceR2Store validates dependencies and creates a store restricted to the supplied private bucket.
-func NewInvoiceR2Store(client invoiceR2Client, presigner invoiceR2Presigner, bucket string) (*InvoiceR2Store, error) {
-	if client == nil || presigner == nil || strings.TrimSpace(bucket) == "" {
+func NewInvoiceR2Store(client invoiceR2Client, presigner invoiceR2Presigner, authority, bucket string) (*InvoiceR2Store, error) {
+	if client == nil || presigner == nil || !validInvoiceR2AuthorityID(authority) || strings.TrimSpace(bucket) == "" {
 		return nil, ErrInvoiceObjectTerminal
 	}
-	return &InvoiceR2Store{client: client, presigner: presigner, bucket: bucket}, nil
+	return &InvoiceR2Store{client: client, presigner: presigner, authority: authority, bucket: bucket}, nil
 }
 
 // NewInvoiceR2StoreFromEnvironment creates the trusted invoice store from validated HTTPS R2 configuration.
@@ -72,7 +85,8 @@ func NewInvoiceR2StoreFromEnvironment() (*InvoiceR2Store, error) {
 	bucket := strings.TrimSpace(os.Getenv("INVOICE_R2_BUCKET"))
 	accessKeyID := strings.TrimSpace(os.Getenv("INVOICE_R2_ACCESS_KEY_ID"))
 	secretAccessKey := strings.TrimSpace(os.Getenv("INVOICE_R2_SECRET_ACCESS_KEY"))
-	if endpoint == "" || bucket == "" || accessKeyID == "" || secretAccessKey == "" {
+	authority := os.Getenv("INVOICE_R2_AUTHORITY_ID")
+	if endpoint == "" || bucket == "" || accessKeyID == "" || secretAccessKey == "" || !validInvoiceR2AuthorityID(authority) {
 		return nil, ErrInvoiceObjectTerminal
 	}
 	if parsed, err := url.Parse(endpoint); err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil {
@@ -83,7 +97,15 @@ func NewInvoiceR2StoreFromEnvironment() (*InvoiceR2Store, error) {
 		Credentials: aws.NewCredentialsCache(credentials.NewStaticCredentialsProvider(accessKeyID, secretAccessKey, "")),
 	}
 	client := s3.NewFromConfig(config)
-	return NewInvoiceR2Store(client, s3.NewPresignClient(client), bucket)
+	return NewInvoiceR2Store(client, s3.NewPresignClient(client), authority, bucket)
+}
+
+// AuthorityID returns the stable non-secret identity bound to this store instance.
+func (s *InvoiceR2Store) AuthorityID() string {
+	if s == nil {
+		return ""
+	}
+	return s.authority
 }
 
 // Bucket returns the trusted R2 bucket bound to this store instance.
@@ -137,7 +159,26 @@ func (s *InvoiceR2Store) Head(ctx context.Context, key string) (InvoiceObjectHea
 	if err != nil {
 		return InvoiceObjectHead{}, classifyInvoiceObjectError(err)
 	}
-	return InvoiceObjectHead{SizeBytes: aws.ToInt64(output.ContentLength), ChecksumSHA256: aws.ToString(output.ChecksumSHA256)}, nil
+	return InvoiceObjectHead{
+		SizeBytes: aws.ToInt64(output.ContentLength), ChecksumSHA256: aws.ToString(output.ChecksumSHA256), ETag: aws.ToString(output.ETag),
+	}, nil
+}
+
+// Get conditionally streams an object only while its opaque provider ETag still matches.
+func (s *InvoiceR2Store) Get(ctx context.Context, key, ifMatch string) (InvoiceObjectGet, error) {
+	if validateInvoiceObjectKey(key) != nil || strings.TrimSpace(ifMatch) == "" {
+		return InvoiceObjectGet{}, ErrInvoiceObjectTerminal
+	}
+	output, err := s.client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(s.bucket), Key: aws.String(key), IfMatch: aws.String(ifMatch), ChecksumMode: types.ChecksumModeEnabled,
+	})
+	if err != nil {
+		return InvoiceObjectGet{}, classifyInvoiceObjectError(err)
+	}
+	return InvoiceObjectGet{
+		Body: output.Body, SizeBytes: aws.ToInt64(output.ContentLength),
+		ChecksumSHA256: aws.ToString(output.ChecksumSHA256), ETag: aws.ToString(output.ETag),
+	}, nil
 }
 
 // Delete removes a validated persisted key from the trusted private bucket.
@@ -189,6 +230,8 @@ func classifyInvoiceObjectError(err error) error {
 			return fmt.Errorf("%w: provider not found", ErrInvoiceObjectNotFound)
 		case "NoSuchBucket":
 			return fmt.Errorf("%w: provider bucket unavailable", ErrInvoiceObjectBucketUnavailable)
+		case "PreconditionFailed":
+			return fmt.Errorf("%w: provider precondition failed", ErrInvoiceObjectIntegrityUnavailable)
 		case "SlowDown", "RequestTimeout", "InternalError", "ServiceUnavailable", "Throttling", "ThrottlingException":
 			return fmt.Errorf("%w: provider retryable", ErrInvoiceObjectRetryable)
 		default:
@@ -199,4 +242,16 @@ func classifyInvoiceObjectError(err error) error {
 		}
 	}
 	return fmt.Errorf("%w: transport failure", ErrInvoiceObjectRetryable)
+}
+
+func validInvoiceR2AuthorityID(authority string) bool {
+	if len(authority) != 64 {
+		return false
+	}
+	for _, character := range authority {
+		if (character < '0' || character > '9') && (character < 'a' || character > 'f') {
+			return false
+		}
+	}
+	return true
 }

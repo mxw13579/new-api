@@ -38,9 +38,10 @@ func TestMigratePersonalInvoiceStructuresUpgradesHistoricalDocumentTableIdempote
 	require.NoError(t, migratePersonalInvoiceStructures(db))
 
 	type sqliteColumn struct {
-		Name    string `gorm:"column:name"`
-		Type    string `gorm:"column:type"`
-		NotNull int    `gorm:"column:notnull"`
+		Name         string  `gorm:"column:name"`
+		Type         string  `gorm:"column:type"`
+		NotNull      int     `gorm:"column:notnull"`
+		DefaultValue *string `gorm:"column:dflt_value"`
 	}
 	var columns []sqliteColumn
 	require.NoError(t, db.Raw(`PRAGMA table_info('invoice_documents')`).Scan(&columns).Error)
@@ -56,6 +57,16 @@ func TestMigratePersonalInvoiceStructuresUpgradesHistoricalDocumentTableIdempote
 	require.True(t, ok)
 	assert.Equal(t, "bigint", strings.ToLower(nextAttempt.Type))
 	assert.Zero(t, nextAttempt.NotNull)
+	for name, expectedType := range map[string]string{
+		"r2_authority_id": "char(64)",
+		"object_etag":     "varchar(255)",
+	} {
+		column, exists := byName[name]
+		require.Truef(t, exists, "missing %s compatibility column", name)
+		assert.Equal(t, expectedType, strings.ToLower(column.Type))
+		assert.Zero(t, column.NotNull, "%s must preserve historical NULL rows", name)
+		assert.Nil(t, column.DefaultValue, "%s must not infer a historical value", name)
+	}
 
 	type sqliteIndexColumn struct {
 		Name string `gorm:"column:name"`

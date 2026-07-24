@@ -198,6 +198,9 @@ type invoiceR2ReviewProductionLockBarrier struct {
 
 type invoiceR2ReviewObjectStore struct{}
 
+func (invoiceR2ReviewObjectStore) AuthorityID() string { return invoiceTestAuthorityID }
+func (invoiceR2ReviewObjectStore) Bucket() string      { return "invoice-r2-review-test" }
+
 func (invoiceR2ReviewObjectStore) Put(context.Context, string, io.Reader, int64, string) error {
 	return nil
 }
@@ -206,6 +209,10 @@ func (invoiceR2ReviewObjectStore) Copy(context.Context, string, string) error { 
 
 func (invoiceR2ReviewObjectStore) Head(context.Context, string) (InvoiceObjectHead, error) {
 	return InvoiceObjectHead{}, nil
+}
+
+func (invoiceR2ReviewObjectStore) Get(context.Context, string, string) (InvoiceObjectGet, error) {
+	return InvoiceObjectGet{Body: io.NopCloser(strings.NewReader(""))}, nil
 }
 
 func (invoiceR2ReviewObjectStore) Delete(context.Context, string) error { return nil }

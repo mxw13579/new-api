@@ -27,6 +27,8 @@ type invoiceObjectStoreStub struct {
 	headError    error
 }
 
+const invoiceTestAuthorityID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
 type invoiceDeleteFailureStore struct {
 	*invoiceObjectStoreStub
 	failure        error
@@ -54,6 +56,9 @@ func newInvoiceObjectStoreStub() *invoiceObjectStoreStub {
 }
 
 func (s *invoiceObjectStoreStub) Bucket() string { return s.bucket }
+func (s *invoiceObjectStoreStub) AuthorityID() string {
+	return invoiceTestAuthorityID
+}
 
 func (s *invoiceObjectStoreStub) Put(_ context.Context, key string, body io.Reader, _ int64, _ string) error {
 	data, err := io.ReadAll(body)
@@ -93,6 +98,10 @@ func (s *invoiceObjectStoreStub) Head(_ context.Context, key string) (InvoiceObj
 		return InvoiceObjectHead{}, err
 	}
 	return InvoiceObjectHead{SizeBytes: int64(len(data)), ChecksumSHA256: checksum}, nil
+}
+
+func (s *invoiceObjectStoreStub) Get(context.Context, string, string) (InvoiceObjectGet, error) {
+	return InvoiceObjectGet{Body: io.NopCloser(bytes.NewReader(nil))}, nil
 }
 
 type invoicePromotionCASLossStore struct {

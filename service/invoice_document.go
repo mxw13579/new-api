@@ -27,9 +27,12 @@ var (
 
 // InvoiceObjectStore defines the private object operations required by invoice document lifecycle services.
 type InvoiceObjectStore interface {
+	AuthorityID() string
+	Bucket() string
 	Put(context.Context, string, io.Reader, int64, string) error
 	Copy(context.Context, string, string) error
 	Head(context.Context, string) (InvoiceObjectHead, error)
+	Get(context.Context, string, string) (InvoiceObjectGet, error)
 	Delete(context.Context, string) error
 	PresignGet(context.Context, string, time.Duration) (string, error)
 }

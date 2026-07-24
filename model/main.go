@@ -466,6 +466,9 @@ func migratePersonalInvoiceStructures(db *gorm.DB) error {
 	if err := migrateInvoiceDocumentDeletionRetryColumns(db); err != nil {
 		return err
 	}
+	if err := migrateInvoiceDocumentObjectAuthorityColumns(db); err != nil {
+		return err
+	}
 	return db.AutoMigrate(
 		&InvoiceProfile{},
 		&InvoiceApplication{},
@@ -474,6 +477,23 @@ func migratePersonalInvoiceStructures(db *gorm.DB) error {
 		&InvoiceIssuance{},
 		&InvoiceDocument{},
 	)
+}
+
+func migrateInvoiceDocumentObjectAuthorityColumns(db *gorm.DB) error {
+	if !db.Migrator().HasTable(&InvoiceDocument{}) {
+		return nil
+	}
+	if !db.Migrator().HasColumn(&InvoiceDocument{}, "r2_authority_id") {
+		if err := db.Migrator().AddColumn(&InvoiceDocument{}, "R2AuthorityID"); err != nil {
+			return err
+		}
+	}
+	if !db.Migrator().HasColumn(&InvoiceDocument{}, "object_etag") {
+		if err := db.Migrator().AddColumn(&InvoiceDocument{}, "ObjectETag"); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 type invoiceDocumentRecoveryColumnMigration struct {
