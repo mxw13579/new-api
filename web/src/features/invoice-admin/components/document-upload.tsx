@@ -133,7 +133,7 @@ export function DocumentUpload(props: DocumentUploadProps) {
           </Field>
 
           <div className='grid gap-4 sm:grid-cols-2'>
-            <Field data-disabled={replacement || undefined}>
+            <Field data-disabled={replacement || props.pending || undefined}>
               <FieldLabel htmlFor='invoice-number'>
                 {t('Invoice number')}
               </FieldLabel>
@@ -144,7 +144,7 @@ export function DocumentUpload(props: DocumentUploadProps) {
                 onChange={(event) => setInvoiceNumber(event.target.value)}
               />
             </Field>
-            <Field data-disabled={replacement || undefined}>
+            <Field data-disabled={replacement || props.pending || undefined}>
               <FieldLabel htmlFor='invoice-code'>
                 {t('Invoice code')}
               </FieldLabel>
@@ -155,7 +155,7 @@ export function DocumentUpload(props: DocumentUploadProps) {
                 onChange={(event) => setInvoiceCode(event.target.value)}
               />
             </Field>
-            <Field data-disabled={replacement || undefined}>
+            <Field data-disabled={replacement || props.pending || undefined}>
               <FieldLabel htmlFor='invoice-date'>
                 {t('Invoice date')}
               </FieldLabel>
@@ -167,7 +167,7 @@ export function DocumentUpload(props: DocumentUploadProps) {
                 onChange={(event) => setInvoiceDate(event.target.value)}
               />
             </Field>
-            <Field data-disabled={replacement || undefined}>
+            <Field data-disabled={replacement || props.pending || undefined}>
               <FieldLabel htmlFor='invoice-face-amount'>
                 {t('Face amount in minor units')}
               </FieldLabel>
@@ -201,6 +201,7 @@ export function DocumentUpload(props: DocumentUploadProps) {
           <Field
             orientation='horizontal'
             data-invalid={errorKey ? true : undefined}
+            data-disabled={props.pending || undefined}
           >
             <Checkbox
               id='invoice-pdf-attestation'

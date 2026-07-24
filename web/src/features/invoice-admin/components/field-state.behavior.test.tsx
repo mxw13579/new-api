@@ -21,6 +21,10 @@ import assert from 'node:assert/strict'
 
 import { renderToStaticMarkup } from 'react-dom/server'
 
+import {
+  PROTECTED_INVOICE_VALUE_KEY,
+  maskInvoiceSensitiveDetail,
+} from '../contract'
 import type { InvoiceApplicationDetail } from '../types'
 
 type MockModule = (
@@ -37,6 +41,8 @@ mockModule('react-i18next', () => ({
 
 const { DocumentUpload } = await import('./document-upload')
 const { SettingsForm } = await import('./settings-form')
+const { ApplicationProfileSection } =
+  await import('./application-detail-sections')
 
 const application: InvoiceApplicationDetail = {
   id: 7,
@@ -79,6 +85,22 @@ function render(component: React.ReactNode): string {
   return renderToStaticMarkup(component)
 }
 
+function assertFieldControlState(
+  html: string,
+  controlId: string,
+  disabled: boolean
+): void {
+  const field = html
+    .match(/<div role="group"[\s\S]*?<\/div>/g)
+    ?.find((group) => group.includes(`for="${controlId}"`))
+  assert.ok(field, `Field for ${controlId} must render`)
+  assert.equal(field.includes('data-disabled="true"'), disabled)
+
+  const control = html.match(new RegExp(`<[^>]+id="${controlId}"[^>]*>`))?.[0]
+  assert.ok(control, `Control ${controlId} must render`)
+  assert.equal(control.includes('disabled=""'), disabled)
+}
+
 describe('invoice administrator pending field behavior', () => {
   it('marks settings numeric Fields and controls disabled', () => {
     const html = render(
@@ -106,7 +128,7 @@ describe('invoice administrator pending field behavior', () => {
     )
   })
 
-  it('marks the upload file Field and control disabled', () => {
+  it('mirrors pending state on every upload Field and control', () => {
     const html = render(
       <DocumentUpload
         application={application}
@@ -115,10 +137,103 @@ describe('invoice administrator pending field behavior', () => {
       />
     )
 
-    assert.match(
-      html,
-      /<div role="group"[^>]*data-slot="field"[^>]*data-disabled="true"[^>]*>[\s\S]*?<input[^>]*id="invoice-pdf-file"[^>]*disabled=""/
-    )
+    for (const controlId of [
+      'invoice-pdf-file',
+      'invoice-number',
+      'invoice-code',
+      'invoice-date',
+      'invoice-face-amount',
+      'invoice-pdf-attestation',
+    ]) {
+      assertFieldControlState(html, controlId, true)
+    }
     assert.match(html, /aria-describedby="invoice-pdf-help"/)
+  })
+
+  it('mirrors replacement state only on locked issuance facts', () => {
+    const replacement: InvoiceApplicationDetail = {
+      ...application,
+      status: 'issued',
+      document_status: 'available',
+      issued_at: 10,
+      issuance: {
+        id: 2,
+        invoice_number: 'LOCKED-NUMBER',
+        invoice_code: 'LOCKED-CODE',
+        invoice_date: 1_700_000_000,
+        face_amount_minor: 1234,
+        currency: 'CNY',
+      },
+      document: {
+        id: 3,
+        status: 'available',
+        expires_at: 99,
+        deleted_at: null,
+      },
+    }
+    const html = render(
+      <DocumentUpload
+        application={replacement}
+        pending={false}
+        onUpload={() => undefined}
+      />
+    )
+
+    for (const controlId of [
+      'invoice-number',
+      'invoice-code',
+      'invoice-date',
+      'invoice-face-amount',
+    ]) {
+      assertFieldControlState(html, controlId, true)
+    }
+    assertFieldControlState(html, 'invoice-pdf-file', false)
+    assertFieldControlState(html, 'invoice-pdf-attestation', false)
+  })
+
+  it('renders accessible enabled upload Fields before interaction', () => {
+    const html = render(
+      <DocumentUpload
+        application={application}
+        pending={false}
+        onUpload={() => undefined}
+      />
+    )
+
+    for (const controlId of [
+      'invoice-pdf-file',
+      'invoice-number',
+      'invoice-code',
+      'invoice-date',
+      'invoice-face-amount',
+      'invoice-pdf-attestation',
+    ]) {
+      assertFieldControlState(html, controlId, false)
+    }
+    assert.match(html, /id="invoice-pdf-help"/)
+    assert.match(html, /aria-describedby="invoice-pdf-help"/)
+  })
+
+  it('renders masked profile details without sensitive values', () => {
+    const sensitive: InvoiceApplicationDetail = {
+      ...application,
+      profile_snapshot: {
+        ...application.profile_snapshot,
+        title: 'Secret Company',
+        tax_number: '91310000SECRET',
+      },
+    }
+    const html = render(
+      <ApplicationProfileSection
+        application={maskInvoiceSensitiveDetail(sensitive, false)}
+      />
+    )
+
+    assert.doesNotMatch(html, /Secret Company|91310000SECRET/)
+    assert.equal(
+      html.match(new RegExp(PROTECTED_INVOICE_VALUE_KEY, 'g'))?.length,
+      2
+    )
+    assert.match(html, /aria-labelledby="invoice-profile-heading"/)
   })
 })
