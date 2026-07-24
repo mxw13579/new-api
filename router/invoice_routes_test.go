@@ -20,18 +20,17 @@ import (
 
 func TestPersonalInvoiceRouteContract(t *testing.T) {
 	userRoutes := map[string]string{
-		http.MethodGet + " /invoice/config":             "GetInvoiceConfig",
-		http.MethodGet + " /invoice/profiles":           "ListInvoiceProfiles",
-		http.MethodPost + " /invoice/profiles":          "CreateInvoiceProfile",
-		http.MethodPut + " /invoice/profiles":           "UpdateInvoiceProfile",
-		http.MethodDelete + " /invoice/profiles":        "DeleteInvoiceProfile",
-		http.MethodGet + " /invoice/eligible-orders":    "ListEligibleInvoiceOrders",
-		http.MethodPost + " /invoices":                  "CreateInvoiceApplication",
-		http.MethodGet + " /invoices":                   "ListInvoiceApplications",
-		http.MethodGet + " /invoices/:id":               "GetInvoiceApplication",
-		http.MethodPost + " /invoices/:id/cancel":       "CancelInvoiceApplication",
-		http.MethodGet + " /invoices/:id/document":      "DownloadInvoiceDocument",
-		http.MethodPost + " /invoices/:id/document-url": "GetInvoiceDocumentURL",
+		http.MethodGet + " /invoice/config":          "GetInvoiceConfig",
+		http.MethodGet + " /invoice/profiles":        "ListInvoiceProfiles",
+		http.MethodPost + " /invoice/profiles":       "CreateInvoiceProfile",
+		http.MethodPut + " /invoice/profiles":        "UpdateInvoiceProfile",
+		http.MethodDelete + " /invoice/profiles":     "DeleteInvoiceProfile",
+		http.MethodGet + " /invoice/eligible-orders": "ListEligibleInvoiceOrders",
+		http.MethodPost + " /invoices":               "CreateInvoiceApplication",
+		http.MethodGet + " /invoices":                "ListInvoiceApplications",
+		http.MethodGet + " /invoices/:id":            "GetInvoiceApplication",
+		http.MethodPost + " /invoices/:id/cancel":    "CancelInvoiceApplication",
+		http.MethodGet + " /invoices/:id/document":   "DownloadInvoiceDocument",
 	}
 	adminRoutes := map[string]string{
 		http.MethodGet + " /invoices":               "AdminListInvoiceApplications",
@@ -61,7 +60,7 @@ func TestInvoiceSettingRoutesUseInvoicePermissionForAdminAndRoot(t *testing.T) {
 	assert.Equal(t, 2, matched)
 }
 
-func TestInvoiceDownloadProductionRoutesRequireUserAuthAndUseNoStore(t *testing.T) {
+func TestInvoiceDownloadProductionRouteRequiresUserAuthAndUsesNoStore(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	previousDB, previousLogDB := model.DB, model.LOG_DB
 	previousRedis := common.RedisEnabled
@@ -90,10 +89,7 @@ func TestInvoiceDownloadProductionRoutesRequireUserAuthAndUseNoStore(t *testing.
 
 	engine := gin.New()
 	SetApiRouter(engine)
-	for _, path := range []string{
-		fmt.Sprintf("/api/user/invoices/%d/document", application.ID),
-		fmt.Sprintf("/api/user/invoices/%d/document-url", application.ID),
-	} {
+	for _, path := range []string{fmt.Sprintf("/api/user/invoices/%d/document", application.ID)} {
 		for _, test := range []struct {
 			name       string
 			token      string
@@ -105,11 +101,7 @@ func TestInvoiceDownloadProductionRoutesRequireUserAuthAndUseNoStore(t *testing.
 			{name: "authenticated owned unavailable", token: accessToken, wantStatus: http.StatusConflict, wantCode: constant.InvoiceCodeDocumentUnavailable},
 		} {
 			t.Run(test.name+" "+path, func(t *testing.T) {
-				method := http.MethodGet
-				if strings.HasSuffix(path, "document-url") {
-					method = http.MethodPost
-				}
-				request := httptest.NewRequest(method, path, nil)
+				request := httptest.NewRequest(http.MethodGet, path, nil)
 				if test.token != "" {
 					request.Header.Set("Authorization", "Bearer "+test.token)
 				}
@@ -129,16 +121,41 @@ func TestInvoiceDownloadProductionRoutesRequireUserAuthAndUseNoStore(t *testing.
 			})
 		}
 	}
-}
 
-func TestInvoiceDownloadRoutesAreTheOnlyUserInvoiceRoutesWithNoStore(t *testing.T) {
-	for _, route := range invoiceUserRoutes {
-		want := route.path == "/invoices/:id/document" || route.path == "/invoices/:id/document-url"
-		assert.Equal(t, want, route.disableCache, route.method+" "+route.path)
+	for _, test := range []struct {
+		name       string
+		method     string
+		path       string
+		wantStatus int
+		wantCache  bool
+	}{
+		{name: "config success", method: http.MethodGet, path: "/api/user/invoice/config", wantStatus: http.StatusOK, wantCache: true},
+		{name: "missing document", method: http.MethodGet, path: "/api/user/invoices/999999/document", wantStatus: http.StatusNotFound, wantCache: true},
+		{name: "retired document URL", method: http.MethodPost, path: fmt.Sprintf("/api/user/invoices/%d/document-url", application.ID), wantStatus: http.StatusNotFound},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequest(test.method, test.path, nil)
+			request.Header.Set("Authorization", "Bearer "+accessToken)
+			response := httptest.NewRecorder()
+			engine.ServeHTTP(response, request)
+
+			assert.Equal(t, test.wantStatus, response.Code)
+			if test.wantCache {
+				assertPrivateNoStore(t, response)
+			}
+		})
 	}
 }
 
-func TestInvoiceDocumentURLProductionRouteMasksCrossOwnerLikeMissing(t *testing.T) {
+func TestEveryInvoiceRouteUsesPrivateNoStore(t *testing.T) {
+	for _, routes := range [][]invoiceRoute{invoiceUserRoutes, invoiceAdminRoutes, invoiceOptionRoutes} {
+		for _, route := range routes {
+			assert.True(t, route.disableCache, route.method+" "+route.path)
+		}
+	}
+}
+
+func TestInvoiceDocumentProductionRouteMasksCrossOwnerLikeMissing(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	previousDB, previousLogDB := model.DB, model.LOG_DB
 	previousRedis := common.RedisEnabled
@@ -153,9 +170,9 @@ func TestInvoiceDocumentURLProductionRouteMasksCrossOwnerLikeMissing(t *testing.
 		common.RedisEnabled = previousRedis
 	})
 
-	accessToken := "invoice-document-url-mask-test"
-	user := model.User{Username: "invoice-document-url-user", Password: "test-password", AccessToken: &accessToken,
-		Role: common.RoleCommonUser, Status: common.UserStatusEnabled, Group: "default", AffCode: "invoice-document-url-aff"}
+	accessToken := "invoice-document-mask-test"
+	user := model.User{Username: "invoice-document-user", Password: "test-password", AccessToken: &accessToken,
+		Role: common.RoleCommonUser, Status: common.UserStatusEnabled, Group: "default", AffCode: "invoice-document-aff"}
 	require.NoError(t, db.Create(&user).Error)
 	otherApplication := model.InvoiceApplication{
 		ApplicationNo: "INV-OTHER-OWNER", UserID: user.Id + 100, RequestID: "request", RequestFingerprint: "fingerprint",
@@ -169,19 +186,66 @@ func TestInvoiceDocumentURLProductionRouteMasksCrossOwnerLikeMissing(t *testing.
 	SetApiRouter(engine)
 	responses := make([]*httptest.ResponseRecorder, 0, 2)
 	for _, id := range []int64{otherApplication.ID, otherApplication.ID + 999} {
-		request := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/user/invoices/%d/document-url", id), nil)
+		request := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/user/invoices/%d/document", id), nil)
 		request.Header.Set("Authorization", "Bearer "+accessToken)
 		response := httptest.NewRecorder()
 		engine.ServeHTTP(response, request)
 
 		assert.Equal(t, http.StatusNotFound, response.Code)
-		assert.Equal(t, "no-store, no-cache, must-revalidate, private, max-age=0", response.Header().Get("Cache-Control"))
+		assertPrivateNoStore(t, response)
 		assert.Empty(t, response.Header().Get("Location"))
 		assert.NotContains(t, response.Body.String(), "download_url")
 		responses = append(responses, response)
 	}
 	assert.Equal(t, responses[0].Header(), responses[1].Header())
 	assert.Equal(t, responses[0].Body.String(), responses[1].Body.String())
+}
+
+func TestInvoiceRouteNoStoreMiddlewarePrecedesPermissionAndHandler(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, test := range []struct {
+		name       string
+		permission *authz.Permission
+		handler    gin.HandlerFunc
+		wantStatus int
+	}{
+		{
+			name:       "authenticated permission denial",
+			permission: &authz.InvoiceReview,
+			handler: func(c *gin.Context) {
+				c.Status(http.StatusOK)
+			},
+			wantStatus: http.StatusForbidden,
+		},
+		{
+			name: "handler not found",
+			handler: func(c *gin.Context) {
+				c.Status(http.StatusNotFound)
+			},
+			wantStatus: http.StatusNotFound,
+		},
+		{
+			name: "handler success",
+			handler: func(c *gin.Context) {
+				c.Status(http.StatusOK)
+			},
+			wantStatus: http.StatusOK,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			engine := gin.New()
+			group := engine.Group("/api")
+			registerInvoiceRoutes(group, []invoiceRoute{{
+				method: http.MethodGet, path: "/invoice", handlerName: "test",
+				handler: test.handler, permission: test.permission, disableCache: true,
+			}})
+			response := httptest.NewRecorder()
+			engine.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/invoice", nil))
+
+			assert.Equal(t, test.wantStatus, response.Code)
+			assertPrivateNoStore(t, response)
+		})
+	}
 }
 
 func TestInvoiceDownloadRouteNoStoreHeadersSurviveRedirect(t *testing.T) {
@@ -199,6 +263,13 @@ func TestInvoiceDownloadRouteNoStoreHeadersSurviveRedirect(t *testing.T) {
 
 	assert.Equal(t, http.StatusFound, response.Code)
 	assert.Equal(t, "https://private.example.test/invoice.pdf?signature=test-only", response.Header().Get("Location"))
+	assert.Equal(t, "no-store, no-cache, must-revalidate, private, max-age=0", response.Header().Get("Cache-Control"))
+	assert.Equal(t, "no-cache", response.Header().Get("Pragma"))
+	assert.Equal(t, "0", response.Header().Get("Expires"))
+}
+
+func assertPrivateNoStore(t *testing.T, response *httptest.ResponseRecorder) {
+	t.Helper()
 	assert.Equal(t, "no-store, no-cache, must-revalidate, private, max-age=0", response.Header().Get("Cache-Control"))
 	assert.Equal(t, "no-cache", response.Header().Get("Pragma"))
 	assert.Equal(t, "0", response.Header().Get("Expires"))
