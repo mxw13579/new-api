@@ -283,3 +283,161 @@ func assertInvoiceRouteSet(t *testing.T, routes []invoiceRoute, expected map[str
 	}
 	assert.Equal(t, expected, actual)
 }
+
+func setupInvoiceRouteSecurityFixture(t *testing.T) (*gin.Engine, *gorm.DB, string, int) {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+	previousDB, previousLogDB := model.DB, model.LOG_DB
+	previousRedis, previousMainType := common.RedisEnabled, common.MainDatabaseType()
+	common.RedisEnabled = false
+	common.SetMainDatabaseType(common.DatabaseTypeSQLite)
+	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", strings.ReplaceAll(t.Name(), "/", "_"))
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(
+		&model.User{}, &model.CasbinRule{}, &model.AuthzRole{}, &model.InvoiceProfile{},
+		&model.InvoiceApplication{}, &model.InvoiceItem{}, &model.InvoiceFeeLedgerEntry{},
+		&model.InvoiceIssuance{}, &model.InvoiceDocument{},
+	))
+	model.DB, model.LOG_DB = db, db
+	require.NoError(t, authz.Init(db))
+
+	const userID = 8101
+	token := "invoice-route-security-token"
+	require.NoError(t, db.Create(&model.User{
+		Id: userID, Username: "invoice-route-security", Password: "test-password", AccessToken: &token,
+		Role: common.RoleAdminUser, Status: common.UserStatusEnabled, Group: "default", AffCode: "invoice-route-security",
+	}).Error)
+
+	t.Cleanup(func() {
+		model.DB, model.LOG_DB = previousDB, previousLogDB
+		common.RedisEnabled = previousRedis
+		common.SetMainDatabaseType(previousMainType)
+	})
+	engine := gin.New()
+	SetApiRouter(engine)
+	return engine, db, token, userID
+}
+
+func performInvoiceRouteRequest(engine *gin.Engine, userID int, token, method, path, body string) *httptest.ResponseRecorder {
+	request := httptest.NewRequest(method, path, strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	if token != "" {
+		request.Header.Set("Authorization", "Bearer "+token)
+		request.Header.Set("New-Api-User", fmt.Sprint(userID))
+	}
+	response := httptest.NewRecorder()
+	engine.ServeHTTP(response, request)
+	return response
+}
+
+func TestEveryProductionInvoiceRouteRejectsUnauthenticatedRequests(t *testing.T) {
+	engine := gin.New()
+	SetApiRouter(engine)
+	tests := []struct {
+		method string
+		path   string
+	}{
+		{http.MethodGet, "/api/user/invoice/config"},
+		{http.MethodGet, "/api/user/invoice/profiles"},
+		{http.MethodPost, "/api/user/invoice/profiles"},
+		{http.MethodPut, "/api/user/invoice/profiles"},
+		{http.MethodDelete, "/api/user/invoice/profiles"},
+		{http.MethodGet, "/api/user/invoice/eligible-orders"},
+		{http.MethodPost, "/api/user/invoices"},
+		{http.MethodGet, "/api/user/invoices"},
+		{http.MethodGet, "/api/user/invoices/1"},
+		{http.MethodGet, "/api/user/invoices/1/document"},
+		{http.MethodPost, "/api/user/invoices/1/cancel"},
+		{http.MethodGet, "/api/admin/invoices"},
+		{http.MethodGet, "/api/admin/invoices/1"},
+		{http.MethodPost, "/api/admin/invoices/1/review"},
+		{http.MethodPost, "/api/admin/invoices/1/reject"},
+		{http.MethodPost, "/api/admin/invoices/1/document"},
+		{http.MethodGet, "/api/option/invoice"},
+		{http.MethodPut, "/api/option/invoice"},
+	}
+	for _, test := range tests {
+		t.Run(test.method+" "+test.path, func(t *testing.T) {
+			response := performInvoiceRouteRequest(engine, 0, "", test.method, test.path, `{}`)
+			assert.Equal(t, http.StatusUnauthorized, response.Code)
+			assert.Contains(t, response.Body.String(), "AUTH_UNAUTHORIZED")
+		})
+	}
+}
+
+func TestProductionInvoicePermissionRoutesRejectAuthenticatedAdminWithoutInvoicePermission(t *testing.T) {
+	engine, _, token, userID := setupInvoiceRouteSecurityFixture(t)
+	require.NoError(t, authz.SetUserPermissions(userID, authz.PermissionsMap{
+		authz.ResourceInvoice: {
+			authz.ActionInvoiceReview: false, authz.ActionInvoiceDocumentUpload: false, authz.ActionInvoiceSettings: false,
+		},
+	}))
+	tests := []struct {
+		method string
+		path   string
+	}{
+		{http.MethodGet, "/api/admin/invoices"},
+		{http.MethodGet, "/api/admin/invoices/1"},
+		{http.MethodPost, "/api/admin/invoices/1/review"},
+		{http.MethodPost, "/api/admin/invoices/1/reject"},
+		{http.MethodPost, "/api/admin/invoices/1/document"},
+		{http.MethodGet, "/api/option/invoice"},
+		{http.MethodPut, "/api/option/invoice"},
+	}
+	for _, test := range tests {
+		t.Run(test.method+" "+test.path, func(t *testing.T) {
+			response := performInvoiceRouteRequest(engine, userID, token, test.method, test.path, `{}`)
+			assert.Equal(t, http.StatusForbidden, response.Code)
+			assert.Contains(t, response.Body.String(), constant.InvoiceCodeForbidden)
+		})
+	}
+}
+
+func TestProductionInvoiceOwnerRoutesMaskCrossOwnerLikeMissing(t *testing.T) {
+	engine, db, token, userID := setupInvoiceRouteSecurityFixture(t)
+	otherProfile := model.InvoiceProfile{
+		UserID: userID + 1, Type: constant.InvoiceTypePersonal, Title: "other owner", Version: 1,
+	}
+	require.NoError(t, db.Create(&otherProfile).Error)
+	otherApplication := model.InvoiceApplication{
+		UserID: userID + 1, ApplicationNo: "INV-CROSS-OWNER", RequestID: "cross-owner", RequestFingerprint: "fingerprint",
+		Type: constant.InvoiceTypePersonal, Status: constant.InvoiceApplicationStatusSubmitted,
+		PaymentReviewStatus: constant.InvoicePaymentReviewStatusNone, Currency: constant.InvoiceCurrencyCNY,
+		FeeStatus: constant.InvoiceFeeStatusNotRequired, ProfileSnapshot: `{}`, PolicySnapshot: `{}`, SubmittedAt: 1,
+	}
+	require.NoError(t, db.Create(&otherApplication).Error)
+
+	tests := []struct {
+		name        string
+		method      string
+		crossPath   string
+		missingPath string
+		crossBody   string
+		missingBody string
+	}{
+		{
+			name: "update profile", method: http.MethodPut, crossPath: "/api/user/invoice/profiles", missingPath: "/api/user/invoice/profiles",
+			crossBody:   fmt.Sprintf(`{"id":%d,"expected_version":1,"title":"masked","tax_number":"","is_default":false}`, otherProfile.ID),
+			missingBody: `{"id":999999,"expected_version":1,"title":"masked","tax_number":"","is_default":false}`,
+		},
+		{
+			name: "delete profile", method: http.MethodDelete, crossPath: "/api/user/invoice/profiles", missingPath: "/api/user/invoice/profiles",
+			crossBody: fmt.Sprintf(`{"id":%d,"expected_version":1}`, otherProfile.ID), missingBody: `{"id":999999,"expected_version":1}`,
+		},
+		{name: "get application", method: http.MethodGet, crossPath: fmt.Sprintf("/api/user/invoices/%d", otherApplication.ID), missingPath: "/api/user/invoices/999999"},
+		{name: "cancel application", method: http.MethodPost, crossPath: fmt.Sprintf("/api/user/invoices/%d/cancel", otherApplication.ID), missingPath: "/api/user/invoices/999999/cancel"},
+		{name: "download document", method: http.MethodGet, crossPath: fmt.Sprintf("/api/user/invoices/%d/document", otherApplication.ID), missingPath: "/api/user/invoices/999999/document"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cross := performInvoiceRouteRequest(engine, userID, token, test.method, test.crossPath, test.crossBody)
+			missing := performInvoiceRouteRequest(engine, userID, token, test.method, test.missingPath, test.missingBody)
+			assert.Equal(t, http.StatusNotFound, cross.Code)
+			assert.Equal(t, missing.Code, cross.Code)
+			assert.Equal(t, missing.Body.String(), cross.Body.String())
+			assert.NotContains(t, cross.Body.String(), otherApplication.ApplicationNo)
+			assert.NotContains(t, cross.Body.String(), otherProfile.Title)
+		})
+	}
+}
