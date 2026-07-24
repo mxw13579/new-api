@@ -564,6 +564,10 @@ func bindNewInvoiceDocumentStore(db *gorm.DB, store InvoiceObjectStore, document
 	return nil
 }
 
+// bindInvoiceDocumentStoreAuthority binds a legacy row only after the configured
+// authority is explicitly attested and the persisted object passes immutable
+// size, checksum, and ETag verification. Already-bound rows fail closed on any
+// authority or bucket mismatch before object I/O.
 func bindInvoiceDocumentStoreAuthority(ctx context.Context, db *gorm.DB, store InvoiceObjectStore, document *model.InvoiceDocument) error {
 	if db == nil || store == nil || document == nil || !validInvoiceR2AuthorityID(store.AuthorityID()) ||
 		strings.TrimSpace(store.Bucket()) == "" || document.R2Bucket != store.Bucket() {
@@ -625,6 +629,9 @@ func invoiceStoreAuthorityCategory(err error) string {
 	return invoiceStoreAuthorityUnboundCategory
 }
 
+// readVerifiedInvoiceObject buffers a conditional object read until its size,
+// checksum, and opaque ETag match the persisted document facts, so callers do
+// not expose bytes before integrity verification completes.
 func readVerifiedInvoiceObject(ctx context.Context, store InvoiceObjectStore, key, etag string, expectedSize int64, expectedSHA256 string) ([]byte, error) {
 	if store == nil || expectedSize <= 0 || expectedSize > InvoicePDFMaxBytes || strings.TrimSpace(etag) == "" {
 		return nil, ErrInvoiceObjectIntegrityUnavailable
