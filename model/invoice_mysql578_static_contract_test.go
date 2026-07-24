@@ -39,18 +39,26 @@ func TestInvoiceMySQL578StaticCompatibility_RuntimeNotRun(t *testing.T) {
 	migrationDB := openInvoiceMySQL578MigrationCapture(t, &migrationSQL)
 	require.NoError(t, MigratePersonalInvoiceStructures(migrationDB))
 	migrationStatements := strings.ToUpper(migrationSQL.String())
-	assert.Contains(t, migrationStatements, "ALTER TABLE `INVOICE_DOCUMENTS` ADD `R2_AUTHORITY_ID` CHAR(64)")
-	assert.Contains(t, migrationStatements, "ALTER TABLE `INVOICE_DOCUMENTS` ADD `OBJECT_ETAG` VARCHAR(255)")
-	for _, expected := range []string{
-		"CREATE TABLE `INVOICE_DOCUMENTS` (`RECOVERY_ATTEMPTS` BIGINT NOT NULL DEFAULT 0",
-		"`NEXT_DELETE_ATTEMPT_AT` BIGINT",
-		"CREATE TABLE `INVOICE_PROFILES`",
-		"CREATE TABLE `INVOICE_APPLICATIONS`",
-		"CREATE TABLE `INVOICE_ITEMS`",
-		"CREATE TABLE `INVOICE_FEE_LEDGER_ENTRIES`",
-		"CREATE TABLE `INVOICE_ISSUANCES`",
+	for _, existingTable := range []string{
+		"INVOICE_PROFILES", "INVOICE_APPLICATIONS", "INVOICE_ITEMS", "INVOICE_FEE_LEDGER_ENTRIES", "INVOICE_ISSUANCES", "INVOICE_DOCUMENTS",
 	} {
-		assert.Contains(t, migrationStatements, expected)
+		assert.NotContains(t, migrationStatements, "CREATE TABLE `"+existingTable+"`", "historical migration cannot recreate an existing table")
+	}
+	orderedMigrationOperations := []string{
+		"ALTER TABLE `INVOICE_DOCUMENTS` ADD `RECOVERY_ATTEMPTS` BIGINT NOT NULL DEFAULT 0",
+		"ALTER TABLE `INVOICE_DOCUMENTS` ADD `LAST_RECOVERY_AT` BIGINT NOT NULL DEFAULT 0",
+		"ALTER TABLE `INVOICE_DOCUMENTS` ADD `LAST_RECOVERY_ERROR` VARCHAR(32) NOT NULL DEFAULT ''",
+		"ALTER TABLE `INVOICE_DOCUMENTS` ADD `DELETE_ERROR_CATEGORY` VARCHAR(32)",
+		"ALTER TABLE `INVOICE_DOCUMENTS` ADD `NEXT_DELETE_ATTEMPT_AT` BIGINT",
+		"CREATE INDEX `IDX_INVOICE_DOCUMENTS_DELETE_RETRY` ON `INVOICE_DOCUMENTS`",
+		"ALTER TABLE `INVOICE_DOCUMENTS` ADD `R2_AUTHORITY_ID` CHAR(64)",
+		"ALTER TABLE `INVOICE_DOCUMENTS` ADD `OBJECT_ETAG` VARCHAR(255)",
+	}
+	previousPosition := -1
+	for _, expected := range orderedMigrationOperations {
+		position := strings.Index(migrationStatements, expected)
+		require.Greater(t, position, previousPosition, "migration operation must be present in production order: %s", expected)
+		previousPosition = position
 	}
 	for _, unsupported := range []string{" RETURNING ", "::", " SERIAL", " AUTOINCREMENT", " PRAGMA ", " JSONB"} {
 		assert.NotContains(t, migrationStatements, unsupported)
@@ -86,9 +94,19 @@ func openInvoiceMySQL578MigrationCapture(t *testing.T, output *bytes.Buffer) *go
 	t.Helper()
 	sqlDB := sql.OpenDB(invoiceStaticConnector{})
 	t.Cleanup(func() { require.NoError(t, sqlDB.Close()) })
-	dialector := invoiceStaticMigrationDialector{Dialector: mysql.New(mysql.Config{
-		Conn: sqlDB, SkipInitializeWithVersion: true, ServerVersion: "5.7.8",
-	})}
+	dialector := invoiceStaticMigrationDialector{
+		Dialector: mysql.New(mysql.Config{Conn: sqlDB, SkipInitializeWithVersion: true, ServerVersion: "5.7.8"}),
+		historicalSchema: &invoiceStaticHistoricalSchema{
+			missingColumns: map[string]map[string]bool{
+				"invoice_documents": {
+					"recovery_attempts": true, "last_recovery_at": true, "last_recovery_error": true,
+					"delete_error_category": true, "next_delete_attempt_at": true,
+					"r2_authority_id": true, "object_etag": true,
+				},
+			},
+			missingIndexes: map[string]bool{"idx_invoice_documents_delete_retry": true},
+		},
+	}
 	db, err := gorm.Open(dialector, &gorm.Config{
 		DryRun: true, DisableAutomaticPing: true,
 		Logger: logger.New(log.New(output, "", 0), logger.Config{LogLevel: logger.Info}),
@@ -99,18 +117,52 @@ func openInvoiceMySQL578MigrationCapture(t *testing.T, output *bytes.Buffer) *go
 
 type invoiceStaticMigrationDialector struct {
 	gorm.Dialector
+	historicalSchema *invoiceStaticHistoricalSchema
 }
 
 func (dialector invoiceStaticMigrationDialector) Migrator(db *gorm.DB) gorm.Migrator {
-	return invoiceStaticMigrationMigrator{Migrator: dialector.Dialector.Migrator(db)}
+	return invoiceStaticMigrationMigrator{
+		Migrator: dialector.Dialector.Migrator(db), db: db, historicalSchema: dialector.historicalSchema,
+	}
 }
 
 type invoiceStaticMigrationMigrator struct {
 	gorm.Migrator
+	db               *gorm.DB
+	historicalSchema *invoiceStaticHistoricalSchema
 }
 
-func (invoiceStaticMigrationMigrator) HasTable(any) bool          { return true }
-func (invoiceStaticMigrationMigrator) HasColumn(any, string) bool { return false }
+type invoiceStaticHistoricalSchema struct {
+	missingColumns map[string]map[string]bool
+	missingIndexes map[string]bool
+}
+
+func (invoiceStaticMigrationMigrator) HasTable(any) bool { return true }
+
+func (migrator invoiceStaticMigrationMigrator) HasColumn(model any, fieldName string) bool {
+	statement := &gorm.Statement{DB: migrator.db}
+	if statement.Parse(model) != nil {
+		return true
+	}
+	field := statement.Schema.LookUpField(fieldName)
+	if field == nil {
+		return true
+	}
+	return !migrator.historicalSchema.missingColumns[statement.Table][strings.ToLower(field.DBName)]
+}
+
+func (migrator invoiceStaticMigrationMigrator) AddColumn(model any, fieldName string) error {
+	if err := migrator.Migrator.AddColumn(model, fieldName); err != nil {
+		return err
+	}
+	statement := &gorm.Statement{DB: migrator.db}
+	if statement.Parse(model) == nil {
+		if field := statement.Schema.LookUpField(fieldName); field != nil {
+			delete(migrator.historicalSchema.missingColumns[statement.Table], strings.ToLower(field.DBName))
+		}
+	}
+	return nil
+}
 
 func (migrator invoiceStaticMigrationMigrator) BuildIndexOptions(options []schema.IndexOption, statement *gorm.Statement) []interface{} {
 	return migrator.Migrator.(interface {
@@ -120,8 +172,24 @@ func (migrator invoiceStaticMigrationMigrator) BuildIndexOptions(options []schem
 
 func (migrator invoiceStaticMigrationMigrator) AutoMigrate(models ...any) error {
 	for _, schemaModel := range models {
-		if err := migrator.CreateTable(schemaModel); err != nil {
+		statement := &gorm.Statement{DB: migrator.db}
+		if err := statement.Parse(schemaModel); err != nil {
 			return err
+		}
+		for _, field := range statement.Schema.Fields {
+			if migrator.historicalSchema.missingColumns[statement.Table][strings.ToLower(field.DBName)] {
+				if err := migrator.AddColumn(schemaModel, field.Name); err != nil {
+					return err
+				}
+			}
+		}
+		for _, index := range statement.Schema.ParseIndexes() {
+			if migrator.historicalSchema.missingIndexes[strings.ToLower(index.Name)] {
+				if err := migrator.CreateIndex(schemaModel, index.Name); err != nil {
+					return err
+				}
+				delete(migrator.historicalSchema.missingIndexes, strings.ToLower(index.Name))
+			}
 		}
 	}
 	return nil
