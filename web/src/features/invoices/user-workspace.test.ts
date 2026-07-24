@@ -24,6 +24,7 @@ import {
   createInvoiceDraftIdentity,
   createInvoiceOrderSelection,
   getInvoiceOrderSelectionSummary,
+  invalidateInvoiceApplicationConflictQueries,
   invalidateUserInvoiceMutationQueries,
   invoicePageCount,
   isInvoiceProfileEnabled,
@@ -123,6 +124,56 @@ describe('invoice user workspace behavior', () => {
         'INVOICE_STATE_CONFLICT'
       )
     ).toBe(unchangedSelection)
+  })
+
+  it('refreshes a conflicted profile and rotates identity only for its new version', async () => {
+    const invalidations: unknown[][] = []
+    const queryClient = {
+      invalidateQueries: async (filters: { queryKey?: readonly unknown[] }) => {
+        invalidations.push(filters.queryKey as unknown[])
+      },
+    } as QueryClient
+    let sequence = 0
+    const identity = createInvoiceDraftIdentity(() => `request-${++sequence}`)
+    const fingerprint = (profileVersion: number) =>
+      JSON.stringify({
+        profileId: 7,
+        profileVersion,
+        topupIds: [22],
+        feeQuota: 3,
+      })
+
+    expect(identity.forDraft(fingerprint(1))).toBe('request-1')
+    expect(identity.forDraft(fingerprint(1))).toBe('request-1')
+
+    await invalidateInvoiceApplicationConflictQueries(
+      queryClient,
+      'INVOICE_STATE_CONFLICT'
+    )
+    expect(invalidations).toEqual([
+      ['invoices', 'eligible-orders'],
+      ['invoices', 'applications'],
+      ['user', 'self', 'quota'],
+      ['invoices', 'profiles'],
+    ])
+
+    expect(identity.forDraft(fingerprint(2))).toBe('request-2')
+    expect(identity.forDraft(fingerprint(2))).toBe('request-2')
+    identity.reset()
+    expect(identity.forDraft(fingerprint(2))).toBe('request-3')
+
+    for (const code of [
+      'INVOICE_TOPUP_INELIGIBLE',
+      'INVOICE_PAYMENT_EVIDENCE_CONFLICT',
+    ] as const) {
+      invalidations.length = 0
+      await invalidateInvoiceApplicationConflictQueries(queryClient, code)
+      expect(invalidations).toEqual([
+        ['invoices', 'eligible-orders'],
+        ['invoices', 'applications'],
+        ['user', 'self', 'quota'],
+      ])
+    }
   })
 
   it('invalidates all user lists, the affected detail, and self quota', async () => {

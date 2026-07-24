@@ -48,6 +48,7 @@ import {
   createInvoiceDraftIdentity,
   createInvoiceOrderSelection,
   getInvoiceOrderSelectionSummary,
+  invalidateInvoiceApplicationConflictQueries,
   invalidateUserInvoiceMutationQueries,
   isInvoiceProfileEnabled,
   reconcileInvoiceOrderSelectionAfterError,
@@ -157,7 +158,10 @@ export function ApplicationPanel(props: ApplicationPanelProps) {
           setConfirmOpen(false)
         }
         if (error.code === 'INVOICE_STATE_CONFLICT' || eligibilityConflict) {
-          await invalidateUserInvoiceMutationQueries(queryClient)
+          await invalidateInvoiceApplicationConflictQueries(
+            queryClient,
+            error.code
+          )
         }
         setLiveMessageKey(getInvoiceErrorMessageKey(error.code))
         return

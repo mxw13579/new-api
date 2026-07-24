@@ -131,6 +131,20 @@ export async function invalidateUserInvoiceMutationQueries(
   await Promise.all([...invalidations, invalidateSelfQuotaQuery(queryClient)])
 }
 
+/** Refreshes remote draft inputs after an application conflict. */
+export async function invalidateInvoiceApplicationConflictQueries(
+  queryClient: QueryClient,
+  code: InvoiceErrorCode
+): Promise<void> {
+  const invalidations = [invalidateUserInvoiceMutationQueries(queryClient)]
+  if (code === 'INVOICE_STATE_CONFLICT') {
+    invalidations.push(
+      queryClient.invalidateQueries({ queryKey: invoiceQueryKeys.profiles() })
+    )
+  }
+  await Promise.all(invalidations)
+}
+
 /** Returns a nonzero number of pages for accessible pagination controls. */
 export function invoicePageCount(total: number, pageSize: number): number {
   return Math.max(1, Math.ceil(total / pageSize))

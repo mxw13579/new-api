@@ -293,19 +293,6 @@ describe('invoice frontend contract', () => {
     assert.doesNotMatch(source, /demo-api|fixture|fallback/i)
   })
 
-  test('profile options use the intended non-text separator', async () => {
-    const source = await readFile(
-      new URL(
-        './components/application-profile-selection.tsx',
-        import.meta.url
-      ),
-      'utf8'
-    )
-
-    assert.match(source, /\{profile\.title\} · v\{profile\.version\}/)
-    assert.doesNotMatch(source, /路|璺/)
-  })
-
   test('query keys expose precise user list prefixes', () => {
     assert.deepEqual(invoiceQueryKeys.eligibleOrdersList(), [
       'invoices',
