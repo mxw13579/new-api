@@ -16,7 +16,7 @@ import {
 import type { InvoiceApplicationDetail, InvoiceProfile } from './types'
 
 describe('invoice query-cache redaction', () => {
-  test('removes raw tax numbers without mutating display profiles', () => {
+  test('removes raw titles and tax numbers without mutating display profiles', () => {
     const profile = {
       id: 1,
       type: 'company',
@@ -28,21 +28,26 @@ describe('invoice query-cache redaction', () => {
       updated_at: 1,
     } satisfies InvoiceProfile
 
-    assert.equal(redactInvoiceProfilesForCache([profile])[0]?.tax_number, '')
+    const cached = redactInvoiceProfilesForCache([profile])[0]
+    assert.equal(cached?.title, '')
+    assert.equal(cached?.tax_number, '')
+    assert.equal(profile.title, 'Buyer')
     assert.equal(profile.tax_number, '91310000PRIVATE')
   })
 
-  test('removes snapshot tax numbers without mutating display details', () => {
+  test('removes snapshot titles and tax numbers without mutating display details', () => {
     const detail = {
       id: 1,
-      profile_snapshot: { tax_number: '91310000PRIVATE' },
+      profile_snapshot: {
+        title: 'Live Fixture Co',
+        tax_number: '91310000PRIVATE',
+      },
     } as InvoiceApplicationDetail
 
-    assert.equal(
-      redactInvoiceApplicationDetailForCache(detail).profile_snapshot
-        .tax_number,
-      ''
-    )
+    const cached = redactInvoiceApplicationDetailForCache(detail)
+    assert.equal(cached.profile_snapshot.title, '')
+    assert.equal(cached.profile_snapshot.tax_number, '')
+    assert.equal(detail.profile_snapshot.title, 'Live Fixture Co')
     assert.equal(detail.profile_snapshot.tax_number, '91310000PRIVATE')
   })
 })

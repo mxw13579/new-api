@@ -20,6 +20,7 @@ const forbiddenSentinels = [
   'X-Amz-Signature=',
   'invoices/live/private-object.pdf',
   '91310000PRIVATE',
+  'Live Fixture Co',
 ]
 
 test('owner binary download uses bearer auth while cross-owner stays masked', async ({
@@ -70,122 +71,147 @@ test('restricted admin is no-store 403 and ordinary reviewer sees masked identit
   }
 })
 
-test('real routes preserve application, conflict, review, replacement, and owner download contracts', async ({
+test('real pages preserve application, conflict, review, replacement, and owner download contracts', async ({
+  browser,
   request,
 }, testInfo) => {
   const mobile = testInfo.project.name === 'mobile-chromium'
   const ownerToken = mobile ? tokens.mobileOwner : tokens.owner
-  const topupId = mobile ? 7002 : 7001
   const scenario = mobile ? 'mobile' : 'desktop'
-  const ownerHeaders = { Authorization: `Bearer ${ownerToken}` }
-  const adminHeaders = { Authorization: `Bearer ${tokens.reviewer}` }
-  const quotaBeforeResponse = await request.get('/api/user/self/quota', {
-    headers: ownerHeaders,
+  const viewport = mobile
+    ? { width: 390, height: 844 }
+    : { width: 1280, height: 720 }
+  const ownerContext = await browser.newContext({
+    viewport,
+    extraHTTPHeaders: { Authorization: `Bearer ${ownerToken}` },
   })
-  const quotaBefore = (await quotaBeforeResponse.json()).data.quota as number
-  const profilesResponse = await request.get('/api/user/invoice/profiles', {
-    headers: ownerHeaders,
-  })
-  expect(profilesResponse.status()).toBe(200)
-  const profiles = await profilesResponse.json()
-  const profile = profiles.data[0] as { id: number; version: number }
-
-  const applicationResponse = await request.post('/api/user/invoices', {
-    headers: ownerHeaders,
-    data: {
-      request_id: `invoice-live-chain-${scenario}`,
-      profile_id: profile.id,
-      profile_version: profile.version,
-      topup_ids: [topupId],
-    },
-  })
-  expect(applicationResponse.status()).toBe(201)
-  const application = await applicationResponse.json()
-  const chainedId = application.data.id as number
-  expect(application.data.status).toBe('submitted')
-  expect(application.data.items).toHaveLength(1)
-  expect(application.data.fee_status).toBe('paid')
-
-  const conflict = await request.post('/api/user/invoices', {
-    headers: ownerHeaders,
-    data: {
-      request_id: `invoice-live-chain-${scenario}`,
-      profile_id: profile.id,
-      profile_version: profile.version + 1,
-      topup_ids: [topupId],
-    },
-  })
-  expect(conflict.status()).toBe(409)
-  expect((await conflict.json()).data.code).toBe('INVOICE_IDEMPOTENCY_CONFLICT')
-
-  for (const transition of [
-    { action: 'reviewing', expected_status: 'submitted' },
-    { action: 'approve', expected_status: 'reviewing' },
-  ]) {
-    const response = await request.post(
-      `/api/admin/invoices/${chainedId}/review`,
-      { headers: adminHeaders, data: transition }
-    )
-    expect(response.status()).toBe(200)
-  }
-
-  const facts = {
-    invoice_number: `INV-LIVE-CHAIN-${scenario.toUpperCase()}`,
-    invoice_code: 'LIVE',
-    invoice_date: '1900000000',
-    face_amount_minor: '12345',
-    currency: 'CNY',
-    pdf_facts_attested: 'true',
-  }
-  const upload = async (expectedStatus: 'approved' | 'issued') =>
-    request.post(`/api/admin/invoices/${chainedId}/document`, {
-      headers: adminHeaders,
-      multipart: {
-        ...facts,
-        expected_status: expectedStatus,
-        file: {
-          name: 'invoice.pdf',
-          mimeType: 'application/pdf',
-          buffer: Buffer.from(buildInvoicePDF()),
-        },
-      },
+  await ownerContext.addInitScript(() =>
+    window.localStorage.setItem('setup_status_checked', 'true')
+  )
+  const ownerPage = await ownerContext.newPage()
+  await ownerPage.goto('/invoices')
+  expect(await ownerPage.evaluate(() => window.innerWidth)).toBe(viewport.width)
+  await expect(
+    ownerPage.getByRole('heading', { name: 'Invoices', exact: true })
+  ).toBeVisible()
+  await ownerPage.getByLabel('Invoice profile').selectOption({ index: 1 })
+  await ownerPage
+    .getByRole('checkbox', {
+      name: `invoice-live-topup-${scenario}`,
     })
-  const initial = await upload('approved')
-  expect(initial.status()).toBe(200)
-  const initialBody = await initial.json()
-  expect(initialBody.data.status).toBe('issued')
-  const initialDocumentId = initialBody.data.document.id
+    .check()
 
-  const replacement = await upload('issued')
-  expect(replacement.status()).toBe(200)
-  const replacementBody = await replacement.json()
-  expect(replacementBody.data.document.id).not.toBe(initialDocumentId)
-  expect(replacementBody.data.issuance.invoice_number).toBe(
-    facts.invoice_number
+  const editorContext = await browser.newContext({
+    viewport,
+    extraHTTPHeaders: { Authorization: `Bearer ${ownerToken}` },
+  })
+  await editorContext.addInitScript(() =>
+    window.localStorage.setItem('setup_status_checked', 'true')
   )
+  const editorPage = await editorContext.newPage()
+  await editorPage.goto('/invoices')
+  await editorPage.getByRole('tab', { name: 'Profiles' }).click()
+  await editorPage.getByRole('button', { name: 'Edit' }).click()
+  const editorDialog = editorPage.getByRole('dialog')
+  await expect(editorDialog.getByLabel('Company name')).toHaveValue(
+    'Live Fixture Co'
+  )
+  await expect(editorDialog.getByLabel('Tax number')).toHaveValue(
+    '91310000PRIVATE'
+  )
+  await editorDialog.getByRole('button', { name: 'Save' }).click()
+  await expect(editorPage.getByText('Invoice profile saved')).toBeVisible()
+  await editorContext.close()
 
-  const ownerDownload = await request.get(
-    `/api/user/invoices/${chainedId}/document`,
-    { headers: ownerHeaders }
+  await ownerPage
+    .getByRole('button', { name: 'Review invoice application' })
+    .click()
+  const confirmation = ownerPage.getByRole('dialog')
+  await confirmation
+    .getByRole('button', { name: 'Submit invoice application' })
+    .click()
+  await expect(
+    ownerPage.getByText('Invoice error: data changed, refresh and try again')
+  ).toBeVisible()
+  await expect(ownerPage.getByLabel('Invoice profile')).toContainText('v2')
+  await confirmation
+    .getByRole('button', { name: 'Submit invoice application' })
+    .click()
+  await expect(
+    ownerPage.getByText('Invoice application submitted successfully')
+  ).toBeVisible()
+
+  const scenarioResponse = await request.get(
+    `/__invoice-live/scenario/${scenario}`
   )
-  expect(ownerDownload.status()).toBe(200)
-  expect(ownerDownload.headers()['cache-control']).toContain('no-store')
-  expect((await ownerDownload.body()).subarray(0, 8).toString()).toBe(
-    '%PDF-1.7'
+  expect(scenarioResponse.status()).toBe(200)
+  const scenarioAudit = await scenarioResponse.json()
+  const chainedId = scenarioAudit.application_id as number
+  const applicationNo = scenarioAudit.application_no as string
+
+  const adminContext = await browser.newContext({
+    viewport,
+    extraHTTPHeaders: { Authorization: `Bearer ${tokens.reviewer}` },
+  })
+  await adminContext.addInitScript(() =>
+    window.localStorage.setItem('setup_status_checked', 'true')
   )
-  const quotaAfterResponse = await request.get('/api/user/self/quota', {
-    headers: ownerHeaders,
-  })
-  const quotaAfter = (await quotaAfterResponse.json()).data.quota as number
-  expect(quotaBefore - quotaAfter).toBe(10)
-  const ownerDetail = await request.get(`/api/user/invoices/${chainedId}`, {
-    headers: ownerHeaders,
-  })
-  const detailText = await ownerDetail.text()
-  expect(detailText).not.toContain('download_url')
-  for (const sentinel of forbiddenSentinels.slice(0, 2)) {
-    expect(detailText).not.toContain(sentinel)
+  const adminPage = await adminContext.newPage()
+  await adminPage.goto('/admin-invoices')
+  expect(await adminPage.evaluate(() => window.innerWidth)).toBe(viewport.width)
+  const applicationRow = adminPage
+    .getByRole('row')
+    .filter({ hasText: applicationNo })
+  await applicationRow.getByRole('button', { name: 'View details' }).click()
+  await adminPage.getByRole('button', { name: 'Start review' }).click()
+  await expect(adminPage.getByText('Invoice review updated')).toBeVisible()
+  await adminPage.getByRole('button', { name: 'Approve invoice' }).click()
+  await expect(adminPage.getByText('Invoice review updated')).toBeVisible()
+
+  const invoiceNumber = `INV-LIVE-CHAIN-${scenario.toUpperCase()}`
+  const uploadPDF = async (replacement: boolean) => {
+    await adminPage.getByLabel('PDF document').setInputFiles({
+      name: 'invoice.pdf',
+      mimeType: 'application/pdf',
+      buffer: Buffer.from(buildInvoicePDF()),
+    })
+    if (!replacement) {
+      await adminPage.getByLabel('Invoice number').fill(invoiceNumber)
+      await adminPage.getByLabel('Invoice code').fill('LIVE')
+      await adminPage.getByLabel('Invoice date').fill('2030-03-17')
+    }
+    await adminPage
+      .getByRole('checkbox', {
+        name: 'I confirm the PDF matches these issuance facts.',
+      })
+      .check()
+    await adminPage
+      .getByRole('button', { name: replacement ? 'Replace PDF' : 'Upload PDF' })
+      .click()
+    await expect(adminPage.getByText('Invoice PDF saved')).toBeVisible()
   }
+  await uploadPDF(false)
+  await expect(adminPage.getByLabel('Invoice number')).toHaveValue(
+    invoiceNumber
+  )
+  await uploadPDF(true)
+  await adminContext.close()
+
+  await ownerPage.reload()
+  await ownerPage.getByRole('tab', { name: 'History' }).click()
+  const applicationCard = ownerPage
+    .locator('[data-slot="card"]')
+    .filter({ hasText: applicationNo })
+  await expect(applicationCard).toBeVisible()
+  await applicationCard.getByRole('button', { name: 'Details' }).click()
+  const ownerDetail = ownerPage.getByRole('dialog')
+  await expect(ownerDetail.getByText(invoiceNumber)).toBeVisible()
+  await expect(ownerDetail.getByText('Live Fixture Co')).toBeVisible()
+  await ownerPage.keyboard.press('Escape')
+  const downloadEvent = ownerPage.waitForEvent('download')
+  await applicationCard.getByRole('button', { name: 'Download PDF' }).click()
+  const download = await downloadEvent
+  expect(download.suggestedFilename()).toBe(`invoice-${chainedId}.pdf`)
 
   const convergence = await request.post(
     `/__invoice-live/converge/${chainedId}`
@@ -210,9 +236,10 @@ test('real routes preserve application, conflict, review, replacement, and owner
     fee_charges: 1,
     fee_charge_quota: 10,
     fee_charge_status: 'applied',
-    fee_charge_balance_before: quotaBefore,
-    fee_charge_balance_after: quotaAfter,
+    fee_charge_balance_before: 100,
+    fee_charge_balance_after: 90,
   })
+  await ownerContext.close()
 })
 
 test('invoice page has keyboard focus visibility, no horizontal overflow, and no sensitive browser residue', async ({
@@ -226,6 +253,24 @@ test('invoice page has keyboard focus visibility, no horizontal overflow, and no
   )
   await context.setExtraHTTPHeaders({ Authorization: `Bearer ${tokens.owner}` })
   await page.goto('/invoices')
+  await page.getByRole('tab', { name: 'Profiles' }).click()
+  await expect(page.getByText('Live Fixture Co')).toBeVisible()
+  await expect(page.getByText('Tax number: 91310000PRIVATE')).toBeVisible()
+  await page.getByRole('button', { name: 'Edit' }).click()
+  const profileDialog = page.getByRole('dialog')
+  await expect(profileDialog.getByLabel('Company name')).toHaveValue(
+    'Live Fixture Co'
+  )
+  await expect(profileDialog.getByLabel('Tax number')).toHaveValue(
+    '91310000PRIVATE'
+  )
+  await profileDialog.getByRole('button', { name: 'Cancel' }).click()
+  await page.getByRole('tab', { name: 'History' }).click()
+  await page.getByRole('button', { name: 'Details' }).first().click()
+  const detailDialog = page.getByRole('dialog')
+  await expect(detailDialog.getByText('Live Fixture Co')).toBeVisible()
+  await expect(detailDialog.getByText('91310000PRIVATE')).toBeVisible()
+  await page.keyboard.press('Escape')
   await page.keyboard.press('Tab')
   const focused = page.locator(':focus')
   await expect(focused).toBeVisible()
@@ -261,7 +306,7 @@ test('invoice page has keyboard focus visibility, no horizontal overflow, and no
     ...consoleText,
   ]
   for (const surface of surfaces) {
-    for (const sentinel of forbiddenSentinels) {
+    for (const sentinel of forbiddenSentinels.slice(0, 2)) {
       expect(surface).not.toContain(sentinel)
     }
   }

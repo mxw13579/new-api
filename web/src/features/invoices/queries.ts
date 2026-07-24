@@ -38,7 +38,11 @@ export const invoiceQueryKeys = {
 export function redactInvoiceProfilesForCache(
   profiles: InvoiceProfile[]
 ): InvoiceProfile[] {
-  return profiles.map((profile) => ({ ...profile, tax_number: '' }))
+  return profiles.map((profile) => ({
+    ...profile,
+    title: '',
+    tax_number: '',
+  }))
 }
 
 /** Removes raw tax identifiers before application details enter React Query state. */
@@ -47,6 +51,10 @@ export function redactInvoiceApplicationDetailForCache(
 ): InvoiceApplicationDetail {
   return {
     ...detail,
-    profile_snapshot: { ...detail.profile_snapshot, tax_number: '' },
+    profile_snapshot: {
+      ...detail.profile_snapshot,
+      title: '',
+      tax_number: '',
+    },
   }
 }

@@ -151,23 +151,54 @@ func main() {
 			return
 		}
 		token := strings.TrimPrefix(c.GetHeader("Authorization"), "Bearer ")
-		if token != ownerToken {
+		username := ""
+		switch token {
+		case ownerToken:
+			username = "invoice-live-owner"
+		case mobileOwnerToken:
+			username = "invoice-live-mobile"
+		case reviewerToken:
+			username = "invoice-live-reviewer"
+		default:
 			c.Next()
 			return
 		}
 		var user model.User
-		if err := model.DB.Where("username = ?", "invoice-live-owner").First(&user).Error; err != nil {
+		if err := model.DB.Where("username = ?", username).First(&user).Error; err != nil {
 			c.AbortWithStatus(http.StatusUnauthorized)
 			return
 		}
 		now := time.Now().Unix()
+		permissions := gin.H{"sidebar_settings": false}
+		if token == reviewerToken {
+			permissions["admin_permissions"] = gin.H{"invoice": gin.H{
+				"review": true, "document.upload": true, "sensitive.read": false, "settings": false,
+			}}
+		}
 		c.AbortWithStatusJSON(http.StatusOK, gin.H{"success": true, "message": "", "data": gin.H{
 			"access_token": token, "token_type": "Bearer", "access_expires_at": now + 3600,
-			"user":    gin.H{"id": user.Id, "username": user.Username, "role": user.Role, "status": user.Status, "group": user.Group, "quota": user.Quota, "permissions": gin.H{"sidebar_settings": false}},
+			"user":    gin.H{"id": user.Id, "username": user.Username, "role": user.Role, "status": user.Status, "group": user.Group, "quota": user.Quota, "permissions": permissions},
 			"session": gin.H{"sid": "invoice-live-browser", "current": true, "login_method": "live", "ip": "127.0.0.1", "user_agent": "playwright", "created_at": now - 60, "last_active_at": now, "expires_at": now + 3600},
 		}})
 	})
 	router.SetApiRouter(engine)
+	engine.GET("/__invoice-live/scenario/:name", func(c *gin.Context) {
+		username := "invoice-live-owner"
+		if c.Param("name") == "mobile" {
+			username = "invoice-live-mobile"
+		}
+		var user model.User
+		if err := model.DB.Where("username = ?", username).First(&user).Error; err != nil {
+			c.Status(http.StatusNotFound)
+			return
+		}
+		var application model.InvoiceApplication
+		if err := model.DB.Where("user_id = ? AND fee_charge_entry_id IS NOT NULL", user.Id).Order("id DESC").First(&application).Error; err != nil {
+			c.Status(http.StatusNotFound)
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"application_id": application.ID, "application_no": application.ApplicationNo})
+	})
 	engine.GET("/__invoice-live/audit/:id", func(c *gin.Context) {
 		applicationID, err := strconv.ParseInt(c.Param("id"), 10, 64)
 		if err != nil {
