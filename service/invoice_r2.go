@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -20,6 +22,8 @@ import (
 
 // InvoicePDFContentType is the fixed media type used for all persisted and downloaded invoice PDFs.
 const InvoicePDFContentType = model.InvoicePDFContentType
+
+const invoiceR2EndpointSuffix = ".r2.cloudflarestorage.com"
 
 var (
 	// ErrInvoiceObjectNotFound classifies a trusted object-store response that proves the requested key is absent.
@@ -78,19 +82,42 @@ func NewInvoiceR2StoreFromEnvironment() (*InvoiceR2Store, error) {
 	bucket := strings.TrimSpace(os.Getenv("INVOICE_R2_BUCKET"))
 	accessKeyID := strings.TrimSpace(os.Getenv("INVOICE_R2_ACCESS_KEY_ID"))
 	secretAccessKey := strings.TrimSpace(os.Getenv("INVOICE_R2_SECRET_ACCESS_KEY"))
-	authority := os.Getenv("INVOICE_R2_AUTHORITY_ID")
-	if endpoint == "" || bucket == "" || accessKeyID == "" || secretAccessKey == "" || !validInvoiceR2AuthorityID(authority) {
+	if endpoint == "" || bucket == "" || accessKeyID == "" || secretAccessKey == "" {
 		return nil, ErrInvoiceObjectTerminal
 	}
-	if parsed, err := url.Parse(endpoint); err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil {
+	normalizedEndpoint, authority, ok := invoiceR2EndpointAuthority(endpoint)
+	if !ok {
 		return nil, ErrInvoiceObjectTerminal
 	}
 	config := aws.Config{
-		Region: "auto", BaseEndpoint: aws.String(strings.TrimRight(endpoint, "/")),
+		Region: "auto", BaseEndpoint: aws.String(normalizedEndpoint),
 		Credentials: aws.NewCredentialsCache(credentials.NewStaticCredentialsProvider(accessKeyID, secretAccessKey, "")),
 	}
 	client := s3.NewFromConfig(config)
 	return NewInvoiceR2Store(client, authority, bucket)
+}
+
+func invoiceR2EndpointAuthority(endpoint string) (string, string, bool) {
+	parsed, err := url.Parse(endpoint)
+	if err != nil || parsed.Scheme != "https" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return "", "", false
+	}
+	if parsed.Path != "" && parsed.Path != "/" {
+		return "", "", false
+	}
+	if port := parsed.Port(); port != "" && port != "443" {
+		return "", "", false
+	}
+	hostname := strings.ToLower(parsed.Hostname())
+	if len(hostname) != 32+len(invoiceR2EndpointSuffix) || !strings.HasSuffix(hostname, invoiceR2EndpointSuffix) {
+		return "", "", false
+	}
+	accountID := strings.TrimSuffix(hostname, invoiceR2EndpointSuffix)
+	if !validInvoiceR2AccountID(accountID) {
+		return "", "", false
+	}
+	digest := sha256.Sum256([]byte("cloudflare-r2:" + accountID))
+	return "https://" + hostname, hex.EncodeToString(digest[:]), true
 }
 
 // AuthorityID returns the stable non-secret identity bound to this store instance.
@@ -222,10 +249,18 @@ func classifyInvoiceObjectError(err error) error {
 }
 
 func validInvoiceR2AuthorityID(authority string) bool {
-	if len(authority) != 64 {
+	return validInvoiceR2LowerHex(authority, 64)
+}
+
+func validInvoiceR2AccountID(accountID string) bool {
+	return validInvoiceR2LowerHex(accountID, 32)
+}
+
+func validInvoiceR2LowerHex(value string, length int) bool {
+	if len(value) != length {
 		return false
 	}
-	for _, character := range authority {
+	for _, character := range value {
 		if (character < '0' || character > '9') && (character < 'a' || character > 'f') {
 			return false
 		}

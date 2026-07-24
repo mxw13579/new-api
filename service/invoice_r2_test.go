@@ -3,6 +3,8 @@ package service
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"io"
 	"strings"
@@ -131,6 +133,57 @@ func TestInvoiceR2AuthorityIDRequiresExactLowercaseHex(t *testing.T) {
 	}
 }
 
+func TestInvoiceR2StoreFromEnvironmentDerivesAuthorityFromCloudflareAccount(t *testing.T) {
+	lowerAccount := "0123456789abcdef0123456789abcdef"
+	upperAccount := strings.ToUpper(lowerAccount)
+	expectedDigest := sha256.Sum256([]byte("cloudflare-r2:" + lowerAccount))
+	expectedAuthority := hex.EncodeToString(expectedDigest[:])
+
+	setInvoiceR2Environment(t, "https://"+upperAccount+".r2.cloudflarestorage.com:443/", "first-access", "first-secret")
+	t.Setenv("INVOICE_R2_AUTHORITY_ID", "ignored-invalid-manual-authority")
+	first, err := NewInvoiceR2StoreFromEnvironment()
+	require.NoError(t, err)
+	assert.Equal(t, expectedAuthority, first.AuthorityID())
+
+	setInvoiceR2Environment(t, "https://"+lowerAccount+".r2.cloudflarestorage.com", "rotated-access", "rotated-secret")
+	rotated, err := NewInvoiceR2StoreFromEnvironment()
+	require.NoError(t, err)
+	assert.Equal(t, first.AuthorityID(), rotated.AuthorityID())
+
+	otherAccount := "1123456789abcdef0123456789abcdef"
+	setInvoiceR2Environment(t, "https://"+otherAccount+".r2.cloudflarestorage.com", "rotated-access", "rotated-secret")
+	other, err := NewInvoiceR2StoreFromEnvironment()
+	require.NoError(t, err)
+	assert.NotEqual(t, first.AuthorityID(), other.AuthorityID())
+}
+
+func TestInvoiceR2StoreFromEnvironmentRejectsNonstandardEndpoints(t *testing.T) {
+	account := "0123456789abcdef0123456789abcdef"
+	tests := []struct {
+		name     string
+		endpoint string
+	}{
+		{name: "http", endpoint: "http://" + account + ".r2.cloudflarestorage.com"},
+		{name: "userinfo", endpoint: "https://user@" + account + ".r2.cloudflarestorage.com"},
+		{name: "nondefault port", endpoint: "https://" + account + ".r2.cloudflarestorage.com:8443"},
+		{name: "path", endpoint: "https://" + account + ".r2.cloudflarestorage.com/bucket"},
+		{name: "query", endpoint: "https://" + account + ".r2.cloudflarestorage.com?bucket=x"},
+		{name: "fragment", endpoint: "https://" + account + ".r2.cloudflarestorage.com#bucket"},
+		{name: "wrong host suffix", endpoint: "https://" + account + ".example.com"},
+		{name: "extra host label", endpoint: "https://extra." + account + ".r2.cloudflarestorage.com"},
+		{name: "short account", endpoint: "https://" + account[:31] + ".r2.cloudflarestorage.com"},
+		{name: "nonhex account", endpoint: "https://g123456789abcdef0123456789abcdef.r2.cloudflarestorage.com"},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			setInvoiceR2Environment(t, testCase.endpoint, "test-access", "test-secret")
+			store, err := NewInvoiceR2StoreFromEnvironment()
+			assert.ErrorIs(t, err, ErrInvoiceObjectTerminal)
+			assert.Nil(t, store)
+		})
+	}
+}
+
 func TestInvoiceR2GetClassifiesPreconditionFailureAsIntegrityUnavailable(t *testing.T) {
 	client := &invoiceR2ClientStub{err: &smithy.GenericAPIError{Code: "PreconditionFailed", Message: "etag changed", Fault: smithy.FaultClient}}
 	store, err := NewInvoiceR2Store(client, strings.Repeat("a", 64), "private-invoices")
@@ -177,3 +230,11 @@ func TestInvoiceR2AdapterClassifiesProviderErrors(t *testing.T) {
 
 func int64Pointer(value int64) *int64    { return &value }
 func stringPointer(value string) *string { return &value }
+
+func setInvoiceR2Environment(t *testing.T, endpoint, accessKeyID, secretAccessKey string) {
+	t.Helper()
+	t.Setenv("INVOICE_R2_ENDPOINT", endpoint)
+	t.Setenv("INVOICE_R2_BUCKET", "private-invoices")
+	t.Setenv("INVOICE_R2_ACCESS_KEY_ID", accessKeyID)
+	t.Setenv("INVOICE_R2_SECRET_ACCESS_KEY", secretAccessKey)
+}
