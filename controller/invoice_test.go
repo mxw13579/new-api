@@ -121,56 +121,6 @@ func TestInvoiceDownloadControllerMasksCrossUserAndDoesNotLeakURLs(t *testing.T)
 	}
 }
 
-func TestInvoiceDocumentURLCompatibilityStubIsSanitized(t *testing.T) {
-	setupInvoiceControllerDB(t)
-	application := model.InvoiceApplication{
-		ApplicationNo: "INV-PRIVATE-DOCUMENT-URL", UserID: 11, RequestID: "request", RequestFingerprint: "fingerprint",
-		Type: constant.InvoiceTypePersonal, Status: constant.InvoiceApplicationStatusIssued,
-		PaymentReviewStatus: constant.InvoicePaymentReviewStatusNone, Currency: constant.InvoiceCurrencyCNY,
-		FeeStatus: constant.InvoiceFeeStatusNotRequired, ProfileSnapshot: `{}`, PolicySnapshot: `{}`, SubmittedAt: 1,
-	}
-	require.NoError(t, model.DB.Create(&application).Error)
-
-	responses := make([]*httptest.ResponseRecorder, 0, 2)
-	for _, applicationID := range []int64{application.ID, application.ID + 999} {
-		context, recorder := invoiceControllerContext(http.MethodPost, "/", "")
-		context.Params = gin.Params{{Key: "id", Value: strconv.FormatInt(applicationID, 10)}}
-		context.Set("id", 12)
-
-		GetInvoiceDocumentURL(context)
-
-		assert.Equal(t, http.StatusConflict, recorder.Code)
-		assert.Empty(t, recorder.Header().Get("Location"))
-		assert.NotContains(t, recorder.Body.String(), "download_url")
-		assert.NotContains(t, recorder.Body.String(), "http")
-		responses = append(responses, recorder)
-	}
-	assert.Equal(t, responses[0].Code, responses[1].Code)
-	assert.Equal(t, responses[0].Body.String(), responses[1].Body.String())
-}
-
-func TestInvoiceDocumentURLControllerNeverReturnsSignedURL(t *testing.T) {
-	previous := getInvoiceDocumentDownload
-	t.Cleanup(func() { getInvoiceDocumentDownload = previous })
-
-	called := false
-	getInvoiceDocumentDownload = func(context.Context, int, int64) ([]byte, error) {
-		called = true
-		return []byte("signed-url-sentinel"), nil
-	}
-	requestContext, recorder := invoiceControllerContext(http.MethodPost, "/", "")
-	requestContext.Params = gin.Params{{Key: "id", Value: "7"}}
-	requestContext.Set("id", 11)
-
-	GetInvoiceDocumentURL(requestContext)
-
-	assert.Equal(t, http.StatusConflict, recorder.Code)
-	assert.Empty(t, recorder.Header().Get("Location"))
-	assert.NotContains(t, recorder.Body.String(), "signed-url-sentinel")
-	assert.NotContains(t, recorder.Body.String(), "download_url")
-	assert.False(t, called)
-}
-
 func TestInvoiceDownloadControllerReturnsVerifiedBinaryWithPrivateHeaders(t *testing.T) {
 	previous := getInvoiceDocumentDownload
 	t.Cleanup(func() { getInvoiceDocumentDownload = previous })

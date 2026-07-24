@@ -69,6 +69,124 @@ test('restricted admin is no-store 403 and ordinary reviewer sees masked identit
   }
 })
 
+test('real routes preserve application, conflict, review, replacement, and owner download contracts', async ({
+  request,
+}, testInfo) => {
+  test.skip(
+    testInfo.project.name !== 'desktop-chromium',
+    'the stateful real-route chain runs once against the shared live server'
+  )
+  const ownerHeaders = { Authorization: `Bearer ${tokens.owner}` }
+  const adminHeaders = { Authorization: `Bearer ${tokens.reviewer}` }
+  const profilesResponse = await request.get('/api/user/invoice/profiles', {
+    headers: ownerHeaders,
+  })
+  expect(profilesResponse.status()).toBe(200)
+  const profiles = await profilesResponse.json()
+  const profile = profiles.data[0] as { id: number; version: number }
+
+  const applicationResponse = await request.post('/api/user/invoices', {
+    headers: ownerHeaders,
+    data: {
+      request_id: 'invoice-live-chain',
+      profile_id: profile.id,
+      profile_version: profile.version,
+      topup_ids: [7001],
+    },
+  })
+  expect(applicationResponse.status()).toBe(201)
+  const application = await applicationResponse.json()
+  const chainedId = application.data.id as number
+  expect(application.data.status).toBe('submitted')
+  expect(application.data.items).toHaveLength(1)
+  expect(application.data.fee_status).toBe('paid')
+
+  const conflict = await request.post('/api/user/invoices', {
+    headers: ownerHeaders,
+    data: {
+      request_id: 'invoice-live-chain',
+      profile_id: profile.id,
+      profile_version: profile.version + 1,
+      topup_ids: [7001],
+    },
+  })
+  expect(conflict.status()).toBe(409)
+  expect((await conflict.json()).data.code).toBe('INVOICE_IDEMPOTENCY_CONFLICT')
+
+  for (const transition of [
+    { action: 'reviewing', expected_status: 'submitted' },
+    { action: 'approve', expected_status: 'reviewing' },
+  ]) {
+    const response = await request.post(
+      `/api/admin/invoices/${chainedId}/review`,
+      { headers: adminHeaders, data: transition }
+    )
+    expect(response.status()).toBe(200)
+  }
+
+  const facts = {
+    invoice_number: 'INV-LIVE-CHAIN',
+    invoice_code: 'LIVE',
+    invoice_date: '1900000000',
+    face_amount_minor: '12345',
+    currency: 'CNY',
+    pdf_facts_attested: 'true',
+  }
+  const upload = async (expectedStatus: 'approved' | 'issued') =>
+    request.post(`/api/admin/invoices/${chainedId}/document`, {
+      headers: adminHeaders,
+      multipart: {
+        ...facts,
+        expected_status: expectedStatus,
+        file: {
+          name: 'invoice.pdf',
+          mimeType: 'application/pdf',
+          buffer: Buffer.from(buildInvoicePDF()),
+        },
+      },
+    })
+  const initial = await upload('approved')
+  expect(initial.status()).toBe(200)
+  const initialBody = await initial.json()
+  expect(initialBody.data.status).toBe('issued')
+  const initialDocumentId = initialBody.data.document.id
+
+  const replacement = await upload('issued')
+  expect(replacement.status()).toBe(200)
+  const replacementBody = await replacement.json()
+  expect(replacementBody.data.document.id).not.toBe(initialDocumentId)
+  expect(replacementBody.data.issuance.invoice_number).toBe(
+    facts.invoice_number
+  )
+
+  const ownerDownload = await request.get(
+    `/api/user/invoices/${chainedId}/document`,
+    { headers: ownerHeaders }
+  )
+  expect(ownerDownload.status()).toBe(200)
+  expect(ownerDownload.headers()['cache-control']).toContain('no-store')
+  expect((await ownerDownload.body()).subarray(0, 8).toString()).toBe(
+    '%PDF-1.7'
+  )
+  const ownerDetail = await request.get(`/api/user/invoices/${chainedId}`, {
+    headers: ownerHeaders,
+  })
+  const detailText = await ownerDetail.text()
+  expect(detailText).not.toContain('download_url')
+  for (const sentinel of forbiddenSentinels.slice(0, 2))
+    expect(detailText).not.toContain(sentinel)
+
+  const audit = await request.get(`/__invoice-live/audit/${chainedId}`)
+  expect(await audit.json()).toEqual({
+    items: 1,
+    issuances: 1,
+    documents: 2,
+    available_documents: 1,
+    superseded_documents: 1,
+    fee_charges: 1,
+  })
+})
+
 test('invoice page has keyboard focus visibility, no horizontal overflow, and no sensitive browser residue', async ({
   page,
   context,
@@ -101,3 +219,24 @@ test('invoice page has keyboard focus visibility, no horizontal overflow, and no
     }
   }
 })
+
+function buildInvoicePDF(): string {
+  const objects = [
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources <<>> /Contents 4 0 R >>',
+    '<< /Length 0 >>\nstream\n\nendstream',
+  ]
+  let output = '%PDF-1.7\n'
+  const offsets = [0]
+  objects.forEach((object, index) => {
+    offsets.push(Buffer.byteLength(output))
+    output += `${index + 1} 0 obj\n${object}\nendobj\n`
+  })
+  const xref = Buffer.byteLength(output)
+  output += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`
+  for (const offset of offsets.slice(1)) {
+    output += `${String(offset).padStart(10, '0')} 00000 n \n`
+  }
+  return `${output}trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`
+}

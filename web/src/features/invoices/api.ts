@@ -230,7 +230,7 @@ function pageUrl(path: string, request: InvoicePageRequest): string {
  */
 export function createHttpInvoiceApi(
   transport: InvoiceHttpTransport
-): Omit<AuthenticatedInvoiceApi, 'requestDocumentDownloadUrl'> {
+): AuthenticatedInvoiceApi {
   return {
     async getConfig() {
       return invoiceRequest<InvoiceConfig>(

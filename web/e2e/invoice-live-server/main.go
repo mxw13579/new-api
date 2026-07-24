@@ -13,7 +13,9 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 	_ "unsafe"
@@ -24,42 +26,91 @@ import (
 	"github.com/QuantumNous/new-api/router"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/authz"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
 )
 
 const (
 	liveAuthority   = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
 	liveBucket      = "invoice-live-private"
-	liveETag        = `"invoice-live-etag"`
 	ownerToken      = "invoice-live-owner-token-00000001"
 	otherToken      = "invoice-live-other-token-00000002"
 	reviewerToken   = "invoice-live-review-token-0000003"
 	restrictedToken = "invoice-live-denied-token-0000004"
 )
 
-var livePDF = []byte("%PDF-1.7\n% deterministic invoice live fixture\n%%EOF\n")
+var livePDF = buildLivePDF()
 
 //go:linkname newInvoiceDownloadStore github.com/QuantumNous/new-api/service.newInvoiceDownloadStore
 var newInvoiceDownloadStore func() (service.InvoiceObjectStore, error)
 
-type liveObjectStore struct{}
+//go:linkname newInvoiceUploadStore github.com/QuantumNous/new-api/service.newInvoiceUploadStore
+var newInvoiceUploadStore func() (service.InvoiceObjectStore, error)
 
-func (liveObjectStore) AuthorityID() string                                         { return liveAuthority }
-func (liveObjectStore) Bucket() string                                              { return liveBucket }
-func (liveObjectStore) Put(context.Context, string, io.Reader, int64, string) error { return nil }
-func (liveObjectStore) Copy(context.Context, string, string) error                  { return nil }
-func (liveObjectStore) Head(context.Context, string) (service.InvoiceObjectHead, error) {
-	digest := sha256.Sum256(livePDF)
-	return service.InvoiceObjectHead{SizeBytes: int64(len(livePDF)), ChecksumSHA256: base64.StdEncoding.EncodeToString(digest[:]), ETag: liveETag}, nil
+type liveObjectStore struct {
+	mu      sync.Mutex
+	objects map[string][]byte
 }
-func (liveObjectStore) Get(_ context.Context, _ string, ifMatch string) (service.InvoiceObjectGet, error) {
-	if ifMatch != liveETag {
+
+func (*liveObjectStore) AuthorityID() string { return liveAuthority }
+func (*liveObjectStore) Bucket() string      { return liveBucket }
+func (store *liveObjectStore) Put(_ context.Context, key string, body io.Reader, _ int64, _ string) error {
+	value, err := io.ReadAll(body)
+	if err != nil {
+		return err
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	store.objects[key] = value
+	return nil
+}
+func (store *liveObjectStore) Copy(_ context.Context, sourceKey, destinationKey string) error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	value, ok := store.objects[sourceKey]
+	if !ok {
+		return service.ErrInvoiceObjectNotFound
+	}
+	store.objects[destinationKey] = append([]byte(nil), value...)
+	return nil
+}
+func (store *liveObjectStore) Head(_ context.Context, key string) (service.InvoiceObjectHead, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	value, ok := store.objects[key]
+	if !ok {
+		return service.InvoiceObjectHead{}, service.ErrInvoiceObjectNotFound
+	}
+	digest := sha256.Sum256(value)
+	return service.InvoiceObjectHead{SizeBytes: int64(len(value)), ChecksumSHA256: base64.StdEncoding.EncodeToString(digest[:]), ETag: etag(value)}, nil
+}
+func (store *liveObjectStore) Get(_ context.Context, key, ifMatch string) (service.InvoiceObjectGet, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	value, ok := store.objects[key]
+	if !ok {
+		return service.InvoiceObjectGet{}, service.ErrInvoiceObjectNotFound
+	}
+	if ifMatch != etag(value) {
 		return service.InvoiceObjectGet{}, service.ErrInvoiceObjectIntegrityUnavailable
 	}
-	digest := sha256.Sum256(livePDF)
-	return service.InvoiceObjectGet{Body: io.NopCloser(bytes.NewReader(livePDF)), SizeBytes: int64(len(livePDF)), ChecksumSHA256: base64.StdEncoding.EncodeToString(digest[:]), ETag: liveETag}, nil
+	digest := sha256.Sum256(value)
+	return service.InvoiceObjectGet{Body: io.NopCloser(bytes.NewReader(value)), SizeBytes: int64(len(value)), ChecksumSHA256: base64.StdEncoding.EncodeToString(digest[:]), ETag: etag(value)}, nil
 }
-func (liveObjectStore) Delete(context.Context, string) error { return nil }
+func (store *liveObjectStore) Delete(_ context.Context, key string) error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if _, ok := store.objects[key]; !ok {
+		return service.ErrInvoiceObjectNotFound
+	}
+	delete(store.objects, key)
+	return nil
+}
+
+func etag(value []byte) string {
+	digest := sha256.Sum256(value)
+	return fmt.Sprintf("\"%x\"", digest[:16])
+}
 
 func main() {
 	databasePath := filepath.Join(os.TempDir(), fmt.Sprintf("new-api-invoice-live-%d.db", os.Getpid()))
@@ -78,13 +129,46 @@ func main() {
 	if err := authz.Init(model.DB); err != nil {
 		panic(err)
 	}
+	store := &liveObjectStore{objects: map[string][]byte{"invoices/live/private-object.pdf": livePDF}}
 	seedLiveFixture()
-	newInvoiceDownloadStore = func() (service.InvoiceObjectStore, error) { return liveObjectStore{}, nil }
+	newInvoiceDownloadStore = func() (service.InvoiceObjectStore, error) { return store, nil }
+	newInvoiceUploadStore = func() (service.InvoiceObjectStore, error) { return store, nil }
+	*operation_setting.GetInvoiceSetting() = operation_setting.InvoiceSetting{PersonalEnabled: true, CompanyEnabled: true, ApplicationWindowDays: 30, MinimumAmountMinor: 1, FeeQuota: 10, PDFRetentionDays: 30}
 
 	gin.SetMode(gin.ReleaseMode)
 	engine := gin.New()
 	engine.Use(gin.Recovery())
 	router.SetApiRouter(engine)
+	engine.GET("/__invoice-live/audit/:id", func(c *gin.Context) {
+		applicationID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+		if err != nil {
+			c.Status(http.StatusBadRequest)
+			return
+		}
+		counts := map[string]int64{}
+		queries := []struct {
+			name  string
+			model any
+			where string
+			args  []any
+		}{
+			{"items", &model.InvoiceItem{}, "application_id = ?", []any{applicationID}},
+			{"issuances", &model.InvoiceIssuance{}, "application_id = ?", []any{applicationID}},
+			{"documents", &model.InvoiceDocument{}, "application_id = ?", []any{applicationID}},
+			{"available_documents", &model.InvoiceDocument{}, "application_id = ? AND status = ?", []any{applicationID, model.InvoiceDocumentStatusAvailable}},
+			{"superseded_documents", &model.InvoiceDocument{}, "application_id = ? AND status = ?", []any{applicationID, model.InvoiceDocumentStatusSuperseded}},
+			{"fee_charges", &model.InvoiceFeeLedgerEntry{}, "application_id = ? AND entry_type = ?", []any{applicationID, model.InvoiceFeeEntryTypeCharge}},
+		}
+		for _, query := range queries {
+			var count int64
+			if err := model.DB.Model(query.model).Where(query.where, query.args...).Count(&count).Error; err != nil {
+				c.Status(http.StatusInternalServerError)
+				return
+			}
+			counts[query.name] = count
+		}
+		c.JSON(http.StatusOK, counts)
+	})
 	engine.NoRoute(func(c *gin.Context) {
 		path := filepath.Clean(filepath.Join("web", "dist", filepath.FromSlash(strings.TrimPrefix(c.Request.URL.Path, "/"))))
 		if info, err := os.Stat(path); err == nil && !info.IsDir() {
@@ -113,7 +197,7 @@ func main() {
 
 func seedLiveFixture() {
 	users := []model.User{
-		{Username: "invoice-live-owner", Password: "unused", AccessToken: stringPointer(ownerToken), Role: common.RoleCommonUser, Status: common.UserStatusEnabled, Group: "default", AffCode: "live-owner-aff"},
+		{Username: "invoice-live-owner", Password: "unused", AccessToken: stringPointer(ownerToken), Role: common.RoleCommonUser, Status: common.UserStatusEnabled, Group: "default", AffCode: "live-owner-aff", Quota: 100},
 		{Username: "invoice-live-other", Password: "unused", AccessToken: stringPointer(otherToken), Role: common.RoleCommonUser, Status: common.UserStatusEnabled, Group: "default", AffCode: "live-other-aff"},
 		{Username: "invoice-live-reviewer", Password: "unused", AccessToken: stringPointer(reviewerToken), Role: common.RoleAdminUser, Status: common.UserStatusEnabled, Group: "default", AffCode: "live-review-aff"},
 		{Username: "invoice-live-restricted", Password: "unused", AccessToken: stringPointer(restrictedToken), Role: common.RoleAdminUser, Status: common.UserStatusEnabled, Group: "default", AffCode: "live-denied-aff"},
@@ -123,10 +207,26 @@ func seedLiveFixture() {
 			panic(err)
 		}
 	}
+	profile := model.InvoiceProfile{UserID: users[0].Id, Type: constant.InvoiceTypeCompany, Title: "Live Fixture Co", TaxNumber: "91310000PRIVATE", IsDefault: true, Version: 1, CreatedAt: nowUnix(), UpdatedAt: nowUnix()}
+	if err := model.DB.Create(&profile).Error; err != nil {
+		panic(err)
+	}
+	providerTradeNo := "invoice-live-provider-trade"
+	_, providerTradeKey, err := model.NormalizeEpayProviderTradeIdentity(providerTradeNo)
+	if err != nil {
+		panic(err)
+	}
+	amount, eligible, refunded, version := int64(12345), true, int64(0), int64(1)
+	currency, state := constant.InvoicePaymentEvidenceCurrencyCNY, constant.InvoicePaymentStateSucceeded
+	product, source := constant.InvoicePaymentEvidenceTopUpProduct, constant.InvoicePaymentEvidenceSourceTrustedCallback
+	topup := model.TopUp{Id: 7001, UserId: users[0].Id, Amount: 10, Money: 123.45, TradeNo: "invoice-live-topup", PaymentMethod: "alipay", PaymentProvider: model.PaymentProviderEpay, CompleteTime: nowUnix(), Status: common.TopUpStatusSuccess, PaidAmountMinor: &amount, Currency: &currency, InvoiceEligible: &eligible, PaymentState: &state, RefundedAmountMinor: &refunded, PaymentVersion: &version, ProductSnapshot: &product, PaymentEvidenceSource: &source, PaymentProviderTradeNo: &providerTradeNo, PaymentProviderTradeKey: &providerTradeKey}
+	if err := model.DB.Create(&topup).Error; err != nil {
+		panic(err)
+	}
 	if err := authz.SetUserPermissions(users[3].Id, authz.PermissionsMap{authz.ResourceInvoice: {authz.ActionInvoiceReview: false}}); err != nil {
 		panic(err)
 	}
-	now := time.Now().Unix()
+	now := nowUnix()
 	application := model.InvoiceApplication{
 		ApplicationNo: "INV-LIVE-0001", UserID: users[0].Id, RequestID: "invoice-live-request", RequestFingerprint: strings.Repeat("a", 64),
 		Type: constant.InvoiceTypeCompany, Status: constant.InvoiceApplicationStatusIssued, PaymentReviewStatus: constant.InvoicePaymentReviewStatusNone,
@@ -141,7 +241,7 @@ func seedLiveFixture() {
 	digest := sha256.Sum256(livePDF)
 	key := "invoices/live/private-object.pdf"
 	document := model.InvoiceDocument{
-		ApplicationID: application.ID, R2AuthorityID: stringPointer(liveAuthority), R2Bucket: liveBucket, ObjectKey: &key, ObjectETag: stringPointer(liveETag),
+		ApplicationID: application.ID, R2AuthorityID: stringPointer(liveAuthority), R2Bucket: liveBucket, ObjectKey: &key, ObjectETag: stringPointer(etag(livePDF)),
 		ContentType: model.InvoicePDFContentType, SizeBytes: int64(len(livePDF)), SHA256: fmt.Sprintf("%x", digest[:]), Status: model.InvoiceDocumentStatusAvailable,
 		OperationToken: strings.Repeat("b", 64), UploadedBy: users[2].Id, UploadedAt: now - 30, PDFFactsAttested: true,
 		RetentionDaysSnapshot: 30, ExpiresAt: int64Pointer(now + 3600), CreatedAt: now - 30, UpdatedAt: now - 30,
@@ -156,3 +256,27 @@ func seedLiveFixture() {
 
 func stringPointer(value string) *string { return &value }
 func int64Pointer(value int64) *int64    { return &value }
+func nowUnix() int64                     { return time.Now().Unix() }
+
+func buildLivePDF() []byte {
+	objects := []string{
+		"<< /Type /Catalog /Pages 2 0 R >>",
+		"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+		"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources <<>> /Contents 4 0 R >>",
+		"<< /Length 0 >>\nstream\n\nendstream",
+	}
+	var output strings.Builder
+	output.WriteString("%PDF-1.7\n")
+	offsets := make([]int, len(objects)+1)
+	for index, object := range objects {
+		offsets[index+1] = output.Len()
+		fmt.Fprintf(&output, "%d 0 obj\n%s\nendobj\n", index+1, object)
+	}
+	xref := output.Len()
+	fmt.Fprintf(&output, "xref\n0 %d\n0000000000 65535 f \n", len(objects)+1)
+	for index := 1; index <= len(objects); index++ {
+		fmt.Fprintf(&output, "%010d 00000 n \n", offsets[index])
+	}
+	fmt.Fprintf(&output, "trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n", len(objects)+1, xref)
+	return []byte(output.String())
+}

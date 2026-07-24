@@ -248,8 +248,5 @@ export function createInvoiceDemoApi(): InvoiceApi {
     getDocumentDownloadUrl(applicationId) {
       return `/demo/invoices/${applicationId}.pdf`
     },
-    async requestDocumentDownloadUrl(applicationId) {
-      return `/demo/invoices/${applicationId}.pdf`
-    },
   }
 }

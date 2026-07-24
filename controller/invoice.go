@@ -230,11 +230,6 @@ func DownloadInvoiceDocument(c *gin.Context) {
 	c.Data(http.StatusOK, model.InvoicePDFContentType, content)
 }
 
-// GetInvoiceDocumentURL is a sanitized compatibility stub retained until its legacy route is removed.
-func GetInvoiceDocumentURL(c *gin.Context) {
-	writeInvoiceError(c, service.ErrInvoiceDocumentUnavailable)
-}
-
 // CancelInvoiceApplication cancels an owned submitted invoice application and returns its updated detail.
 func CancelInvoiceApplication(c *gin.Context) {
 	id, err := invoiceApplicationID(c)

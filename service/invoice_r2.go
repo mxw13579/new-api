@@ -136,11 +136,6 @@ func (s *InvoiceR2Store) Bucket() string {
 	return s.bucket
 }
 
-func invoiceObjectStoreMatchesBucket(store InvoiceObjectStore, persistedBucket string) bool {
-	bucketStore, ok := store.(interface{ Bucket() string })
-	return ok && strings.TrimSpace(persistedBucket) != "" && bucketStore.Bucket() == persistedBucket
-}
-
 // Put streams a bounded PDF staging object with its expected SHA-256 checksum.
 func (s *InvoiceR2Store) Put(ctx context.Context, key string, body io.Reader, size int64, checksumSHA256 string) error {
 	if err := validateInvoiceObjectKey(key); err != nil || body == nil || size <= 0 || size > InvoicePDFMaxBytes {
