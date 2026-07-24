@@ -137,9 +137,19 @@ test('pricing identities survive real component rerenders', async ({
       const insertedNodes = snapshots.get('inserted')?.tiers ?? []
       const reorderedNodes = snapshots.get('reordered')?.tiers ?? []
       const repeatedNodes = snapshots.get('repeated')?.tiers ?? []
+      const insertedSmallNodes = insertedNodes.slice(0, 3)
+      const reorderedSmallNodes = reorderedNodes.slice(1)
       return (
         beforeNodes.every((node, index) => node === insertedNodes[index + 1]) &&
         beforeNodes[2] === reorderedNodes[0] &&
+        insertedSmallNodes.every((node) =>
+          reorderedSmallNodes.includes(node)
+        ) &&
+        reorderedSmallNodes.every((node) =>
+          insertedSmallNodes.includes(node)
+        ) &&
+        snapshots.get('inserted')?.rules[0] ===
+          snapshots.get('reordered')?.rules[0] &&
         reorderedNodes.every((node, index) => node === repeatedNodes[index]) &&
         snapshots.get('reordered')?.rules[0] ===
           snapshots.get('repeated')?.rules[0]
