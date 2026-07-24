@@ -173,8 +173,9 @@ test('real routes preserve application, conflict, review, replacement, and owner
   })
   const detailText = await ownerDetail.text()
   expect(detailText).not.toContain('download_url')
-  for (const sentinel of forbiddenSentinels.slice(0, 2))
+  for (const sentinel of forbiddenSentinels.slice(0, 2)) {
     expect(detailText).not.toContain(sentinel)
+  }
 
   const audit = await request.get(`/__invoice-live/audit/${chainedId}`)
   expect(await audit.json()).toEqual({
