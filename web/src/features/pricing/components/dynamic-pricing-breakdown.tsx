@@ -158,7 +158,7 @@ function describeGroup(
     .join(' && ')
 }
 
-export type DynamicPricingBreakdownPlan = StablePricingPlan & {
+type DynamicPricingBreakdownPlan = StablePricingPlan & {
   tiers: ParsedTier[]
   ruleGroups: RequestRuleGroup[]
 }

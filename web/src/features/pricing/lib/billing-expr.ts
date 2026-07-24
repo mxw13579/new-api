@@ -685,11 +685,6 @@ export function normalizeCondition(
   }
 }
 
-/** Returns a stable identity for pricing rows whose domain format has no ID. */
-export function getPricingItemIdentity(value: unknown): string {
-  return JSON.stringify(value)
-}
-
 // ---------------------------------------------------------------------------
 // Editor: build expression strings
 // ---------------------------------------------------------------------------
