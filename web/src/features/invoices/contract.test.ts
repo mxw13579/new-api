@@ -293,7 +293,7 @@ describe('invoice frontend contract', () => {
     assert.doesNotMatch(source, /demo-api|fixture|fallback/i)
   })
 
-  test('query keys expose precise user, admin, and settings list prefixes', () => {
+  test('query keys expose precise user list prefixes', () => {
     assert.deepEqual(invoiceQueryKeys.eligibleOrdersList(), [
       'invoices',
       'eligible-orders',
@@ -302,11 +302,5 @@ describe('invoice frontend contract', () => {
       'invoices',
       'applications',
     ])
-    assert.deepEqual(invoiceQueryKeys.adminApplicationsList(), [
-      'invoices',
-      'admin',
-      'applications',
-    ])
-    assert.deepEqual(invoiceQueryKeys.settings(), ['invoices', 'settings'])
   })
 })

@@ -22,9 +22,12 @@ import type { QueryClient } from '@tanstack/react-query'
 
 import {
   createInvoiceDraftIdentity,
+  createInvoiceOrderSelection,
+  getInvoiceOrderSelectionSummary,
   invalidateUserInvoiceMutationQueries,
   invoicePageCount,
   isInvoiceProfileEnabled,
+  updateInvoiceOrderSelection,
   shouldPollInvoiceApplication,
 } from './user-workspace'
 
@@ -40,6 +43,37 @@ describe('invoice user workspace behavior', () => {
 
     identity.reset()
     expect(identity.forDraft('profile:1:orders:11')).toBe('request-3')
+  })
+
+  it('keeps cross-page amount validation and submitted ids on one selection', () => {
+    let selection = createInvoiceOrderSelection()
+    selection = updateInvoiceOrderSelection(
+      selection,
+      { topup_id: 11, paid_amount_minor: 600 },
+      true
+    )
+    selection = updateInvoiceOrderSelection(
+      selection,
+      { topup_id: 22, paid_amount_minor: 500 },
+      true
+    )
+
+    expect(getInvoiceOrderSelectionSummary(selection, 1_000)).toEqual({
+      topupIds: [11, 22],
+      amountMinor: 1_100,
+      minimumReached: true,
+    })
+
+    selection = updateInvoiceOrderSelection(
+      selection,
+      { topup_id: 11, paid_amount_minor: 600 },
+      false
+    )
+    expect(getInvoiceOrderSelectionSummary(selection, 1_000)).toEqual({
+      topupIds: [22],
+      amountMinor: 500,
+      minimumReached: false,
+    })
   })
 
   it('invalidates all user lists, the affected detail, and self quota', async () => {

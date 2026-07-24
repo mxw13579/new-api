@@ -22,6 +22,7 @@ import { invalidateSelfQuotaQuery } from '@/features/dashboard/hooks/use-self-qu
 
 import { invoiceQueryKeys } from './queries'
 import type {
+  EligibleInvoiceOrder,
   InvoiceApplicationStatus,
   InvoiceDocumentStatus,
   InvoiceType,
@@ -30,6 +31,48 @@ import type {
 interface DraftIdentity {
   forDraft(fingerprint: string): string
   reset(): void
+}
+
+export type InvoiceOrderSelection = ReadonlyMap<number, number>
+
+interface InvoiceOrderSelectionSummary {
+  topupIds: number[]
+  amountMinor: number
+  minimumReached: boolean
+}
+
+/** Creates an empty selection that retains amounts across order pages. */
+export function createInvoiceOrderSelection(): InvoiceOrderSelection {
+  return new Map()
+}
+
+/** Adds or removes one complete order from the invoice draft selection. */
+export function updateInvoiceOrderSelection(
+  selection: InvoiceOrderSelection,
+  order: Pick<EligibleInvoiceOrder, 'topup_id' | 'paid_amount_minor'>,
+  selected: boolean
+): InvoiceOrderSelection {
+  const next = new Map(selection)
+  if (selected) next.set(order.topup_id, order.paid_amount_minor)
+  else next.delete(order.topup_id)
+  return next
+}
+
+/** Derives display, validation, and submission values from one selection. */
+export function getInvoiceOrderSelectionSummary(
+  selection: InvoiceOrderSelection,
+  minimumAmountMinor: number
+): InvoiceOrderSelectionSummary {
+  const topupIds = [...selection.keys()].sort((left, right) => left - right)
+  const amountMinor = [...selection.values()].reduce(
+    (total, amount) => total + amount,
+    0
+  )
+  return {
+    topupIds,
+    amountMinor,
+    minimumReached: amountMinor >= minimumAmountMinor,
+  }
 }
 
 /** Keeps one idempotency key until the user changes or resets a draft. */

@@ -16,10 +16,6 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useQuery } from '@tanstack/react-query'
-
-import type { InvoiceApi } from './types'
-
 /** Provides hierarchical query keys for invoice-domain cache entries. */
 export const invoiceQueryKeys = {
   all: ['invoices'] as const,
@@ -34,38 +30,4 @@ export const invoiceQueryKeys = {
     [...invoiceQueryKeys.applicationsList(), page, pageSize] as const,
   application: (applicationId: number) =>
     [...invoiceQueryKeys.all, 'application', applicationId] as const,
-  adminApplicationsList: () =>
-    [...invoiceQueryKeys.all, 'admin', 'applications'] as const,
-  adminApplications: (page: number, pageSize: number) =>
-    [...invoiceQueryKeys.adminApplicationsList(), page, pageSize] as const,
-  adminApplication: (applicationId: number) =>
-    [...invoiceQueryKeys.all, 'admin', 'application', applicationId] as const,
-  settings: () => [...invoiceQueryKeys.all, 'settings'] as const,
-}
-
-/**
- * Loads the independent invoice landing-page resources in parallel.
- *
- * @param invoiceApi - Invoice data source used by each query.
- * @returns React Query results for policy, profiles, orders, and applications.
- */
-export function useInvoiceQueries(invoiceApi: InvoiceApi) {
-  const configQuery = useQuery({
-    queryKey: invoiceQueryKeys.config(),
-    queryFn: () => invoiceApi.getConfig(),
-  })
-  const profilesQuery = useQuery({
-    queryKey: invoiceQueryKeys.profiles(),
-    queryFn: () => invoiceApi.listProfiles(),
-  })
-  const ordersQuery = useQuery({
-    queryKey: invoiceQueryKeys.eligibleOrders(1, 100),
-    queryFn: () => invoiceApi.listEligibleOrders({ page: 1, page_size: 100 }),
-  })
-  const applicationsQuery = useQuery({
-    queryKey: invoiceQueryKeys.applications(1, 50),
-    queryFn: () => invoiceApi.listApplications({ page: 1, page_size: 50 }),
-  })
-
-  return { configQuery, profilesQuery, ordersQuery, applicationsQuery }
 }

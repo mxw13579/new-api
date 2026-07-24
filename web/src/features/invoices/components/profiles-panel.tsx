@@ -16,13 +16,6 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import {
-  AddInvoiceIcon,
-  Delete02Icon,
-  PencilEdit02Icon,
-  UserAccountIcon,
-} from '@hugeicons/core-free-icons'
-import { HugeiconsIcon } from '@hugeicons/react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -39,41 +32,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import {
-  Card,
-  CardAction,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from '@/components/ui/card'
-import { Checkbox } from '@/components/ui/checkbox'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog'
-import {
-  Empty,
-  EmptyDescription,
-  EmptyHeader,
-  EmptyMedia,
-  EmptyTitle,
-} from '@/components/ui/empty'
-import {
-  Field,
-  FieldDescription,
-  FieldGroup,
-  FieldLabel,
-} from '@/components/ui/field'
-import { Input } from '@/components/ui/input'
-import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
 
@@ -86,7 +45,8 @@ import type {
   InvoiceProfile,
   InvoiceType,
 } from '../types'
-import { isInvoiceProfileEnabled } from '../user-workspace'
+import { ProfileEditor } from './profile-editor'
+import { ProfileList } from './profile-list'
 
 interface ProfilesPanelProps {
   invoiceApi: InvoiceApi
@@ -218,255 +178,45 @@ export function ProfilesPanel(props: ProfilesPanelProps) {
   const profiles = props.profiles || []
   return (
     <>
-      <div className='mb-4 flex items-center justify-between gap-3'>
-        <div>
-          <h2 className='text-lg font-semibold'>{t('Invoice profiles')}</h2>
-          <p className='text-muted-foreground text-sm'>
-            {t(
-              'Manage personal and company invoice identities with version checks.'
-            )}
-          </p>
-        </div>
-        <Button
-          disabled={
-            !props.config ||
-            (!props.config.personal_enabled && !props.config.company_enabled)
-          }
-          onClick={() => {
-            setDraft({
-              ...EMPTY_PROFILE_DRAFT,
-              type:
-                props.config && !props.config.personal_enabled
-                  ? 'company'
-                  : 'personal',
-            })
-            setDialogOpen(true)
-          }}
-        >
-          <HugeiconsIcon
-            icon={AddInvoiceIcon}
-            strokeWidth={2}
-            data-icon='inline-start'
-          />
-          {t('Add invoice profile')}
-        </Button>
-      </div>
+      <ProfileList
+        profiles={profiles}
+        config={props.config}
+        deletingProfileId={
+          deleteMutation.isPending ? deleteMutation.variables?.id : undefined
+        }
+        onAdd={() => {
+          setDraft({
+            ...EMPTY_PROFILE_DRAFT,
+            type:
+              props.config && !props.config.personal_enabled
+                ? 'company'
+                : 'personal',
+          })
+          setDialogOpen(true)
+        }}
+        onEdit={(profile) => {
+          setDraft({
+            id: profile.id,
+            type: profile.type,
+            title: profile.title,
+            taxNumber: profile.tax_number,
+            isDefault: profile.is_default,
+            version: profile.version,
+          })
+          setDialogOpen(true)
+        }}
+        onDelete={setDeleteTarget}
+      />
 
-      {profiles.length === 0 ? (
-        <Empty className='border'>
-          <EmptyHeader>
-            <EmptyMedia variant='icon'>
-              <HugeiconsIcon icon={UserAccountIcon} strokeWidth={2} />
-            </EmptyMedia>
-            <EmptyTitle>{t('No invoice profiles')}</EmptyTitle>
-            <EmptyDescription>
-              {t('Create a profile before applying for an invoice.')}
-            </EmptyDescription>
-          </EmptyHeader>
-        </Empty>
-      ) : (
-        <div className='grid gap-4 md:grid-cols-2'>
-          {profiles.map((profile) => (
-            <Card key={profile.id}>
-              <CardHeader>
-                <CardTitle>{profile.title}</CardTitle>
-                <CardDescription>
-                  {profile.type === 'personal'
-                    ? t('Personal invoice profile')
-                    : t('Company invoice profile')}
-                </CardDescription>
-                <CardAction className='flex gap-1'>
-                  {profile.is_default ? <Badge>{t('Default')}</Badge> : null}
-                  {props.config &&
-                  !isInvoiceProfileEnabled(props.config, profile.type) ? (
-                    <Badge variant='secondary'>
-                      {t('Disabled for new applications')}
-                    </Badge>
-                  ) : null}
-                  <Badge variant='outline'>v{profile.version}</Badge>
-                </CardAction>
-              </CardHeader>
-              <CardContent>
-                {profile.type === 'company' ? (
-                  <p className='text-muted-foreground text-sm'>
-                    {t('Tax number')}: {profile.tax_number}
-                  </p>
-                ) : (
-                  <p className='text-muted-foreground text-sm'>
-                    {t('Personal profiles do not include a tax number.')}
-                  </p>
-                )}
-              </CardContent>
-              <CardFooter className='justify-end gap-2'>
-                <Button
-                  variant='outline'
-                  onClick={() => {
-                    setDraft({
-                      id: profile.id,
-                      type: profile.type,
-                      title: profile.title,
-                      taxNumber: profile.tax_number,
-                      isDefault: profile.is_default,
-                      version: profile.version,
-                    })
-                    setDialogOpen(true)
-                  }}
-                >
-                  <HugeiconsIcon
-                    icon={PencilEdit02Icon}
-                    strokeWidth={2}
-                    data-icon='inline-start'
-                  />
-                  {t('Edit')}
-                </Button>
-                <Button
-                  variant='destructive'
-                  disabled={
-                    deleteMutation.isPending &&
-                    deleteMutation.variables?.id === profile.id
-                  }
-                  onClick={() => setDeleteTarget(profile)}
-                >
-                  <HugeiconsIcon
-                    icon={Delete02Icon}
-                    strokeWidth={2}
-                    data-icon='inline-start'
-                  />
-                  {t('Delete')}
-                </Button>
-              </CardFooter>
-            </Card>
-          ))}
-        </div>
-      )}
-
-      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>
-              {draft.id === null
-                ? t('Add invoice profile')
-                : t('Edit invoice profile')}
-            </DialogTitle>
-            <DialogDescription>
-              {draft.id === null
-                ? t('Create a personal or company invoice identity.')
-                : t('Saving requires the current profile version.')}
-            </DialogDescription>
-          </DialogHeader>
-          <FieldGroup>
-            <Field data-disabled={draft.id !== null || undefined}>
-              <FieldLabel htmlFor='invoice-profile-type'>
-                {t('Profile type')}
-              </FieldLabel>
-              <NativeSelect
-                id='invoice-profile-type'
-                className='w-full'
-                value={draft.type}
-                disabled={draft.id !== null}
-                onChange={(event) =>
-                  setDraft((current) => ({
-                    ...current,
-                    type: event.target.value as InvoiceType,
-                    taxNumber:
-                      event.target.value === 'personal'
-                        ? ''
-                        : current.taxNumber,
-                  }))
-                }
-              >
-                <NativeSelectOption
-                  value='personal'
-                  disabled={
-                    draft.id === null &&
-                    !!props.config &&
-                    !props.config.personal_enabled
-                  }
-                >
-                  {t('Personal')}
-                </NativeSelectOption>
-                <NativeSelectOption
-                  value='company'
-                  disabled={
-                    draft.id === null &&
-                    !!props.config &&
-                    !props.config.company_enabled
-                  }
-                >
-                  {t('Company')}
-                </NativeSelectOption>
-              </NativeSelect>
-            </Field>
-            <Field>
-              <FieldLabel htmlFor='invoice-profile-title'>
-                {draft.type === 'personal' ? t('Full name') : t('Company name')}
-              </FieldLabel>
-              <Input
-                id='invoice-profile-title'
-                value={draft.title}
-                onChange={(event) =>
-                  setDraft((current) => ({
-                    ...current,
-                    title: event.target.value,
-                  }))
-                }
-              />
-            </Field>
-            {draft.type === 'company' ? (
-              <Field>
-                <FieldLabel htmlFor='invoice-profile-tax-number'>
-                  {t('Tax number')}
-                </FieldLabel>
-                <Input
-                  id='invoice-profile-tax-number'
-                  value={draft.taxNumber}
-                  onChange={(event) =>
-                    setDraft((current) => ({
-                      ...current,
-                      taxNumber: event.target.value,
-                    }))
-                  }
-                />
-              </Field>
-            ) : null}
-            <Field orientation='horizontal'>
-              <Checkbox
-                id='invoice-profile-default'
-                checked={draft.isDefault}
-                onCheckedChange={(checked) =>
-                  setDraft((current) => ({ ...current, isDefault: checked }))
-                }
-              />
-              <div>
-                <FieldLabel htmlFor='invoice-profile-default'>
-                  {t('Set as default')}
-                </FieldLabel>
-                <FieldDescription>
-                  {t('Default is maintained separately for each profile type.')}
-                </FieldDescription>
-              </div>
-            </Field>
-          </FieldGroup>
-          <DialogFooter>
-            <Button variant='outline' onClick={() => setDialogOpen(false)}>
-              {t('Cancel')}
-            </Button>
-            <Button
-              disabled={
-                saveMutation.isPending ||
-                !draft.title.trim() ||
-                (draft.type === 'company' && !draft.taxNumber.trim())
-              }
-              onClick={() => saveMutation.mutate()}
-            >
-              {saveMutation.isPending ? (
-                <Spinner data-icon='inline-start' />
-              ) : null}
-              {t('Save')}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <ProfileEditor
+        open={dialogOpen}
+        onOpenChange={setDialogOpen}
+        draft={draft}
+        setDraft={setDraft}
+        config={props.config}
+        saving={saveMutation.isPending}
+        onSave={() => saveMutation.mutate()}
+      />
 
       <AlertDialog
         open={deleteTarget !== null}
