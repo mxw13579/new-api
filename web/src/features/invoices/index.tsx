@@ -31,7 +31,8 @@ import { ApplicationPanel } from './components/application-panel'
 import { HistoryPanel } from './components/history-panel'
 import { ProfilesPanel } from './components/profiles-panel'
 import { invoiceApi } from './production-api'
-import { invoiceQueryKeys } from './queries'
+import { invoiceQueryKeys, redactInvoiceProfilesForCache } from './queries'
+import type { InvoiceProfile } from './types'
 import { shouldPollInvoiceApplication } from './user-workspace'
 
 const USER_PAGE_SIZE = 20
@@ -41,13 +42,20 @@ export function Invoices() {
   const { t } = useTranslation()
   const [ordersPage, setOrdersPage] = useState(1)
   const [applicationsPage, setApplicationsPage] = useState(1)
+  const [profileDetails, setProfileDetails] = useState<InvoiceProfile[]>()
   const configQuery = useQuery({
     queryKey: invoiceQueryKeys.config(),
     queryFn: () => invoiceApi.getConfig(),
   })
   const profilesQuery = useQuery({
     queryKey: invoiceQueryKeys.profiles(),
-    queryFn: () => invoiceApi.listProfiles(),
+    queryFn: async () => {
+      const profiles = await invoiceApi.listProfiles()
+      setProfileDetails(profiles)
+      return redactInvoiceProfilesForCache(profiles)
+    },
+    staleTime: 0,
+    refetchOnMount: 'always',
   })
   const ordersQuery = useQuery({
     queryKey: invoiceQueryKeys.eligibleOrders(ordersPage, USER_PAGE_SIZE),
@@ -115,8 +123,10 @@ export function Invoices() {
               <ApplicationPanel
                 invoiceApi={invoiceApi}
                 config={configQuery.data}
-                profiles={profilesQuery.data}
-                profilesLoading={profilesQuery.isLoading}
+                profiles={profileDetails}
+                profilesLoading={
+                  profileDetails === undefined && profilesQuery.isFetching
+                }
                 profilesError={profilesQuery.isError}
                 retryProfiles={() => profilesQuery.refetch()}
                 ordersPage={ordersQuery.data}
@@ -136,8 +146,10 @@ export function Invoices() {
             <TabsContent value='profiles'>
               <ProfilesPanel
                 invoiceApi={invoiceApi}
-                profiles={profilesQuery.data}
-                loading={profilesQuery.isLoading}
+                profiles={profileDetails}
+                loading={
+                  profileDetails === undefined && profilesQuery.isFetching
+                }
                 error={profilesQuery.isError}
                 retry={() => profilesQuery.refetch()}
                 config={configQuery.data}

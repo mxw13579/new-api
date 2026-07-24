@@ -18,6 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 /* oxlint-disable eslint/no-nested-ternary */
 import { useQuery } from '@tanstack/react-query'
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -33,8 +34,11 @@ import {
 import { Skeleton } from '@/components/ui/skeleton'
 
 import { formatInvoiceAmount } from '../contract'
-import { invoiceQueryKeys } from '../queries'
-import type { InvoiceApi } from '../types'
+import {
+  invoiceQueryKeys,
+  redactInvoiceApplicationDetailForCache,
+} from '../queries'
+import type { InvoiceApi, InvoiceApplicationDetail } from '../types'
 import { shouldPollInvoiceApplication } from '../user-workspace'
 import { InvoiceStatusBadges } from './status-badges'
 
@@ -48,11 +52,16 @@ interface ApplicationDetailProps {
 export function ApplicationDetail(props: ApplicationDetailProps) {
   const { t } = useTranslation()
   const applicationId = props.applicationId
+  const [displayDetail, setDisplayDetail] = useState<
+    InvoiceApplicationDetail | undefined
+  >()
   const detailQuery = useQuery({
     queryKey: invoiceQueryKeys.application(applicationId ?? 0),
-    queryFn: () => {
+    queryFn: async () => {
       if (applicationId === null) throw new Error('application-id-required')
-      return props.invoiceApi.getApplication(applicationId)
+      const detail = await props.invoiceApi.getApplication(applicationId)
+      setDisplayDetail(detail)
+      return redactInvoiceApplicationDetailForCache(detail)
     },
     enabled: applicationId !== null,
     refetchInterval: (query) =>
@@ -61,8 +70,10 @@ export function ApplicationDetail(props: ApplicationDetailProps) {
         : false,
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: 'always',
+    staleTime: 0,
   })
-  const detail = detailQuery.data
+  const detail = displayDetail?.id === applicationId ? displayDetail : undefined
+  const detailLoading = detail === undefined && detailQuery.isFetching
 
   return (
     <Sheet open={applicationId !== null} onOpenChange={props.onOpenChange}>
@@ -82,7 +93,7 @@ export function ApplicationDetail(props: ApplicationDetailProps) {
           </Button>
         </SheetHeader>
         <div className='space-y-5 px-4 pb-6'>
-          {detailQuery.isLoading ? (
+          {detailLoading ? (
             <>
               <Skeleton className='h-24 w-full' />
               <Skeleton className='h-48 w-full' />

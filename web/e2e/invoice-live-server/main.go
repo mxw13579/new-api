@@ -31,12 +31,13 @@ import (
 )
 
 const (
-	liveAuthority   = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
-	liveBucket      = "invoice-live-private"
-	ownerToken      = "invoice-live-owner-token-00000001"
-	otherToken      = "invoice-live-other-token-00000002"
-	reviewerToken   = "invoice-live-review-token-0000003"
-	restrictedToken = "invoice-live-denied-token-0000004"
+	liveAuthority    = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+	liveBucket       = "invoice-live-private"
+	ownerToken       = "invoice-live-owner-token-00000001"
+	mobileOwnerToken = "invoice-live-mobile-token-00000005"
+	otherToken       = "invoice-live-other-token-00000002"
+	reviewerToken    = "invoice-live-review-token-0000003"
+	restrictedToken  = "invoice-live-denied-token-0000004"
 )
 
 var livePDF = buildLivePDF()
@@ -50,6 +51,12 @@ var newInvoiceUploadStore func() (service.InvoiceObjectStore, error)
 type liveObjectStore struct {
 	mu      sync.Mutex
 	objects map[string][]byte
+}
+
+func (store *liveObjectStore) putRaw(key string, value []byte) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	store.objects[key] = append([]byte(nil), value...)
 }
 
 func (*liveObjectStore) AuthorityID() string { return liveAuthority }
@@ -138,6 +145,28 @@ func main() {
 	gin.SetMode(gin.ReleaseMode)
 	engine := gin.New()
 	engine.Use(gin.Recovery())
+	engine.Use(func(c *gin.Context) {
+		if c.Request.URL.Path != "/api/user/auth/refresh" {
+			c.Next()
+			return
+		}
+		token := strings.TrimPrefix(c.GetHeader("Authorization"), "Bearer ")
+		if token != ownerToken {
+			c.Next()
+			return
+		}
+		var user model.User
+		if err := model.DB.Where("username = ?", "invoice-live-owner").First(&user).Error; err != nil {
+			c.AbortWithStatus(http.StatusUnauthorized)
+			return
+		}
+		now := time.Now().Unix()
+		c.AbortWithStatusJSON(http.StatusOK, gin.H{"success": true, "message": "", "data": gin.H{
+			"access_token": token, "token_type": "Bearer", "access_expires_at": now + 3600,
+			"user":    gin.H{"id": user.Id, "username": user.Username, "role": user.Role, "status": user.Status, "group": user.Group, "quota": user.Quota, "permissions": gin.H{"sidebar_settings": false}},
+			"session": gin.H{"sid": "invoice-live-browser", "current": true, "login_method": "live", "ip": "127.0.0.1", "user_agent": "playwright", "created_at": now - 60, "last_active_at": now, "expires_at": now + 3600},
+		}})
+	})
 	router.SetApiRouter(engine)
 	engine.GET("/__invoice-live/audit/:id", func(c *gin.Context) {
 		applicationID, err := strconv.ParseInt(c.Param("id"), 10, 64)
@@ -152,11 +181,14 @@ func main() {
 			where string
 			args  []any
 		}{
+			{"applications", &model.InvoiceApplication{}, "id = ?", []any{applicationID}},
 			{"items", &model.InvoiceItem{}, "application_id = ?", []any{applicationID}},
 			{"issuances", &model.InvoiceIssuance{}, "application_id = ?", []any{applicationID}},
 			{"documents", &model.InvoiceDocument{}, "application_id = ?", []any{applicationID}},
 			{"available_documents", &model.InvoiceDocument{}, "application_id = ? AND status = ?", []any{applicationID, model.InvoiceDocumentStatusAvailable}},
 			{"superseded_documents", &model.InvoiceDocument{}, "application_id = ? AND status = ?", []any{applicationID, model.InvoiceDocumentStatusSuperseded}},
+			{"deleted_documents", &model.InvoiceDocument{}, "application_id = ? AND status = ?", []any{applicationID, model.InvoiceDocumentStatusDeleted}},
+			{"upload_failed_documents", &model.InvoiceDocument{}, "application_id = ? AND status = ?", []any{applicationID, model.InvoiceDocumentStatusUploadFailed}},
 			{"fee_charges", &model.InvoiceFeeLedgerEntry{}, "application_id = ? AND entry_type = ?", []any{applicationID, model.InvoiceFeeEntryTypeCharge}},
 		}
 		for _, query := range queries {
@@ -167,7 +199,64 @@ func main() {
 			}
 			counts[query.name] = count
 		}
-		c.JSON(http.StatusOK, counts)
+		var charge model.InvoiceFeeLedgerEntry
+		if err := model.DB.Where("application_id = ? AND entry_type = ?", applicationID, model.InvoiceFeeEntryTypeCharge).First(&charge).Error; err != nil {
+			c.Status(http.StatusInternalServerError)
+			return
+		}
+		result := gin.H{}
+		for name, count := range counts {
+			result[name] = count
+		}
+		result["fee_charge_quota"] = charge.Quota
+		result["fee_charge_status"] = charge.Status
+		result["fee_charge_balance_before"] = charge.BalanceBefore
+		result["fee_charge_balance_after"] = charge.BalanceAfter
+		c.JSON(http.StatusOK, result)
+	})
+	engine.POST("/__invoice-live/converge/:id", func(c *gin.Context) {
+		applicationID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+		if err != nil {
+			c.Status(http.StatusBadRequest)
+			return
+		}
+		now := time.Now().Unix()
+		var application model.InvoiceApplication
+		if err := model.DB.First(&application, applicationID).Error; err != nil || application.ActiveDocumentID == nil {
+			c.Status(http.StatusNotFound)
+			return
+		}
+		if err := model.DB.Model(&model.InvoiceDocument{}).Where("id = ?", *application.ActiveDocumentID).Update("expires_at", now-1).Error; err != nil {
+			c.Status(http.StatusInternalServerError)
+			return
+		}
+		objectKey := fmt.Sprintf("invoices/live/recovery-%d.pdf", applicationID)
+		stagingKey := fmt.Sprintf("tmp/invoices/live/recovery-%d.pdf", applicationID)
+		store.putRaw(objectKey, livePDF)
+		store.putRaw(stagingKey, livePDF)
+		digest := sha256.Sum256(livePDF)
+		recovery := model.InvoiceDocument{
+			ApplicationID: applicationID, R2AuthorityID: stringPointer(liveAuthority), R2Bucket: liveBucket,
+			ObjectKey: &objectKey, StagingObjectKey: &stagingKey, ContentType: model.InvoicePDFContentType,
+			SizeBytes: int64(len(livePDF)), SHA256: fmt.Sprintf("%x", digest[:]), Status: model.InvoiceDocumentStatusValidating,
+			OperationToken: strings.Repeat("c", 64), OperationStartedAt: now - 1000, UploadedBy: 1,
+			UploadedAt: now - 1000, CreatedAt: now - 1000, UpdatedAt: now - 1000,
+		}
+		if err := model.DB.Create(&recovery).Error; err != nil {
+			c.Status(http.StatusInternalServerError)
+			return
+		}
+		reconciled, err := service.ReconcileStaleInvoiceDocuments(c.Request.Context(), model.DB, store, now, now-500, 10)
+		if err != nil {
+			c.Status(http.StatusInternalServerError)
+			return
+		}
+		cleanup, err := service.CleanupInvoiceDocuments(c.Request.Context(), model.DB, store, now, now-500, 10)
+		if err != nil {
+			c.Status(http.StatusInternalServerError)
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"reconciled": reconciled, "cleanup_processed": cleanup.Processed, "cleanup_deleted": cleanup.Deleted, "cleanup_failed": cleanup.Failed})
 	})
 	engine.NoRoute(func(c *gin.Context) {
 		path := filepath.Clean(filepath.Join("web", "dist", filepath.FromSlash(strings.TrimPrefix(c.Request.URL.Path, "/"))))
@@ -201,28 +290,16 @@ func seedLiveFixture() {
 		{Username: "invoice-live-other", Password: "unused", AccessToken: stringPointer(otherToken), Role: common.RoleCommonUser, Status: common.UserStatusEnabled, Group: "default", AffCode: "live-other-aff"},
 		{Username: "invoice-live-reviewer", Password: "unused", AccessToken: stringPointer(reviewerToken), Role: common.RoleAdminUser, Status: common.UserStatusEnabled, Group: "default", AffCode: "live-review-aff"},
 		{Username: "invoice-live-restricted", Password: "unused", AccessToken: stringPointer(restrictedToken), Role: common.RoleAdminUser, Status: common.UserStatusEnabled, Group: "default", AffCode: "live-denied-aff"},
+		{Username: "invoice-live-mobile", Password: "unused", AccessToken: stringPointer(mobileOwnerToken), Role: common.RoleCommonUser, Status: common.UserStatusEnabled, Group: "default", AffCode: "live-mobile-aff", Quota: 100},
+		{Username: "invoice-live-root", Password: "unused", Role: common.RoleRootUser, Status: common.UserStatusEnabled, Group: "default", AffCode: "live-root-aff"},
 	}
 	for index := range users {
 		if err := model.DB.Create(&users[index]).Error; err != nil {
 			panic(err)
 		}
 	}
-	profile := model.InvoiceProfile{UserID: users[0].Id, Type: constant.InvoiceTypeCompany, Title: "Live Fixture Co", TaxNumber: "91310000PRIVATE", IsDefault: true, Version: 1, CreatedAt: nowUnix(), UpdatedAt: nowUnix()}
-	if err := model.DB.Create(&profile).Error; err != nil {
-		panic(err)
-	}
-	providerTradeNo := "invoice-live-provider-trade"
-	_, providerTradeKey, err := model.NormalizeEpayProviderTradeIdentity(providerTradeNo)
-	if err != nil {
-		panic(err)
-	}
-	amount, eligible, refunded, version := int64(12345), true, int64(0), int64(1)
-	currency, state := constant.InvoicePaymentEvidenceCurrencyCNY, constant.InvoicePaymentStateSucceeded
-	product, source := constant.InvoicePaymentEvidenceTopUpProduct, constant.InvoicePaymentEvidenceSourceTrustedCallback
-	topup := model.TopUp{Id: 7001, UserId: users[0].Id, Amount: 10, Money: 123.45, TradeNo: "invoice-live-topup", PaymentMethod: "alipay", PaymentProvider: model.PaymentProviderEpay, CompleteTime: nowUnix(), Status: common.TopUpStatusSuccess, PaidAmountMinor: &amount, Currency: &currency, InvoiceEligible: &eligible, PaymentState: &state, RefundedAmountMinor: &refunded, PaymentVersion: &version, ProductSnapshot: &product, PaymentEvidenceSource: &source, PaymentProviderTradeNo: &providerTradeNo, PaymentProviderTradeKey: &providerTradeKey}
-	if err := model.DB.Create(&topup).Error; err != nil {
-		panic(err)
-	}
+	seedChainFixture(users[0].Id, 7001, "desktop")
+	seedChainFixture(users[4].Id, 7002, "mobile")
 	if err := authz.SetUserPermissions(users[3].Id, authz.PermissionsMap{authz.ResourceInvoice: {authz.ActionInvoiceReview: false}}); err != nil {
 		panic(err)
 	}
@@ -250,6 +327,25 @@ func seedLiveFixture() {
 		panic(err)
 	}
 	if err := model.DB.Model(&application).Update("active_document_id", document.ID).Error; err != nil {
+		panic(err)
+	}
+}
+
+func seedChainFixture(userID, topupID int, suffix string) {
+	profile := model.InvoiceProfile{UserID: userID, Type: constant.InvoiceTypeCompany, Title: "Live Fixture Co", TaxNumber: "91310000PRIVATE", IsDefault: true, Version: 1, CreatedAt: nowUnix(), UpdatedAt: nowUnix()}
+	if err := model.DB.Create(&profile).Error; err != nil {
+		panic(err)
+	}
+	providerTradeNo := "invoice-live-provider-trade-" + suffix
+	_, providerTradeKey, err := model.NormalizeEpayProviderTradeIdentity(providerTradeNo)
+	if err != nil {
+		panic(err)
+	}
+	amount, eligible, refunded, version := int64(12345), true, int64(0), int64(1)
+	currency, state := constant.InvoicePaymentEvidenceCurrencyCNY, constant.InvoicePaymentStateSucceeded
+	product, source := constant.InvoicePaymentEvidenceTopUpProduct, constant.InvoicePaymentEvidenceSourceTrustedCallback
+	topup := model.TopUp{Id: topupID, UserId: userID, Amount: 10, Money: 123.45, TradeNo: "invoice-live-topup-" + suffix, PaymentMethod: "alipay", PaymentProvider: model.PaymentProviderEpay, CompleteTime: nowUnix(), Status: common.TopUpStatusSuccess, PaidAmountMinor: &amount, Currency: &currency, InvoiceEligible: &eligible, PaymentState: &state, RefundedAmountMinor: &refunded, PaymentVersion: &version, ProductSnapshot: &product, PaymentEvidenceSource: &source, PaymentProviderTradeNo: &providerTradeNo, PaymentProviderTradeKey: &providerTradeKey}
+	if err := model.DB.Create(&topup).Error; err != nil {
 		panic(err)
 	}
 }

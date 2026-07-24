@@ -11,6 +11,7 @@ import { expect, test } from '@playwright/test'
 const applicationId = 1
 const tokens = {
   owner: 'invoice-live-owner-token-00000001',
+  mobileOwner: 'invoice-live-mobile-token-00000005',
   other: 'invoice-live-other-token-00000002',
   reviewer: 'invoice-live-review-token-0000003',
   restricted: 'invoice-live-denied-token-0000004',
@@ -72,12 +73,16 @@ test('restricted admin is no-store 403 and ordinary reviewer sees masked identit
 test('real routes preserve application, conflict, review, replacement, and owner download contracts', async ({
   request,
 }, testInfo) => {
-  test.skip(
-    testInfo.project.name !== 'desktop-chromium',
-    'the stateful real-route chain runs once against the shared live server'
-  )
-  const ownerHeaders = { Authorization: `Bearer ${tokens.owner}` }
+  const mobile = testInfo.project.name === 'mobile-chromium'
+  const ownerToken = mobile ? tokens.mobileOwner : tokens.owner
+  const topupId = mobile ? 7002 : 7001
+  const scenario = mobile ? 'mobile' : 'desktop'
+  const ownerHeaders = { Authorization: `Bearer ${ownerToken}` }
   const adminHeaders = { Authorization: `Bearer ${tokens.reviewer}` }
+  const quotaBeforeResponse = await request.get('/api/user/self/quota', {
+    headers: ownerHeaders,
+  })
+  const quotaBefore = (await quotaBeforeResponse.json()).data.quota as number
   const profilesResponse = await request.get('/api/user/invoice/profiles', {
     headers: ownerHeaders,
   })
@@ -88,10 +93,10 @@ test('real routes preserve application, conflict, review, replacement, and owner
   const applicationResponse = await request.post('/api/user/invoices', {
     headers: ownerHeaders,
     data: {
-      request_id: 'invoice-live-chain',
+      request_id: `invoice-live-chain-${scenario}`,
       profile_id: profile.id,
       profile_version: profile.version,
-      topup_ids: [7001],
+      topup_ids: [topupId],
     },
   })
   expect(applicationResponse.status()).toBe(201)
@@ -104,10 +109,10 @@ test('real routes preserve application, conflict, review, replacement, and owner
   const conflict = await request.post('/api/user/invoices', {
     headers: ownerHeaders,
     data: {
-      request_id: 'invoice-live-chain',
+      request_id: `invoice-live-chain-${scenario}`,
       profile_id: profile.id,
       profile_version: profile.version + 1,
-      topup_ids: [7001],
+      topup_ids: [topupId],
     },
   })
   expect(conflict.status()).toBe(409)
@@ -125,7 +130,7 @@ test('real routes preserve application, conflict, review, replacement, and owner
   }
 
   const facts = {
-    invoice_number: 'INV-LIVE-CHAIN',
+    invoice_number: `INV-LIVE-CHAIN-${scenario.toUpperCase()}`,
     invoice_code: 'LIVE',
     invoice_date: '1900000000',
     face_amount_minor: '12345',
@@ -168,6 +173,11 @@ test('real routes preserve application, conflict, review, replacement, and owner
   expect((await ownerDownload.body()).subarray(0, 8).toString()).toBe(
     '%PDF-1.7'
   )
+  const quotaAfterResponse = await request.get('/api/user/self/quota', {
+    headers: ownerHeaders,
+  })
+  const quotaAfter = (await quotaAfterResponse.json()).data.quota as number
+  expect(quotaBefore - quotaAfter).toBe(10)
   const ownerDetail = await request.get(`/api/user/invoices/${chainedId}`, {
     headers: ownerHeaders,
   })
@@ -177,14 +187,31 @@ test('real routes preserve application, conflict, review, replacement, and owner
     expect(detailText).not.toContain(sentinel)
   }
 
+  const convergence = await request.post(
+    `/__invoice-live/converge/${chainedId}`
+  )
+  expect(convergence.status()).toBe(200)
+  expect(await convergence.json()).toEqual({
+    reconciled: 1,
+    cleanup_processed: 2,
+    cleanup_deleted: 2,
+    cleanup_failed: 0,
+  })
   const audit = await request.get(`/__invoice-live/audit/${chainedId}`)
   expect(await audit.json()).toEqual({
+    applications: 1,
     items: 1,
     issuances: 1,
-    documents: 2,
-    available_documents: 1,
-    superseded_documents: 1,
+    documents: 3,
+    available_documents: 0,
+    superseded_documents: 0,
+    deleted_documents: 2,
+    upload_failed_documents: 1,
     fee_charges: 1,
+    fee_charge_quota: 10,
+    fee_charge_status: 'applied',
+    fee_charge_balance_before: quotaBefore,
+    fee_charge_balance_after: quotaAfter,
   })
 })
 
@@ -194,6 +221,9 @@ test('invoice page has keyboard focus visibility, no horizontal overflow, and no
 }) => {
   const consoleText: string[] = []
   page.on('console', (message) => consoleText.push(message.text()))
+  await page.addInitScript(() =>
+    window.localStorage.setItem('setup_status_checked', 'true')
+  )
   await context.setExtraHTTPHeaders({ Authorization: `Bearer ${tokens.owner}` })
   await page.goto('/invoices')
   await page.keyboard.press('Tab')
@@ -219,7 +249,8 @@ test('invoice page has keyboard focus visibility, no horizontal overflow, and no
     ).__invoiceLiveQueryCacheSnapshot?.(),
   }))
   expect(residue.queryCache).toBeTruthy()
-  for (const sentinel of forbiddenSentinels.slice(0, 2)) {
+  expect(residue.queryCache).toContain('profiles')
+  for (const sentinel of forbiddenSentinels) {
     expect(residue.queryCache).not.toContain(sentinel)
   }
   const surfaces = [

@@ -16,6 +16,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import type { InvoiceApplicationDetail, InvoiceProfile } from './types'
+
 /** Provides hierarchical query keys for invoice-domain cache entries. */
 export const invoiceQueryKeys = {
   all: ['invoices'] as const,
@@ -30,4 +32,21 @@ export const invoiceQueryKeys = {
     [...invoiceQueryKeys.applicationsList(), page, pageSize] as const,
   application: (applicationId: number) =>
     [...invoiceQueryKeys.all, 'application', applicationId] as const,
+}
+
+/** Removes raw tax identifiers before profile data enters React Query state. */
+export function redactInvoiceProfilesForCache(
+  profiles: InvoiceProfile[]
+): InvoiceProfile[] {
+  return profiles.map((profile) => ({ ...profile, tax_number: '' }))
+}
+
+/** Removes raw tax identifiers before application details enter React Query state. */
+export function redactInvoiceApplicationDetailForCache(
+  detail: InvoiceApplicationDetail
+): InvoiceApplicationDetail {
+  return {
+    ...detail,
+    profile_snapshot: { ...detail.profile_snapshot, tax_number: '' },
+  }
 }
