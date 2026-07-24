@@ -94,7 +94,6 @@ async function installInvoiceBackend(
     applicationId: number
     authorization: string | null
   }> = []
-  const downloadedDocuments: string[] = []
   const cancelRequests: number[] = []
 
   await page.addInitScript((language) => {
@@ -323,15 +322,17 @@ async function installInvoiceBackend(
       return
     }
 
-    const downloadMatch = path.match(
-      /^\/api\/user\/invoices\/(\d+)\/document-url$/
-    )
+    const downloadMatch = path.match(/^\/api\/user\/invoices\/(\d+)\/document$/)
     if (downloadMatch) {
       downloadRequests.push({
         applicationId: Number(downloadMatch[1]),
         authorization: await request.headerValue('authorization'),
       })
-      await fulfill(route, success({ download_url: '/invoice-e2e.pdf' }))
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/pdf',
+        body: '%PDF-1.7',
+      })
       return
     }
 
@@ -343,16 +344,7 @@ async function installInvoiceBackend(
     await fulfill(route, success(null))
   })
 
-  await page.route('**/invoice-e2e.pdf', async (route) => {
-    downloadedDocuments.push(new URL(route.request().url()).pathname)
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/pdf',
-      body: '%PDF-1.7',
-    })
-  })
-
-  return { downloadRequests, downloadedDocuments, cancelRequests }
+  return { downloadRequests, cancelRequests }
 }
 
 test('desktop invoice route supports keyboard application flow and held download suppression', async ({
@@ -480,7 +472,10 @@ test('user history paginates, opens detail, reconciles cancel conflict, and guar
   await page.getByRole('button', { name: 'Next' }).click()
   await expect(page.getByText('INV-PAGE-2')).toBeVisible()
   await page.getByRole('button', { name: 'Previous' }).click()
+  const downloadEvent = page.waitForEvent('download')
   await page.getByRole('button', { name: 'Download PDF' }).click()
+  const download = await downloadEvent
+  expect(download.suggestedFilename()).toBe('invoice-1.pdf')
   await expect
     .poll(() => backend.downloadRequests)
     .toEqual([
@@ -489,9 +484,6 @@ test('user history paginates, opens detail, reconciles cancel conflict, and guar
         authorization: 'Bearer e2e-access-token',
       },
     ])
-  await expect
-    .poll(() => backend.downloadedDocuments)
-    .toEqual(['/invoice-e2e.pdf'])
 })
 
 test.describe('mobile invoice route', () => {
