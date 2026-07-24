@@ -181,7 +181,7 @@ export function DocumentUpload(props: DocumentUploadProps) {
                 onChange={(event) => setFaceAmountMinor(event.target.value)}
               />
             </Field>
-            <Field data-disabled={replacement || undefined}>
+            <Field data-disabled>
               <FieldLabel htmlFor='invoice-currency'>
                 {t('Currency')}
               </FieldLabel>

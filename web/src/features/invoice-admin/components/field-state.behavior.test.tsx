@@ -143,6 +143,7 @@ describe('invoice administrator pending field behavior', () => {
       'invoice-code',
       'invoice-date',
       'invoice-face-amount',
+      'invoice-currency',
       'invoice-pdf-attestation',
     ]) {
       assertFieldControlState(html, controlId, true)
@@ -184,6 +185,7 @@ describe('invoice administrator pending field behavior', () => {
       'invoice-code',
       'invoice-date',
       'invoice-face-amount',
+      'invoice-currency',
     ]) {
       assertFieldControlState(html, controlId, true)
     }
@@ -210,6 +212,7 @@ describe('invoice administrator pending field behavior', () => {
     ]) {
       assertFieldControlState(html, controlId, false)
     }
+    assertFieldControlState(html, 'invoice-currency', true)
     assert.match(html, /id="invoice-pdf-help"/)
     assert.match(html, /aria-describedby="invoice-pdf-help"/)
   })
