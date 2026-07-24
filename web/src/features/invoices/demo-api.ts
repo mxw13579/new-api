@@ -245,8 +245,5 @@ export function createInvoiceDemoApi(): InvoiceApi {
       )
       return detailFromSummary(cancelled)
     },
-    getDocumentDownloadUrl(applicationId) {
-      return `/demo/invoices/${applicationId}.pdf`
-    },
   }
 }

@@ -22,7 +22,6 @@ import {
 } from '@/lib/api'
 
 import type {
-  AuthenticatedInvoiceApi,
   CreateInvoiceApplicationRequest,
   CreateInvoiceProfileRequest,
   DeleteInvoiceProfileRequest,
@@ -31,6 +30,7 @@ import type {
   InvoiceApplicationSummary,
   InvoiceConfig,
   InvoiceErrorCode,
+  InvoiceApi,
   InvoicePage,
   InvoicePageRequest,
   InvoiceProfile,
@@ -230,7 +230,7 @@ function pageUrl(path: string, request: InvoicePageRequest): string {
  */
 export function createHttpInvoiceApi(
   transport: InvoiceHttpTransport
-): AuthenticatedInvoiceApi {
+): InvoiceApi {
   return {
     async getConfig() {
       return invoiceRequest<InvoiceConfig>(
@@ -305,9 +305,6 @@ export function createHttpInvoiceApi(
           INVOICE_REQUEST_CONFIG
         )
       )
-    },
-    getDocumentDownloadUrl(applicationId: number) {
-      return `/api/user/invoices/${applicationId}/document`
     },
   }
 }

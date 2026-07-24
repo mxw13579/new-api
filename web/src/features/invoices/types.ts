@@ -230,11 +230,7 @@ export interface InvoiceApi {
   ): Promise<InvoicePage<InvoiceApplicationSummary>>
   getApplication(applicationId: number): Promise<InvoiceApplicationDetail>
   cancelApplication(applicationId: number): Promise<InvoiceApplicationDetail>
-  getDocumentDownloadUrl(applicationId: number): string
 }
-
-/** Identifies the production invoice API boundary. */
-export type AuthenticatedInvoiceApi = InvoiceApi
 
 /** Defines an administrator review transition. */
 export interface ReviewInvoiceApplicationRequest {

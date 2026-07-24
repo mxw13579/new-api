@@ -211,8 +211,23 @@ test('invoice page has keyboard focus visibility, no horizontal overflow, and no
     history: location.href,
     local: JSON.stringify(localStorage),
     session: JSON.stringify(sessionStorage),
+    queryCache: (
+      window as typeof window & {
+        __invoiceLiveQueryCacheSnapshot?: () => string
+      }
+    ).__invoiceLiveQueryCacheSnapshot?.(),
   }))
-  const surfaces = [...Object.values(residue), ...consoleText]
+  expect(residue.queryCache).toBeTruthy()
+  for (const sentinel of forbiddenSentinels.slice(0, 2)) {
+    expect(residue.queryCache).not.toContain(sentinel)
+  }
+  const surfaces = [
+    residue.dom,
+    residue.history,
+    residue.local,
+    residue.session,
+    ...consoleText,
+  ]
   for (const surface of surfaces) {
     for (const sentinel of forbiddenSentinels) {
       expect(surface).not.toContain(sentinel)

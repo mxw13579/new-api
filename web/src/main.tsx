@@ -93,6 +93,18 @@ const queryClient = new QueryClient({
   }),
 })
 
+if (import.meta.env.PUBLIC_INVOICE_LIVE_CACHE_SNAPSHOT === '1') {
+  Object.defineProperty(window, '__invoiceLiveQueryCacheSnapshot', {
+    value: () =>
+      JSON.stringify(
+        queryClient
+          .getQueryCache()
+          .getAll()
+          .map((query) => ({ queryKey: query.queryKey, state: query.state }))
+      ),
+  })
+}
+
 // Create a new router instance
 const router = createRouter({
   routeTree,

@@ -28,7 +28,10 @@ export default defineConfig({
         url: `${baseURL}/api/status`,
         reuseExistingServer: false,
         timeout: 180_000,
-        env: { INVOICE_LIVE_PORT: String(port) },
+        env: {
+          INVOICE_LIVE_PORT: String(port),
+          PUBLIC_INVOICE_LIVE_CACHE_SNAPSHOT: '1',
+        },
       },
   projects: [
     { name: 'desktop-chromium', use: { ...devices['Desktop Chrome'] } },

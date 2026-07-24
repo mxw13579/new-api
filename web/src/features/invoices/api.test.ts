@@ -98,6 +98,7 @@ describe('HTTP InvoiceApi adapter', () => {
     assert.equal(calls.at(-1)?.url, '/api/user/invoices/7/cancel')
     assert.equal(calls.length, 10)
     assert.equal('requestDocumentDownloadUrl' in invoiceApi, false)
+    assert.equal('getDocumentDownloadUrl' in invoiceApi, false)
     for (const call of calls) {
       assert.equal(
         (call.config as { skipBusinessError?: boolean }).skipBusinessError,
