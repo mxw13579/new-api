@@ -217,10 +217,6 @@ func (invoiceR2ReviewObjectStore) Get(context.Context, string, string) (InvoiceO
 
 func (invoiceR2ReviewObjectStore) Delete(context.Context, string) error { return nil }
 
-func (invoiceR2ReviewObjectStore) PresignGet(context.Context, string, time.Duration) (string, error) {
-	return "", nil
-}
-
 func runInvoiceR2ReviewFinalizeRace(t *testing.T, db *gorm.DB, operations []FinalizeInvoiceDocumentOperation) []invoiceR2ReviewRaceResult {
 	t.Helper()
 	require.Len(t, operations, 2)

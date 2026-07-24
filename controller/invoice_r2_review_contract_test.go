@@ -277,6 +277,7 @@ func setupInvoiceUploadAdvisoryFixture(t *testing.T) (*gorm.DB, *atomic.Int32) {
 	}))
 	t.Setenv("INVOICE_R2_ENDPOINT", server.URL)
 	t.Setenv("INVOICE_R2_BUCKET", "test-fake-private-bucket")
+	t.Setenv("INVOICE_R2_AUTHORITY_ID", strings.Repeat("a", 64))
 	t.Setenv("INVOICE_R2_ACCESS_KEY_ID", "test-fake-access-key")
 	t.Setenv("INVOICE_R2_SECRET_ACCESS_KEY", "test-fake-secret-key")
 	t.Cleanup(func() {

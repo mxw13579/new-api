@@ -207,34 +207,29 @@ func GetInvoiceApplication(c *gin.Context) {
 	writeInvoiceSuccess(c, http.StatusOK, detail)
 }
 
-// DownloadInvoiceDocument redirects an eligible owner to a short-lived private invoice document URL.
+// DownloadInvoiceDocument returns a fully verified owner-scoped PDF without exposing object-store URLs.
 func DownloadInvoiceDocument(c *gin.Context) {
 	id, err := invoiceApplicationID(c)
 	if err != nil {
 		writeInvoiceError(c, err)
 		return
 	}
-	url, err := getInvoiceDocumentDownload(c.Request.Context(), c.GetInt("id"), id)
+	content, err := getInvoiceDocumentDownload(c.Request.Context(), c.GetInt("id"), id)
 	if err != nil {
 		writeInvoiceError(c, err)
 		return
 	}
-	c.Redirect(http.StatusFound, url)
+	c.Header("Cache-Control", "no-store, no-cache, must-revalidate, private, max-age=0")
+	c.Header("Pragma", "no-cache")
+	c.Header("Expires", "0")
+	c.Header("Content-Disposition", `attachment; filename="invoice.pdf"`)
+	c.Header("Content-Length", strconv.Itoa(len(content)))
+	c.Data(http.StatusOK, model.InvoicePDFContentType, content)
 }
 
-// GetInvoiceDocumentURL returns an owner-scoped short-lived private document URL to authenticated clients.
+// GetInvoiceDocumentURL is a sanitized compatibility stub retained until its legacy route is removed.
 func GetInvoiceDocumentURL(c *gin.Context) {
-	id, err := invoiceApplicationID(c)
-	if err != nil {
-		writeInvoiceError(c, err)
-		return
-	}
-	url, err := getInvoiceDocumentDownload(c.Request.Context(), c.GetInt("id"), id)
-	if err != nil {
-		writeInvoiceError(c, err)
-		return
-	}
-	writeInvoiceSuccess(c, http.StatusOK, gin.H{"download_url": url})
+	writeInvoiceError(c, service.ErrInvoiceDocumentUnavailable)
 }
 
 // CancelInvoiceApplication cancels an owned submitted invoice application and returns its updated detail.

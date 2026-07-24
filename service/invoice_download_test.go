@@ -6,7 +6,9 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,47 +20,55 @@ import (
 	"gorm.io/gorm"
 )
 
+type invoiceDownloadReadCloser struct {
+	io.Reader
+	closed bool
+	err    error
+}
+
+func (reader *invoiceDownloadReadCloser) Close() error {
+	reader.closed = true
+	return reader.err
+}
+
 type invoiceDownloadStoreStub struct {
-	url          string
-	ttl          time.Duration
-	presignErr   error
-	bucket       string
-	head         InvoiceObjectHead
-	headErr      error
-	headCalls    int
-	presignCalls int
-	operationLog []string
-	beforeHead   func()
+	bucket      string
+	authority   string
+	head        InvoiceObjectHead
+	headErr     error
+	get         InvoiceObjectGet
+	getErr      error
+	headCalls   int
+	getCalls    int
+	deleteCalls int
+	getKey      string
+	getIfMatch  string
+	beforeHead  func()
 }
 
-func (s *invoiceDownloadStoreStub) Bucket() string { return s.bucket }
-func (s *invoiceDownloadStoreStub) AuthorityID() string {
-	return invoiceTestAuthorityID
-}
-
-func (s *invoiceDownloadStoreStub) Put(context.Context, string, io.Reader, int64, string) error {
+func (store *invoiceDownloadStoreStub) Bucket() string      { return store.bucket }
+func (store *invoiceDownloadStoreStub) AuthorityID() string { return store.authority }
+func (*invoiceDownloadStoreStub) Put(context.Context, string, io.Reader, int64, string) error {
 	return nil
 }
-func (s *invoiceDownloadStoreStub) Copy(context.Context, string, string) error { return nil }
-func (s *invoiceDownloadStoreStub) Head(context.Context, string) (InvoiceObjectHead, error) {
-	s.headCalls++
-	s.operationLog = append(s.operationLog, "head")
-	if s.beforeHead != nil {
-		s.beforeHead()
+func (*invoiceDownloadStoreStub) Copy(context.Context, string, string) error { return nil }
+func (store *invoiceDownloadStoreStub) Head(context.Context, string) (InvoiceObjectHead, error) {
+	store.headCalls++
+	if store.beforeHead != nil {
+		store.beforeHead()
 	}
-	return s.head, s.headErr
+	return store.head, store.headErr
 }
-func (s *invoiceDownloadStoreStub) Get(context.Context, string, string) (InvoiceObjectGet, error) {
-	return InvoiceObjectGet{Body: io.NopCloser(bytes.NewReader(nil))}, nil
+func (store *invoiceDownloadStoreStub) Get(_ context.Context, key, ifMatch string) (InvoiceObjectGet, error) {
+	store.getCalls++
+	store.getKey = key
+	store.getIfMatch = ifMatch
+	return store.get, store.getErr
 }
-func (s *invoiceDownloadStoreStub) Delete(context.Context, string) error { return nil }
-func (s *invoiceDownloadStoreStub) PresignGet(_ context.Context, _ string, ttl time.Duration) (string, error) {
-	s.presignCalls++
-	s.operationLog = append(s.operationLog, "presign")
-	s.ttl = ttl
-	return s.url, s.presignErr
+func (store *invoiceDownloadStoreStub) Delete(context.Context, string) error {
+	store.deleteCalls++
+	return nil
 }
-
 func setupInvoiceDownloadTest(t *testing.T, application *model.InvoiceApplication, document *model.InvoiceDocument) *invoiceDownloadStoreStub {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
@@ -77,10 +87,13 @@ func setupInvoiceDownloadTest(t *testing.T, application *model.InvoiceApplicatio
 	previousNow := invoiceDownloadNow
 	previousFactory := newInvoiceDownloadStore
 	model.DB = db
-	digest := sha256.Sum256([]byte("invoice-pdf"))
+	pdf := []byte("invoice-pdf")
+	digest := sha256.Sum256(pdf)
+	body := &invoiceDownloadReadCloser{Reader: bytes.NewReader(pdf)}
 	store := &invoiceDownloadStoreStub{
-		url: "https://signed.example.test/private-token", bucket: "private",
-		head: InvoiceObjectHead{SizeBytes: int64(len("invoice-pdf")), ChecksumSHA256: base64.StdEncoding.EncodeToString(digest[:])},
+		bucket: "private", authority: invoiceTestAuthorityID,
+		head: InvoiceObjectHead{SizeBytes: int64(len(pdf)), ChecksumSHA256: base64.StdEncoding.EncodeToString(digest[:]), ETag: `"opaque-etag"`},
+		get:  InvoiceObjectGet{Body: body, SizeBytes: int64(len(pdf)), ChecksumSHA256: base64.StdEncoding.EncodeToString(digest[:]), ETag: `"opaque-etag"`},
 	}
 	invoiceDownloadNow = func() time.Time { return time.Unix(1_000, 0) }
 	newInvoiceDownloadStore = func() (InvoiceObjectStore, error) { return store, nil }
@@ -96,6 +109,8 @@ func downloadableInvoiceFixture() (model.InvoiceApplication, *model.InvoiceDocum
 	expiresAt := int64(1_600)
 	objectKey := "invoices/random.pdf"
 	digest := sha256.Sum256([]byte("invoice-pdf"))
+	authority := invoiceTestAuthorityID
+	etag := `"opaque-etag"`
 	application := model.InvoiceApplication{
 		ApplicationNo: "INV-DOWNLOAD", UserID: 11, RequestID: "request", RequestFingerprint: "fingerprint",
 		Type: constant.InvoiceTypePersonal, Status: constant.InvoiceApplicationStatusIssued,
@@ -104,218 +119,159 @@ func downloadableInvoiceFixture() (model.InvoiceApplication, *model.InvoiceDocum
 	}
 	document := &model.InvoiceDocument{
 		ContentType: model.InvoicePDFContentType, Status: model.InvoiceDocumentStatusAvailable,
-		R2Bucket: "private", ObjectKey: &objectKey, ExpiresAt: &expiresAt, OperationToken: "token", UploadedBy: 1,
+		R2AuthorityID: &authority, R2Bucket: "private", ObjectKey: &objectKey, ObjectETag: &etag,
+		ExpiresAt: &expiresAt, OperationToken: "token", UploadedBy: 1,
 		SizeBytes: int64(len("invoice-pdf")), SHA256: hex.EncodeToString(digest[:]),
 	}
 	return application, document
 }
 
-func TestGetInvoiceDocumentDownloadRejectsConfiguredBucketMismatch(t *testing.T) {
+func TestGetInvoiceDocumentDownloadReturnsOnlyVerifiedConditionalBytes(t *testing.T) {
 	application, document := downloadableInvoiceFixture()
 	store := setupInvoiceDownloadTest(t, &application, document)
-	store.bucket = "wrong-private-bucket"
 
-	_, err := GetInvoiceDocumentDownload(context.Background(), 11, application.ID)
+	content, err := GetInvoiceDocumentDownload(context.Background(), 11, application.ID)
 
-	require.ErrorIs(t, err, ErrInvoiceObjectTerminal)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("invoice-pdf"), content)
 	assert.Zero(t, store.headCalls)
-	assert.Zero(t, store.presignCalls)
+	assert.Equal(t, 1, store.getCalls)
+	assert.Equal(t, "invoices/random.pdf", store.getKey)
+	assert.Equal(t, `"opaque-etag"`, store.getIfMatch)
+	assert.True(t, store.get.Body.(*invoiceDownloadReadCloser).closed)
 }
 
-func TestGetInvoiceDocumentDownloadEnforcesOwnerAndLifecycle(t *testing.T) {
-	tests := []struct {
+func TestGetInvoiceDocumentDownloadRequiresExactAuthorityAndBucketBeforeObjectIO(t *testing.T) {
+	for _, testCase := range []struct {
 		name   string
-		mutate func(*model.InvoiceApplication, *model.InvoiceDocument)
-		userID int
-		want   error
+		mutate func(*model.InvoiceDocument, *invoiceDownloadStoreStub)
 	}{
-		{name: "cross user is masked", userID: 12, want: model.ErrInvoiceNotFound},
-		{name: "payment review hold", userID: 11, mutate: func(a *model.InvoiceApplication, _ *model.InvoiceDocument) {
-			a.PaymentReviewStatus = constant.InvoicePaymentReviewStatusPostIssueHold
-		}, want: ErrInvoiceDocumentUnavailable},
-		{name: "application not issued", userID: 11, mutate: func(a *model.InvoiceApplication, _ *model.InvoiceDocument) {
-			a.Status = constant.InvoiceApplicationStatusApproved
-		}, want: ErrInvoiceDocumentUnavailable},
-		{name: "wrong active pointer", userID: 11, mutate: func(a *model.InvoiceApplication, _ *model.InvoiceDocument) {
-			wrong := int64(999)
-			a.ActiveDocumentID = &wrong
-		}, want: ErrInvoiceDocumentUnavailable},
-		{name: "document unavailable state", userID: 11, mutate: func(_ *model.InvoiceApplication, d *model.InvoiceDocument) {
-			d.Status = model.InvoiceDocumentStatusDeleteFailed
-		}, want: ErrInvoiceDocumentUnavailable},
-		{name: "missing", userID: 11, mutate: func(_ *model.InvoiceApplication, d *model.InvoiceDocument) {
-			d.Status = model.InvoiceDocumentStatusMissing
-		}, want: ErrInvoiceDocumentUnavailable},
-		{name: "superseded", userID: 11, mutate: func(_ *model.InvoiceApplication, d *model.InvoiceDocument) {
-			d.Status = model.InvoiceDocumentStatusSuperseded
-		}, want: ErrInvoiceDocumentUnavailable},
-		{name: "deleting", userID: 11, mutate: func(_ *model.InvoiceApplication, d *model.InvoiceDocument) {
-			d.Status = model.InvoiceDocumentStatusDeleting
-		}, want: ErrInvoiceDocumentUnavailable},
-		{name: "deleted", userID: 11, mutate: func(_ *model.InvoiceApplication, d *model.InvoiceDocument) {
-			d.Status = model.InvoiceDocumentStatusDeleted
-		}, want: ErrInvoiceDocumentUnavailable},
-		{name: "missing key", userID: 11, mutate: func(_ *model.InvoiceApplication, d *model.InvoiceDocument) {
-			d.ObjectKey = nil
-		}, want: ErrInvoiceDocumentUnavailable},
-		{name: "expired", userID: 11, mutate: func(_ *model.InvoiceApplication, d *model.InvoiceDocument) {
-			expired := int64(1_005)
-			d.ExpiresAt = &expired
-		}, want: ErrInvoiceDocumentUnavailable},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			application, document := downloadableInvoiceFixture()
-			if test.mutate != nil {
-				test.mutate(&application, document)
-			}
-			store := setupInvoiceDownloadTest(t, &application, document)
-			_, err := GetInvoiceDocumentDownload(context.Background(), test.userID, application.ID)
-			assert.ErrorIs(t, err, test.want)
-			assert.Zero(t, store.headCalls)
-			assert.Zero(t, store.presignCalls)
-		})
-	}
-}
-
-func TestGetInvoiceDocumentDownloadBoundsPresignTTL(t *testing.T) {
-	application, document := downloadableInvoiceFixture()
-	store := setupInvoiceDownloadTest(t, &application, document)
-
-	url, err := GetInvoiceDocumentDownload(context.Background(), 11, application.ID)
-
-	require.NoError(t, err)
-	assert.Equal(t, store.url, url)
-	assert.Equal(t, 5*time.Minute, store.ttl)
-	assert.Equal(t, []string{"head", "presign"}, store.operationLog)
-
-	nearExpiry := int64(1_040)
-	require.NoError(t, model.DB.Model(&model.InvoiceDocument{}).Where("id = ?", *application.ActiveDocumentID).Update("expires_at", nearExpiry).Error)
-	_, err = GetInvoiceDocumentDownload(context.Background(), 11, application.ID)
-	require.NoError(t, err)
-	assert.Equal(t, 35*time.Second, store.ttl)
-}
-
-func TestGetInvoiceDocumentDownloadExpirySkewBoundary(t *testing.T) {
-	for _, test := range []struct {
-		name      string
-		expiresAt int64
-		wantTTL   time.Duration
-		wantErr   error
-	}{
-		{name: "six seconds remain", expiresAt: 1_006, wantTTL: time.Second},
-		{name: "five seconds remain", expiresAt: 1_005, wantErr: ErrInvoiceDocumentUnavailable},
-		{name: "four seconds remain", expiresAt: 1_004, wantErr: ErrInvoiceDocumentUnavailable},
+		{name: "authority mismatch", mutate: func(document *model.InvoiceDocument, store *invoiceDownloadStoreStub) {
+			other := strings.Repeat("b", 64)
+			document.R2AuthorityID = &other
+		}},
+		{name: "bucket mismatch", mutate: func(_ *model.InvoiceDocument, store *invoiceDownloadStoreStub) { store.bucket = "other" }},
+		{name: "authority unbound", mutate: func(document *model.InvoiceDocument, _ *invoiceDownloadStoreStub) { document.R2AuthorityID = nil }},
 	} {
-		t.Run(test.name, func(t *testing.T) {
-			application, document := downloadableInvoiceFixture()
-			document.ExpiresAt = &test.expiresAt
-			store := setupInvoiceDownloadTest(t, &application, document)
-			_, err := GetInvoiceDocumentDownload(context.Background(), 11, application.ID)
-			if test.wantErr != nil {
-				require.ErrorIs(t, err, test.wantErr)
-				assert.Zero(t, store.headCalls)
-				return
-			}
-			require.NoError(t, err)
-			assert.Equal(t, test.wantTTL, store.ttl)
-		})
-	}
-}
-
-func TestGetInvoiceDocumentDownloadReconcilesMissingAndIntegrityMismatch(t *testing.T) {
-	tests := []struct {
-		name         string
-		mutateStore  func(*invoiceDownloadStoreStub)
-		wantCategory *string
-	}{
-		{name: "object absent", mutateStore: func(store *invoiceDownloadStoreStub) { store.headErr = ErrInvoiceObjectNotFound }},
-		{name: "size mismatch", mutateStore: func(store *invoiceDownloadStoreStub) { store.head.SizeBytes++ }, wantCategory: downloadStringPointer(model.InvoiceDocumentDeleteErrorObjectIntegrityMismatch)},
-		{name: "checksum mismatch", mutateStore: func(store *invoiceDownloadStoreStub) { store.head.ChecksumSHA256 = "different" }, wantCategory: downloadStringPointer(model.InvoiceDocumentDeleteErrorObjectIntegrityMismatch)},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Setenv("INVOICE_R2_LEGACY_AUTHORITY_ID", "")
 			application, document := downloadableInvoiceFixture()
 			store := setupInvoiceDownloadTest(t, &application, document)
-			test.mutateStore(store)
-
-			_, err := GetInvoiceDocumentDownload(context.Background(), 11, application.ID)
-
-			require.ErrorIs(t, err, ErrInvoiceDocumentUnavailable)
-			assert.Equal(t, 1, store.headCalls)
-			assert.Zero(t, store.presignCalls)
-			var persisted model.InvoiceDocument
-			require.NoError(t, model.DB.First(&persisted, *application.ActiveDocumentID).Error)
-			assert.Equal(t, model.InvoiceDocumentStatusMissing, persisted.Status)
-			assert.Equal(t, test.wantCategory, persisted.DeleteErrorCategory)
-		})
-	}
-}
-
-func TestGetInvoiceDocumentDownloadInfrastructureFailuresPreserveState(t *testing.T) {
-	tests := []struct {
-		name        string
-		mutateDoc   func(*model.InvoiceDocument)
-		mutateStore func(*invoiceDownloadStoreStub)
-	}{
-		{name: "malformed checksum", mutateDoc: func(document *model.InvoiceDocument) { document.SHA256 = "not-hex" }},
-		{name: "no such bucket", mutateStore: func(store *invoiceDownloadStoreStub) { store.headErr = ErrInvoiceObjectBucketUnavailable }},
-		{name: "ambiguous terminal head", mutateStore: func(store *invoiceDownloadStoreStub) { store.headErr = ErrInvoiceObjectTerminal }},
-		{name: "retryable head", mutateStore: func(store *invoiceDownloadStoreStub) { store.headErr = ErrInvoiceObjectRetryable }},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			application, document := downloadableInvoiceFixture()
-			if test.mutateDoc != nil {
-				test.mutateDoc(document)
-			}
-			store := setupInvoiceDownloadTest(t, &application, document)
-			if test.mutateStore != nil {
-				test.mutateStore(store)
-			}
+			testCase.mutate(document, store)
+			require.NoError(t, model.DB.Model(&model.InvoiceDocument{}).Where("id = ?", *application.ActiveDocumentID).
+				Updates(map[string]any{"r2_authority_id": document.R2AuthorityID, "r2_bucket": document.R2Bucket}).Error)
 
 			_, err := GetInvoiceDocumentDownload(context.Background(), 11, application.ID)
 
 			require.Error(t, err)
-			assert.NotErrorIs(t, err, ErrInvoiceDocumentUnavailable)
-			assert.Zero(t, store.presignCalls)
-			var persisted model.InvoiceDocument
-			require.NoError(t, model.DB.First(&persisted, *application.ActiveDocumentID).Error)
-			assert.Equal(t, model.InvoiceDocumentStatusAvailable, persisted.Status)
-			assert.Nil(t, persisted.DeleteErrorCategory)
+			assert.Zero(t, store.headCalls)
+			assert.Zero(t, store.getCalls)
+			assert.Zero(t, store.deleteCalls)
 		})
 	}
 }
 
-func TestGetInvoiceDocumentDownloadCASLossDoesNotPresign(t *testing.T) {
+func TestGetInvoiceDocumentDownloadBindsExplicitlyAttestedLegacyFacts(t *testing.T) {
+	t.Setenv("INVOICE_R2_LEGACY_AUTHORITY_ID", invoiceTestAuthorityID)
 	application, document := downloadableInvoiceFixture()
+	document.R2AuthorityID = nil
+	document.ObjectETag = nil
 	store := setupInvoiceDownloadTest(t, &application, document)
-	store.headErr = ErrInvoiceObjectNotFound
-	store.beforeHead = func() {
-		require.NoError(t, model.DB.Model(&model.InvoiceDocument{}).
-			Where("id = ?", *application.ActiveDocumentID).Update("operation_token", "replacement-token").Error)
-	}
+
+	content, err := GetInvoiceDocumentDownload(context.Background(), 11, application.ID)
+
+	require.NoError(t, err)
+	assert.Equal(t, []byte("invoice-pdf"), content)
+	assert.Equal(t, 1, store.headCalls)
+	assert.Equal(t, 1, store.getCalls)
+	var persisted model.InvoiceDocument
+	require.NoError(t, model.DB.First(&persisted, *application.ActiveDocumentID).Error)
+	require.NotNil(t, persisted.R2AuthorityID)
+	assert.Equal(t, invoiceTestAuthorityID, *persisted.R2AuthorityID)
+	require.NotNil(t, persisted.ObjectETag)
+	assert.Equal(t, `"opaque-etag"`, *persisted.ObjectETag)
+}
+
+func TestGetInvoiceDocumentDownloadLegacyMismatchRemainsDormant(t *testing.T) {
+	t.Setenv("INVOICE_R2_LEGACY_AUTHORITY_ID", invoiceTestAuthorityID)
+	application, document := downloadableInvoiceFixture()
+	document.R2AuthorityID = nil
+	document.ObjectETag = nil
+	store := setupInvoiceDownloadTest(t, &application, document)
+	store.head.ChecksumSHA256 = "different"
 
 	_, err := GetInvoiceDocumentDownload(context.Background(), 11, application.ID)
 
 	require.ErrorIs(t, err, ErrInvoiceDocumentUnavailable)
-	assert.Zero(t, store.presignCalls)
+	assert.Equal(t, 1, store.headCalls)
+	assert.Zero(t, store.getCalls)
 	var persisted model.InvoiceDocument
 	require.NoError(t, model.DB.First(&persisted, *application.ActiveDocumentID).Error)
+	assert.Nil(t, persisted.R2AuthorityID)
+	assert.Nil(t, persisted.ObjectETag)
 	assert.Equal(t, model.InvoiceDocumentStatusAvailable, persisted.Status)
-	assert.Equal(t, "replacement-token", persisted.OperationToken)
 }
 
-func downloadStringPointer(value string) *string { return &value }
+func TestGetInvoiceDocumentDownloadOnlyConfirmedAbsenceMarksMissing(t *testing.T) {
+	readFailure := errors.New("interrupted read")
+	tests := []struct {
+		name        string
+		mutateStore func(*invoiceDownloadStoreStub)
+		wantMissing bool
+	}{
+		{name: "confirmed absence", wantMissing: true, mutateStore: func(store *invoiceDownloadStoreStub) { store.getErr = ErrInvoiceObjectNotFound }},
+		{name: "precondition failed", mutateStore: func(store *invoiceDownloadStoreStub) { store.getErr = ErrInvoiceObjectIntegrityUnavailable }},
+		{name: "etag mismatch", mutateStore: func(store *invoiceDownloadStoreStub) { store.get.ETag = `"replacement"` }},
+		{name: "checksum mismatch", mutateStore: func(store *invoiceDownloadStoreStub) { store.get.ChecksumSHA256 = "different" }},
+		{name: "response size mismatch", mutateStore: func(store *invoiceDownloadStoreStub) { store.get.SizeBytes++ }},
+		{name: "overflow", mutateStore: func(store *invoiceDownloadStoreStub) {
+			store.get.Body = &invoiceDownloadReadCloser{Reader: strings.NewReader(strings.Repeat("x", int(InvoicePDFMaxBytes+1)))}
+			store.get.SizeBytes = InvoicePDFMaxBytes + 1
+		}},
+		{name: "read failure", mutateStore: func(store *invoiceDownloadStoreStub) {
+			store.get.Body = &invoiceDownloadReadCloser{Reader: io.MultiReader(strings.NewReader("invoice"), errorReader{err: readFailure})}
+		}},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			application, document := downloadableInvoiceFixture()
+			store := setupInvoiceDownloadTest(t, &application, document)
+			testCase.mutateStore(store)
 
-func TestInvoiceSummaryUsesDownloadEligibility(t *testing.T) {
+			content, err := GetInvoiceDocumentDownload(context.Background(), 11, application.ID)
+
+			require.Error(t, err)
+			assert.Nil(t, content)
+			var persisted model.InvoiceDocument
+			require.NoError(t, model.DB.First(&persisted, *application.ActiveDocumentID).Error)
+			if testCase.wantMissing {
+				assert.Equal(t, model.InvoiceDocumentStatusMissing, persisted.Status)
+			} else {
+				assert.Equal(t, model.InvoiceDocumentStatusAvailable, persisted.Status)
+			}
+			if store.getErr == nil && store.get.Body != nil {
+				assert.True(t, store.get.Body.(*invoiceDownloadReadCloser).closed)
+			}
+		})
+	}
+}
+
+type errorReader struct{ err error }
+
+func (reader errorReader) Read([]byte) (int, error) { return 0, reader.err }
+
+func TestGetInvoiceDocumentDownloadEnforcesOwnerAndLifecycle(t *testing.T) {
 	application, document := downloadableInvoiceFixture()
-	document.ID = 41
-	document.ApplicationID = 9
-	application.ID = 9
-	application.ActiveDocumentID = &document.ID
+	store := setupInvoiceDownloadTest(t, &application, document)
 
-	assert.True(t, invoiceApplicationSummaryAt(&application, document, time.Unix(1_000, 0)).CanDownload)
-	application.PaymentReviewStatus = constant.InvoicePaymentReviewStatusResolvedVoided
-	assert.False(t, invoiceApplicationSummaryAt(&application, document, time.Unix(1_000, 0)).CanDownload)
+	_, err := GetInvoiceDocumentDownload(context.Background(), 12, application.ID)
+
+	require.ErrorIs(t, err, model.ErrInvoiceNotFound)
+	assert.Zero(t, store.getCalls)
+
+	require.NoError(t, model.DB.Model(&model.InvoiceApplication{}).Where("id = ?", application.ID).
+		Update("payment_review_status", constant.InvoicePaymentReviewStatusPostIssueHold).Error)
+	_, err = GetInvoiceDocumentDownload(context.Background(), 11, application.ID)
+	require.ErrorIs(t, err, ErrInvoiceDocumentUnavailable)
+	assert.Zero(t, store.getCalls)
 }

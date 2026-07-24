@@ -121,7 +121,7 @@ func TestInvoiceDownloadControllerMasksCrossUserAndDoesNotLeakURLs(t *testing.T)
 	}
 }
 
-func TestInvoiceDocumentURLControllerMasksCrossUserExactlyLikeMissing(t *testing.T) {
+func TestInvoiceDocumentURLCompatibilityStubIsSanitized(t *testing.T) {
 	setupInvoiceControllerDB(t)
 	application := model.InvoiceApplication{
 		ApplicationNo: "INV-PRIVATE-DOCUMENT-URL", UserID: 11, RequestID: "request", RequestFingerprint: "fingerprint",
@@ -139,7 +139,7 @@ func TestInvoiceDocumentURLControllerMasksCrossUserExactlyLikeMissing(t *testing
 
 		GetInvoiceDocumentURL(context)
 
-		assert.Equal(t, http.StatusNotFound, recorder.Code)
+		assert.Equal(t, http.StatusConflict, recorder.Code)
 		assert.Empty(t, recorder.Header().Get("Location"))
 		assert.NotContains(t, recorder.Body.String(), "download_url")
 		assert.NotContains(t, recorder.Body.String(), "http")
@@ -149,12 +149,14 @@ func TestInvoiceDocumentURLControllerMasksCrossUserExactlyLikeMissing(t *testing
 	assert.Equal(t, responses[0].Body.String(), responses[1].Body.String())
 }
 
-func TestInvoiceDocumentURLControllerReturnsOnlyAuthenticatedDownloadURL(t *testing.T) {
+func TestInvoiceDocumentURLControllerNeverReturnsSignedURL(t *testing.T) {
 	previous := getInvoiceDocumentDownload
 	t.Cleanup(func() { getInvoiceDocumentDownload = previous })
 
-	getInvoiceDocumentDownload = func(context.Context, int, int64) (string, error) {
-		return "https://private.example.test/invoice.pdf?signature=test-only", nil
+	called := false
+	getInvoiceDocumentDownload = func(context.Context, int, int64) ([]byte, error) {
+		called = true
+		return []byte("signed-url-sentinel"), nil
 	}
 	requestContext, recorder := invoiceControllerContext(http.MethodPost, "/", "")
 	requestContext.Params = gin.Params{{Key: "id", Value: "7"}}
@@ -162,30 +164,34 @@ func TestInvoiceDocumentURLControllerReturnsOnlyAuthenticatedDownloadURL(t *test
 
 	GetInvoiceDocumentURL(requestContext)
 
-	assert.Equal(t, http.StatusOK, recorder.Code)
+	assert.Equal(t, http.StatusConflict, recorder.Code)
 	assert.Empty(t, recorder.Header().Get("Location"))
-	var envelope invoiceControllerEnvelope
-	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &envelope))
-	assert.True(t, envelope.Success)
-	assert.Equal(t, "https://private.example.test/invoice.pdf?signature=test-only", envelope.Data.DownloadURL)
+	assert.NotContains(t, recorder.Body.String(), "signed-url-sentinel")
+	assert.NotContains(t, recorder.Body.String(), "download_url")
+	assert.False(t, called)
 }
 
-func TestInvoiceDownloadControllerRedirectsWithoutLeakingErrors(t *testing.T) {
+func TestInvoiceDownloadControllerReturnsVerifiedBinaryWithPrivateHeaders(t *testing.T) {
 	previous := getInvoiceDocumentDownload
 	t.Cleanup(func() { getInvoiceDocumentDownload = previous })
 
-	getInvoiceDocumentDownload = func(context.Context, int, int64) (string, error) {
-		return "https://private.example.test/invoice.pdf?signature=test-only", nil
+	getInvoiceDocumentDownload = func(context.Context, int, int64) ([]byte, error) {
+		return []byte("%PDF-verified"), nil
 	}
 	requestContext, recorder := invoiceControllerContext(http.MethodGet, "/", "")
 	requestContext.Params = gin.Params{{Key: "id", Value: "7"}}
 	requestContext.Set("id", 11)
 	DownloadInvoiceDocument(requestContext)
-	assert.Equal(t, http.StatusFound, recorder.Code)
-	assert.Equal(t, "https://private.example.test/invoice.pdf?signature=test-only", recorder.Header().Get("Location"))
+	assert.Equal(t, http.StatusOK, recorder.Code)
+	assert.Equal(t, "application/pdf", recorder.Header().Get("Content-Type"))
+	assert.Equal(t, `attachment; filename="invoice.pdf"`, recorder.Header().Get("Content-Disposition"))
+	assert.Equal(t, strconv.Itoa(len("%PDF-verified")), recorder.Header().Get("Content-Length"))
+	assert.Contains(t, recorder.Header().Get("Cache-Control"), "no-store")
+	assert.Empty(t, recorder.Header().Get("Location"))
+	assert.Equal(t, "%PDF-verified", recorder.Body.String())
 
-	getInvoiceDocumentDownload = func(context.Context, int, int64) (string, error) {
-		return "", fmt.Errorf("%w: https://private.example.test/invoice.pdf?signature=secret", service.ErrInvoiceObjectRetryable)
+	getInvoiceDocumentDownload = func(context.Context, int, int64) ([]byte, error) {
+		return nil, fmt.Errorf("%w: https://private.example.test/invoice.pdf?signature=secret", service.ErrInvoiceObjectRetryable)
 	}
 	requestContext, recorder = invoiceControllerContext(http.MethodGet, "/", "")
 	requestContext.Params = gin.Params{{Key: "id", Value: "7"}}

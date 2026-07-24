@@ -234,10 +234,6 @@ func (store *invoiceRetentionRaceStore) Delete(ctx context.Context, key string) 
 	return store.delete(ctx, key, call)
 }
 
-func (*invoiceRetentionRaceStore) PresignGet(context.Context, string, time.Duration) (string, error) {
-	return "", nil
-}
-
 func openInvoiceRetentionPostgreSQL(t *testing.T) (*gorm.DB, bool) {
 	t.Helper()
 	dsn := os.Getenv("TEST_POSTGRES_DSN")
@@ -297,7 +293,7 @@ func seedInvoiceRetentionDocument(t *testing.T, db *gorm.DB, suffix, status stri
 	t.Helper()
 	key := "invoices/retention-" + suffix + ".pdf"
 	document := model.InvoiceDocument{
-		ApplicationID: 1, R2Bucket: "invoice-retention-test", ObjectKey: &key,
+		ApplicationID: 1, R2AuthorityID: stringPointer(invoiceTestAuthorityID), R2Bucket: "invoice-retention-test", ObjectKey: &key,
 		ContentType: model.InvoicePDFContentType, SizeBytes: 100, SHA256: strings.Repeat("a", 64),
 		Status: status, OperationToken: "retention-" + suffix + "-token", OperationStartedAt: operationStartedAt,
 		UploadedBy: 1, UploadedAt: 1, CreatedAt: 1, UpdatedAt: 1,

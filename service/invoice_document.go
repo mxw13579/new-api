@@ -10,7 +10,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"time"
+	"os"
+	"strings"
 
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
@@ -23,6 +24,15 @@ var (
 	ErrInvoiceCommitAmbiguous = errors.New("invoice document commit outcome is ambiguous")
 	// ErrInvoiceDocumentRetryable indicates that durable state must be reread or reconciled before retrying the operation.
 	ErrInvoiceDocumentRetryable = errors.New("invoice document operation is retryable")
+	// ErrInvoiceStoreAuthorityUnbound indicates that a historical object has no explicitly attested store identity.
+	ErrInvoiceStoreAuthorityUnbound = errors.New("invoice store authority is unbound")
+	// ErrInvoiceStoreAuthorityMismatch indicates that persisted and configured store identities disagree.
+	ErrInvoiceStoreAuthorityMismatch = errors.New("invoice store authority mismatch")
+)
+
+const (
+	invoiceStoreAuthorityUnboundCategory  = "store_authority_unbound"
+	invoiceStoreAuthorityMismatchCategory = "store_authority_mismatch"
 )
 
 // InvoiceObjectStore defines the private object operations required by invoice document lifecycle services.
@@ -34,7 +44,6 @@ type InvoiceObjectStore interface {
 	Head(context.Context, string) (InvoiceObjectHead, error)
 	Get(context.Context, string, string) (InvoiceObjectGet, error)
 	Delete(context.Context, string) error
-	PresignGet(context.Context, string, time.Duration) (string, error)
 }
 
 // FinalizeInvoiceDocumentOperation carries the exact CAS, issuance, and attestation facts for initial activation.
@@ -150,6 +159,9 @@ func PromoteInvoiceDocument(ctx context.Context, db *gorm.DB, store InvoiceObjec
 	if document.StagingObjectKey == nil {
 		return nil, model.ErrInvoiceDocumentConflict
 	}
+	if err := bindNewInvoiceDocumentStore(db, store, &document, now); err != nil {
+		return nil, err
+	}
 
 	data, err := io.ReadAll(io.LimitReader(reader, InvoicePDFMaxBytes+1))
 	if err != nil {
@@ -196,9 +208,20 @@ func PromoteInvoiceDocument(ctx context.Context, db *gorm.DB, store InvoiceObjec
 	if err != nil {
 		return nil, err
 	}
-	if head.SizeBytes != validation.SizeBytes || head.ChecksumSHA256 != checksum {
+	if head.SizeBytes != validation.SizeBytes || head.ChecksumSHA256 != checksum || strings.TrimSpace(head.ETag) == "" {
 		return nil, fmt.Errorf("%w: promoted object verification failed", ErrInvoiceDocumentRetryable)
 	}
+	attested := db.Model(&model.InvoiceDocument{}).
+		Where("id = ? AND operation_token = ? AND status = ? AND r2_authority_id = ? AND r2_bucket = ?", document.ID, operationToken,
+			model.InvoiceDocumentStatusUploading, store.AuthorityID(), store.Bucket()).
+		Updates(map[string]any{"object_etag": head.ETag, "updated_at": now})
+	if attested.Error != nil {
+		return nil, attested.Error
+	}
+	if attested.RowsAffected != 1 {
+		return nil, model.ErrInvoiceDocumentConflict
+	}
+	document.ObjectETag = &head.ETag
 	if err := deleteInvoiceObject(ctx, store, *document.StagingObjectKey); err != nil {
 		category := model.InvoiceDocumentRecoveryDeleteRetryable
 		status := model.InvoiceDocumentStatusValidating
@@ -374,8 +397,8 @@ func ReconcileInvoiceDocument(ctx context.Context, db *gorm.DB, store InvoiceObj
 	}
 	document.OperationToken = newToken
 	document.OperationStartedAt = now
-	if !invoiceObjectStoreMatchesBucket(store, document.R2Bucket) {
-		return finishInvoiceDocumentRecovery(db, document, newToken, model.InvoiceDocumentStatusUploadFailed, model.InvoiceDocumentRecoveryBucketMismatch, now)
+	if err := bindInvoiceDocumentStoreAuthority(ctx, db, store, &document); err != nil {
+		return finishInvoiceDocumentRecovery(db, document, newToken, model.InvoiceDocumentStatusUploadFailed, invoiceStoreAuthorityCategory(err), now)
 	}
 
 	var application model.InvoiceApplication
@@ -453,6 +476,8 @@ func deletePersistedInvoiceObject(ctx context.Context, store InvoiceObjectStore,
 
 func hasDurableInvoiceActivationFacts(document model.InvoiceDocument, applicationStatus string, now int64) bool {
 	return applicationStatus == constant.InvoiceApplicationStatusIssued && document.IssuanceID != nil && *document.IssuanceID > 0 &&
+		document.R2AuthorityID != nil && validInvoiceR2AuthorityID(*document.R2AuthorityID) && strings.TrimSpace(document.R2Bucket) != "" &&
+		document.ObjectETag != nil && strings.TrimSpace(*document.ObjectETag) != "" &&
 		document.Version != nil && *document.Version > 0 && document.PDFFactsAttested && document.AttestedBy != nil && *document.AttestedBy > 0 &&
 		document.AttestedAt != nil && *document.AttestedAt > 0 && len(document.AttestedProfileSnapshotSHA256) == sha256.Size*2 &&
 		document.AvailableAt != nil && *document.AvailableAt > 0 && document.RetentionDaysSnapshot > 0 && document.ExpiresAt != nil && *document.ExpiresAt > now
@@ -500,10 +525,95 @@ func (lifecycle *InvoiceDocumentLifecycle) validatingDocument(documentID, applic
 	if err := lifecycle.db.Where("id = ? AND application_id = ? AND operation_token = ? AND status = ?", documentID, applicationID, token, model.InvoiceDocumentStatusValidating).First(&document).Error; err != nil {
 		return nil, invoiceDocumentLookupError(err)
 	}
-	if document.ObjectKey == nil || document.SHA256 == "" || document.SizeBytes <= 0 || document.LastRecoveryError != "" {
+	if document.ObjectKey == nil || document.SHA256 == "" || document.SizeBytes <= 0 || document.LastRecoveryError != "" ||
+		document.R2AuthorityID == nil || *document.R2AuthorityID != lifecycle.store.AuthorityID() || document.R2Bucket != lifecycle.store.Bucket() ||
+		document.ObjectETag == nil || strings.TrimSpace(*document.ObjectETag) == "" {
 		return nil, model.ErrInvoiceDocumentConflict
 	}
 	return &document, nil
+}
+
+func bindNewInvoiceDocumentStore(db *gorm.DB, store InvoiceObjectStore, document *model.InvoiceDocument, now int64) error {
+	if db == nil || store == nil || document == nil || !validInvoiceR2AuthorityID(store.AuthorityID()) ||
+		strings.TrimSpace(store.Bucket()) == "" || document.R2Bucket != store.Bucket() {
+		return ErrInvoiceStoreAuthorityMismatch
+	}
+	if document.R2AuthorityID != nil {
+		if *document.R2AuthorityID != store.AuthorityID() {
+			return ErrInvoiceStoreAuthorityMismatch
+		}
+		return nil
+	}
+	updated := db.Model(&model.InvoiceDocument{}).
+		Where("id = ? AND r2_authority_id IS NULL AND r2_bucket = ? AND status = ? AND operation_token = ?", document.ID,
+			document.R2Bucket, model.InvoiceDocumentStatusUploading, document.OperationToken).
+		Updates(map[string]any{"r2_authority_id": store.AuthorityID(), "updated_at": now})
+	if updated.Error != nil {
+		return updated.Error
+	}
+	if updated.RowsAffected != 1 {
+		return model.ErrInvoiceDocumentConflict
+	}
+	authority := store.AuthorityID()
+	document.R2AuthorityID = &authority
+	return nil
+}
+
+func bindInvoiceDocumentStoreAuthority(ctx context.Context, db *gorm.DB, store InvoiceObjectStore, document *model.InvoiceDocument) error {
+	if db == nil || store == nil || document == nil || !validInvoiceR2AuthorityID(store.AuthorityID()) ||
+		strings.TrimSpace(store.Bucket()) == "" || document.R2Bucket != store.Bucket() {
+		return ErrInvoiceStoreAuthorityMismatch
+	}
+	if document.R2AuthorityID != nil {
+		if *document.R2AuthorityID != store.AuthorityID() {
+			return ErrInvoiceStoreAuthorityMismatch
+		}
+		return nil
+	}
+	if os.Getenv("INVOICE_R2_LEGACY_AUTHORITY_ID") != store.AuthorityID() || document.ObjectKey == nil ||
+		document.SizeBytes <= 0 || len(document.SHA256) != sha256.Size*2 || strings.TrimSpace(document.OperationToken) == "" {
+		return ErrInvoiceStoreAuthorityUnbound
+	}
+	expectedChecksum, err := invoiceObjectChecksum(document.SHA256)
+	if err != nil {
+		return ErrInvoiceStoreAuthorityUnbound
+	}
+	head, err := store.Head(ctx, *document.ObjectKey)
+	if err != nil || head.SizeBytes != document.SizeBytes || head.ChecksumSHA256 != expectedChecksum || strings.TrimSpace(head.ETag) == "" {
+		return ErrInvoiceStoreAuthorityUnbound
+	}
+	updated := db.Model(&model.InvoiceDocument{}).
+		Where("id = ? AND r2_authority_id IS NULL AND r2_bucket = ? AND object_key = ? AND size_bytes = ? AND sha256 = ? AND status = ? AND operation_token = ?",
+			document.ID, document.R2Bucket, *document.ObjectKey, document.SizeBytes, document.SHA256, document.Status, document.OperationToken).
+		Updates(map[string]any{"r2_authority_id": store.AuthorityID(), "object_etag": head.ETag})
+	if updated.Error != nil {
+		return updated.Error
+	}
+	if updated.RowsAffected == 1 {
+		authority, etag := store.AuthorityID(), head.ETag
+		document.R2AuthorityID, document.ObjectETag = &authority, &etag
+		return nil
+	}
+	var current model.InvoiceDocument
+	if err := db.First(&current, document.ID).Error; err != nil {
+		return err
+	}
+	if current.R2AuthorityID != nil && *current.R2AuthorityID == store.AuthorityID() && current.R2Bucket == store.Bucket() &&
+		current.ObjectETag != nil && *current.ObjectETag == head.ETag {
+		*document = current
+		return nil
+	}
+	if current.R2AuthorityID != nil {
+		return ErrInvoiceStoreAuthorityMismatch
+	}
+	return ErrInvoiceStoreAuthorityUnbound
+}
+
+func invoiceStoreAuthorityCategory(err error) string {
+	if errors.Is(err, ErrInvoiceStoreAuthorityMismatch) {
+		return invoiceStoreAuthorityMismatchCategory
+	}
+	return invoiceStoreAuthorityUnboundCategory
 }
 
 func (lifecycle *InvoiceDocumentLifecycle) resolveFinalizeFailure(ctx context.Context, before *model.InvoiceDocument, token string, operationErr error) (*model.InvoiceDocument, error) {

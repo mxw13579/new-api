@@ -8,12 +8,10 @@ import (
 	"net/url"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/QuantumNous/new-api/model"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
@@ -44,10 +42,6 @@ type invoiceR2Client interface {
 	DeleteObject(context.Context, *s3.DeleteObjectInput, ...func(*s3.Options)) (*s3.DeleteObjectOutput, error)
 }
 
-type invoiceR2Presigner interface {
-	PresignGetObject(context.Context, *s3.GetObjectInput, ...func(*s3.PresignOptions)) (*v4.PresignedHTTPRequest, error)
-}
-
 // InvoiceObjectHead contains the durable size and checksum facts used to verify a promoted PDF object.
 type InvoiceObjectHead struct {
 	SizeBytes      int64
@@ -66,17 +60,16 @@ type InvoiceObjectGet struct {
 // InvoiceR2Store implements the private invoice object contract for one trusted R2 bucket.
 type InvoiceR2Store struct {
 	client    invoiceR2Client
-	presigner invoiceR2Presigner
 	authority string
 	bucket    string
 }
 
 // NewInvoiceR2Store validates dependencies and creates a store restricted to the supplied private bucket.
-func NewInvoiceR2Store(client invoiceR2Client, presigner invoiceR2Presigner, authority, bucket string) (*InvoiceR2Store, error) {
-	if client == nil || presigner == nil || !validInvoiceR2AuthorityID(authority) || strings.TrimSpace(bucket) == "" {
+func NewInvoiceR2Store(client invoiceR2Client, authority, bucket string) (*InvoiceR2Store, error) {
+	if client == nil || !validInvoiceR2AuthorityID(authority) || strings.TrimSpace(bucket) == "" {
 		return nil, ErrInvoiceObjectTerminal
 	}
-	return &InvoiceR2Store{client: client, presigner: presigner, authority: authority, bucket: bucket}, nil
+	return &InvoiceR2Store{client: client, authority: authority, bucket: bucket}, nil
 }
 
 // NewInvoiceR2StoreFromEnvironment creates the trusted invoice store from validated HTTPS R2 configuration.
@@ -97,7 +90,7 @@ func NewInvoiceR2StoreFromEnvironment() (*InvoiceR2Store, error) {
 		Credentials: aws.NewCredentialsCache(credentials.NewStaticCredentialsProvider(accessKeyID, secretAccessKey, "")),
 	}
 	client := s3.NewFromConfig(config)
-	return NewInvoiceR2Store(client, s3.NewPresignClient(client), authority, bucket)
+	return NewInvoiceR2Store(client, authority, bucket)
 }
 
 // AuthorityID returns the stable non-secret identity bound to this store instance.
@@ -188,22 +181,6 @@ func (s *InvoiceR2Store) Delete(ctx context.Context, key string) error {
 	}
 	_, err := s.client.DeleteObject(ctx, &s3.DeleteObjectInput{Bucket: aws.String(s.bucket), Key: aws.String(key)})
 	return classifyInvoiceObjectError(err)
-}
-
-// PresignGet creates a bounded attachment URL for a validated final invoice key.
-func (s *InvoiceR2Store) PresignGet(ctx context.Context, key string, ttl time.Duration) (string, error) {
-	if validateInvoiceObjectKey(key) != nil || ttl <= 0 || ttl > 5*time.Minute {
-		return "", ErrInvoiceObjectTerminal
-	}
-	request, err := s.presigner.PresignGetObject(ctx, &s3.GetObjectInput{
-		Bucket: aws.String(s.bucket), Key: aws.String(key),
-		ResponseContentType:        aws.String(model.InvoicePDFContentType),
-		ResponseContentDisposition: aws.String("attachment; filename=invoice.pdf"),
-	}, func(options *s3.PresignOptions) { options.Expires = ttl })
-	if err != nil {
-		return "", classifyInvoiceObjectError(err)
-	}
-	return request.URL, nil
 }
 
 func validateInvoiceObjectKey(key string) error {

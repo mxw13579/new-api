@@ -8,7 +8,6 @@ import (
 	"io"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/QuantumNous/new-api/model"
 
@@ -35,6 +34,19 @@ type invoiceDeleteFailureStore struct {
 	db             *gorm.DB
 	documentID     int64
 	statusAtDelete string
+	authorityAtPut *string
+	etagAtDelete   *string
+}
+
+func (s *invoiceDeleteFailureStore) Put(ctx context.Context, key string, reader io.Reader, size int64, checksum string) error {
+	if s.db != nil && s.documentID > 0 {
+		var document model.InvoiceDocument
+		if err := s.db.First(&document, s.documentID).Error; err != nil {
+			return err
+		}
+		s.authorityAtPut = document.R2AuthorityID
+	}
+	return s.invoiceObjectStoreStub.Put(ctx, key, reader, size, checksum)
 }
 
 func (s *invoiceDeleteFailureStore) Delete(ctx context.Context, key string) error {
@@ -45,6 +57,7 @@ func (s *invoiceDeleteFailureStore) Delete(ctx context.Context, key string) erro
 				return err
 			}
 			s.statusAtDelete = document.Status
+			s.etagAtDelete = document.ObjectETag
 		}
 		return s.failure
 	}
@@ -97,7 +110,7 @@ func (s *invoiceObjectStoreStub) Head(_ context.Context, key string) (InvoiceObj
 	if err != nil {
 		return InvoiceObjectHead{}, err
 	}
-	return InvoiceObjectHead{SizeBytes: int64(len(data)), ChecksumSHA256: checksum}, nil
+	return InvoiceObjectHead{SizeBytes: int64(len(data)), ChecksumSHA256: checksum, ETag: `"stub-etag"`}, nil
 }
 
 func (s *invoiceObjectStoreStub) Get(context.Context, string, string) (InvoiceObjectGet, error) {
@@ -128,10 +141,6 @@ func (s *invoiceObjectStoreStub) Delete(_ context.Context, key string) error {
 	}
 	delete(s.objects, key)
 	return nil
-}
-
-func (s *invoiceObjectStoreStub) PresignGet(_ context.Context, _ string, _ time.Duration) (string, error) {
-	return "", nil
 }
 
 type invoiceDocumentApplicationStub struct {
@@ -232,6 +241,10 @@ func TestCreateInvoiceDocumentUploadPersistsRandomPrivateKeys(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, first.ObjectKey)
 	require.NotNil(t, second.ObjectKey)
+	require.NotNil(t, first.R2AuthorityID)
+	assert.Equal(t, invoiceTestAuthorityID, *first.R2AuthorityID)
+	require.NotNil(t, first.ObjectETag)
+	assert.Equal(t, `"stub-etag"`, *first.ObjectETag)
 	assert.Regexp(t, `^invoices/[a-f0-9]{32}\.pdf$`, *first.ObjectKey)
 	assert.NotEqual(t, *first.ObjectKey, *second.ObjectKey)
 }
@@ -258,6 +271,10 @@ func TestPromoteInvoiceDocumentRequiresStagingDeletionBeforeFinalize(t *testing.
 			_, err = PromoteInvoiceDocument(context.Background(), db, store, document.ID, document.OperationToken, bytes.NewReader(buildInvoiceTestPDF(t, "")), 101)
 			require.ErrorIs(t, err, testCase.failure)
 			assert.Equal(t, model.InvoiceDocumentStatusUploading, store.statusAtDelete)
+			require.NotNil(t, store.authorityAtPut)
+			assert.Equal(t, invoiceTestAuthorityID, *store.authorityAtPut)
+			require.NotNil(t, store.etagAtDelete)
+			assert.Equal(t, `"stub-etag"`, *store.etagAtDelete)
 			var current model.InvoiceDocument
 			require.NoError(t, db.First(&current, document.ID).Error)
 			assert.Equal(t, testCase.status, current.Status)
@@ -676,7 +693,7 @@ func TestReconcileInvoiceDocumentPersistsDormantBucketMismatch(t *testing.T) {
 	reconciled, err := ReconcileInvoiceDocument(context.Background(), db, store, document.ID, 50, 60)
 	require.NoError(t, err)
 	assert.Equal(t, model.InvoiceDocumentStatusUploadFailed, reconciled.Status)
-	assert.Equal(t, model.InvoiceDocumentRecoveryBucketMismatch, reconciled.LastRecoveryError)
+	assert.Equal(t, invoiceStoreAuthorityMismatchCategory, reconciled.LastRecoveryError)
 	assert.Contains(t, store.objects, *document.ObjectKey)
 
 	_, err = ReconcileInvoiceDocument(context.Background(), db, store, document.ID, 100, 90)

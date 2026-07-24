@@ -20,7 +20,7 @@ import (
 func seedCleanupDocument(t *testing.T, db *gorm.DB, status, key string, expiresAt *int64, operationStartedAt int64) model.InvoiceDocument {
 	t.Helper()
 	document := model.InvoiceDocument{
-		ApplicationID: 1, R2Bucket: "private", ObjectKey: &key, ContentType: model.InvoicePDFContentType,
+		ApplicationID: 1, R2AuthorityID: stringPointer(invoiceTestAuthorityID), R2Bucket: "private", ObjectKey: &key, ContentType: model.InvoicePDFContentType,
 		Status: status, OperationToken: key + "-token", OperationStartedAt: operationStartedAt,
 		UploadedBy: 1, UploadedAt: 1, ExpiresAt: expiresAt, CreatedAt: 1, UpdatedAt: 1,
 	}
@@ -35,7 +35,7 @@ func TestInvoiceCleanupHandlerReservesHalfBudgetForRetention(t *testing.T) {
 	for index := 0; index < 501; index++ {
 		stagingKey := fmt.Sprintf("tmp/invoices/stale-%03d.pdf", index)
 		document := model.InvoiceDocument{
-			ApplicationID: 1, R2Bucket: "private", StagingObjectKey: &stagingKey,
+			ApplicationID: 1, R2AuthorityID: stringPointer(invoiceTestAuthorityID), R2Bucket: "private", StagingObjectKey: &stagingKey,
 			ContentType: model.InvoicePDFContentType, Status: model.InvoiceDocumentStatusUploadFailed,
 			OperationToken: fmt.Sprintf("stale-token-%03d", index), OperationStartedAt: 1,
 			UploadedBy: 1, UploadedAt: 1, RecoveryAttempts: 1, LastRecoveryAt: 1,
@@ -361,7 +361,7 @@ func TestCleanupInvoiceDocumentsRejectsPersistedBucketMismatch(t *testing.T) {
 	assert.Equal(t, model.InvoiceDocumentStatusDeleteFailed, current.Status)
 	assert.Zero(t, current.DeleteAttempts)
 	require.NotNil(t, current.DeleteErrorCategory)
-	assert.Equal(t, model.InvoiceDocumentDeleteErrorBucketMismatch, *current.DeleteErrorCategory)
+	assert.Equal(t, invoiceStoreAuthorityMismatchCategory, *current.DeleteErrorCategory)
 }
 
 type invoiceCleanupLeaseLossStore struct {
@@ -446,7 +446,7 @@ func TestInvoiceCleanupHandlerReconcilesStaleUploadOperationsWithinBudget(t *tes
 	missing := seedCleanupDocument(t, db, model.InvoiceDocumentStatusValidating, missingKey, nil, 1)
 	stagingKey := "tmp/invoices/missing.pdf"
 	uploading := model.InvoiceDocument{
-		ApplicationID: 3, R2Bucket: "private", StagingObjectKey: &stagingKey, ContentType: model.InvoicePDFContentType,
+		ApplicationID: 3, R2AuthorityID: stringPointer(invoiceTestAuthorityID), R2Bucket: "private", StagingObjectKey: &stagingKey, ContentType: model.InvoicePDFContentType,
 		Status: model.InvoiceDocumentStatusUploading, OperationToken: "expired-token", OperationStartedAt: 1,
 		UploadedBy: 1, UploadedAt: 1, CreatedAt: 1, UpdatedAt: 1,
 	}
@@ -480,7 +480,7 @@ func TestReconcileStaleInvoiceDocumentsIsolatesRetryableRowsAndSkipsDormantTermi
 	seedInvoiceDocumentApplication(t, db, 1, "approved", nil)
 
 	retryKey := "tmp/invoices/retry.pdf"
-	retry := model.InvoiceDocument{ApplicationID: 1, R2Bucket: "private", StagingObjectKey: &retryKey,
+	retry := model.InvoiceDocument{ApplicationID: 1, R2AuthorityID: stringPointer(invoiceTestAuthorityID), R2Bucket: "private", StagingObjectKey: &retryKey,
 		ContentType: model.InvoicePDFContentType, Status: model.InvoiceDocumentStatusUploadFailed,
 		OperationToken: "retry-token", OperationStartedAt: 1, UploadedBy: 1, UploadedAt: 1,
 		RecoveryAttempts: 1, LastRecoveryAt: 1, LastRecoveryError: model.InvoiceDocumentRecoveryDeleteRetryable,
@@ -529,7 +529,7 @@ func TestReconcileStaleInvoiceDocumentsBoundsA501RowBacklog(t *testing.T) {
 	seedInvoiceDocumentApplication(t, db, 1, "approved", nil)
 	for index := 0; index < 501; index++ {
 		key := fmt.Sprintf("tmp/invoices/%03d.pdf", index)
-		document := model.InvoiceDocument{ApplicationID: 1, R2Bucket: "private", StagingObjectKey: &key,
+		document := model.InvoiceDocument{ApplicationID: 1, R2AuthorityID: stringPointer(invoiceTestAuthorityID), R2Bucket: "private", StagingObjectKey: &key,
 			ContentType: model.InvoicePDFContentType, Status: model.InvoiceDocumentStatusUploadFailed,
 			OperationToken: fmt.Sprintf("token-%03d", index), OperationStartedAt: 1, UploadedBy: 1, UploadedAt: 1,
 			RecoveryAttempts: 1, LastRecoveryAt: int64(index + 1), LastRecoveryError: model.InvoiceDocumentRecoveryDeleteRetryable,
@@ -562,7 +562,7 @@ func TestInvoiceRecoverySentinelsNeverReachTaskStateOrCapturedLogs(t *testing.T)
 	seedInvoiceDocumentApplication(t, db, 1, "approved", nil)
 	finalKey, stagingKey := sentinels[4], sentinels[5]
 	document := model.InvoiceDocument{
-		ApplicationID: 1, R2Bucket: "private", ObjectKey: &finalKey, StagingObjectKey: &stagingKey,
+		ApplicationID: 1, R2AuthorityID: stringPointer(invoiceTestAuthorityID), R2Bucket: "private", ObjectKey: &finalKey, StagingObjectKey: &stagingKey,
 		ContentType: model.InvoicePDFContentType, Status: model.InvoiceDocumentStatusValidating,
 		OperationToken: "sentinel-operation-token", OperationStartedAt: 1, UploadedBy: 1, UploadedAt: 1,
 		CreatedAt: 1, UpdatedAt: 1,

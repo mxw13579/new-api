@@ -140,7 +140,7 @@ func CleanupInvoiceDocuments(ctx context.Context, db *gorm.DB, store InvoiceObje
 		if err := ctx.Err(); err != nil {
 			return result, err
 		}
-		category := invoiceDocumentPrevalidationFailure(store, document)
+		category := invoiceDocumentPrevalidationFailure(ctx, db, store, &document)
 		if category != "" {
 			terminalized, terminalErr := terminalizeInvoiceDocumentCleanupCandidate(db, document, category, now)
 			if terminalErr != nil {
@@ -194,15 +194,15 @@ func findInvoiceDocumentCleanupCandidates(db *gorm.DB, now, staleBefore int64, l
 	return documents, err
 }
 
-func invoiceDocumentPrevalidationFailure(store InvoiceObjectStore, document model.InvoiceDocument) string {
+func invoiceDocumentPrevalidationFailure(ctx context.Context, db *gorm.DB, store InvoiceObjectStore, document *model.InvoiceDocument) string {
 	if document.ObjectKey == nil {
 		return model.InvoiceDocumentDeleteErrorMissingObjectKey
 	}
 	if validateInvoiceObjectKey(*document.ObjectKey) != nil {
 		return model.InvoiceDocumentDeleteErrorTerminal
 	}
-	if !invoiceObjectStoreMatchesBucket(store, document.R2Bucket) {
-		return model.InvoiceDocumentDeleteErrorBucketMismatch
+	if err := bindInvoiceDocumentStoreAuthority(ctx, db, store, document); err != nil {
+		return invoiceStoreAuthorityCategory(err)
 	}
 	if document.DeleteAttempts >= invoiceCleanupMaxDeleteAttempts {
 		return model.InvoiceDocumentDeleteErrorTerminal

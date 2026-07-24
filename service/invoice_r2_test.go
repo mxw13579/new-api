@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
@@ -53,16 +52,10 @@ func (s *invoiceR2ClientStub) DeleteObject(_ context.Context, input *s3.DeleteOb
 	return &s3.DeleteObjectOutput{}, s.err
 }
 
-type invoiceR2PresignerStub struct{}
-
-func (*invoiceR2PresignerStub) PresignGetObject(_ context.Context, _ *s3.GetObjectInput, _ ...func(*s3.PresignOptions)) (*v4.PresignedHTTPRequest, error) {
-	return &v4.PresignedHTTPRequest{URL: "https://private.invalid/signed"}, nil
-}
-
 func TestInvoiceR2AdapterUsesBoundedPrivateOperations(t *testing.T) {
 	client := &invoiceR2ClientStub{}
 	authorityID := strings.Repeat("a", 64)
-	store, err := NewInvoiceR2Store(client, &invoiceR2PresignerStub{}, authorityID, "private-invoices")
+	store, err := NewInvoiceR2Store(client, authorityID, "private-invoices")
 	require.NoError(t, err)
 	assert.Equal(t, authorityID, store.AuthorityID())
 	assert.Equal(t, "private-invoices", store.Bucket())
@@ -126,7 +119,7 @@ func TestInvoiceR2AuthorityIDRequiresExactLowercaseHex(t *testing.T) {
 	}
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {
-			store, err := NewInvoiceR2Store(client, &invoiceR2PresignerStub{}, testCase.authority, "private-invoices")
+			store, err := NewInvoiceR2Store(client, testCase.authority, "private-invoices")
 			if testCase.wantError {
 				assert.ErrorIs(t, err, ErrInvoiceObjectTerminal)
 				assert.Nil(t, store)
@@ -140,7 +133,7 @@ func TestInvoiceR2AuthorityIDRequiresExactLowercaseHex(t *testing.T) {
 
 func TestInvoiceR2GetClassifiesPreconditionFailureAsIntegrityUnavailable(t *testing.T) {
 	client := &invoiceR2ClientStub{err: &smithy.GenericAPIError{Code: "PreconditionFailed", Message: "etag changed", Fault: smithy.FaultClient}}
-	store, err := NewInvoiceR2Store(client, &invoiceR2PresignerStub{}, strings.Repeat("a", 64), "private-invoices")
+	store, err := NewInvoiceR2Store(client, strings.Repeat("a", 64), "private-invoices")
 	require.NoError(t, err)
 
 	_, err = store.Get(context.Background(), "invoices/random.pdf", "\"persisted-etag\"")
@@ -164,7 +157,7 @@ func TestInvoiceR2AdapterClassifiesProviderErrors(t *testing.T) {
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {
 			client := &invoiceR2ClientStub{err: testCase.provider}
-			store, err := NewInvoiceR2Store(client, &invoiceR2PresignerStub{}, strings.Repeat("a", 64), "private-invoices")
+			store, err := NewInvoiceR2Store(client, strings.Repeat("a", 64), "private-invoices")
 			require.NoError(t, err)
 			_, err = store.Head(context.Background(), "invoices/random.pdf")
 			require.ErrorIs(t, err, testCase.expected)
@@ -176,7 +169,7 @@ func TestInvoiceR2AdapterClassifiesProviderErrors(t *testing.T) {
 	}
 
 	client := &invoiceR2ClientStub{err: errors.New("transport failed")}
-	store, err := NewInvoiceR2Store(client, &invoiceR2PresignerStub{}, strings.Repeat("a", 64), "private-invoices")
+	store, err := NewInvoiceR2Store(client, strings.Repeat("a", 64), "private-invoices")
 	require.NoError(t, err)
 	_, err = store.Head(context.Background(), "invoices/random.pdf")
 	assert.ErrorIs(t, err, ErrInvoiceObjectRetryable)

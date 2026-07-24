@@ -2,82 +2,103 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"fmt"
+	"io"
+	"strings"
 	"time"
 
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 )
 
-const (
-	invoiceDownloadMaxTTL    = 5 * time.Minute
-	invoiceDownloadClockSkew = 5 * time.Second
-)
-
 var (
-	// ErrInvoiceDocumentUnavailable indicates that lifecycle or retention state currently forbids a download URL.
+	// ErrInvoiceDocumentUnavailable indicates that lifecycle, retention, or immutable object state forbids a download.
 	ErrInvoiceDocumentUnavailable = errors.New("invoice document unavailable")
 	invoiceDownloadNow            = time.Now
 	newInvoiceDownloadStore       = func() (InvoiceObjectStore, error) { return NewInvoiceR2StoreFromEnvironment() }
 )
 
-func invoiceDocumentDownloadTTL(application *model.InvoiceApplication, document *model.InvoiceDocument, now time.Time) (time.Duration, error) {
+func invoiceDocumentDownloadEligible(application *model.InvoiceApplication, document *model.InvoiceDocument, now time.Time) error {
 	paymentReviewPermitted := application.PaymentReviewStatus == constant.InvoicePaymentReviewStatusNone ||
 		application.PaymentReviewStatus == constant.InvoicePaymentReviewStatusResolvedValid
 	if application.Status != constant.InvoiceApplicationStatusIssued || !paymentReviewPermitted ||
 		application.ActiveDocumentID == nil || document == nil || document.ID != *application.ActiveDocumentID ||
 		document.ApplicationID != application.ID || document.Status != model.InvoiceDocumentStatusAvailable ||
-		document.ObjectKey == nil || document.ExpiresAt == nil || document.DeletedAt != nil {
-		return 0, ErrInvoiceDocumentUnavailable
+		document.ObjectKey == nil || document.ExpiresAt == nil || *document.ExpiresAt <= now.Unix() || document.DeletedAt != nil {
+		return ErrInvoiceDocumentUnavailable
 	}
-	remaining := time.Unix(*document.ExpiresAt, 0).Sub(now) - invoiceDownloadClockSkew
-	if remaining <= 0 {
-		return 0, ErrInvoiceDocumentUnavailable
-	}
-	if remaining > invoiceDownloadMaxTTL {
-		remaining = invoiceDownloadMaxTTL
-	}
-	return remaining, nil
+	return nil
 }
 
-// GetInvoiceDocumentDownload returns a short-lived signed URL only for the owner's active downloadable document.
-func GetInvoiceDocumentDownload(ctx context.Context, userID int, applicationID int64) (string, error) {
+func invoiceDocumentDownloadTTL(application *model.InvoiceApplication, document *model.InvoiceDocument, now time.Time) (time.Duration, error) {
+	if err := invoiceDocumentDownloadEligible(application, document, now); err != nil {
+		return 0, err
+	}
+	return time.Unix(*document.ExpiresAt, 0).Sub(now), nil
+}
+
+// GetInvoiceDocumentDownload returns owner-scoped PDF bytes only after a conditional read verifies every immutable fact.
+func GetInvoiceDocumentDownload(ctx context.Context, userID int, applicationID int64) ([]byte, error) {
 	application, err := model.GetInvoiceApplication(applicationID, &userID)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	document, err := model.GetInvoiceDocument(application.ActiveDocumentID)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	now := invoiceDownloadNow()
-	ttl, err := invoiceDocumentDownloadTTL(application, document, now)
-	if err != nil {
-		return "", err
-	}
-	expectedChecksum, err := invoiceObjectChecksum(document.SHA256)
-	if err != nil {
-		return "", ErrInvoiceObjectTerminal
+	if err := invoiceDocumentDownloadEligible(application, document, now); err != nil {
+		return nil, err
 	}
 	store, err := newInvoiceDownloadStore()
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	if !invoiceObjectStoreMatchesBucket(store, document.R2Bucket) {
-		return "", ErrInvoiceObjectTerminal
+	if err := bindInvoiceDocumentStoreAuthority(ctx, model.DB, store, document); err != nil {
+		return nil, fmt.Errorf("%w: object authority unavailable", ErrInvoiceDocumentUnavailable)
 	}
-	head, err := store.Head(ctx, *document.ObjectKey)
+	if document.ObjectETag == nil || strings.TrimSpace(*document.ObjectETag) == "" {
+		return nil, fmt.Errorf("%w: object integrity unavailable", ErrInvoiceDocumentUnavailable)
+	}
+	expectedChecksum, err := invoiceObjectChecksum(document.SHA256)
+	if err != nil {
+		return nil, ErrInvoiceObjectTerminal
+	}
+	object, err := store.Get(ctx, *document.ObjectKey, *document.ObjectETag)
 	if errors.Is(err, ErrInvoiceObjectNotFound) {
-		return "", markInvoiceDocumentMissing(document, nil, now.Unix())
+		return nil, markInvoiceDocumentMissing(document, nil, now.Unix())
 	}
 	if err != nil {
-		return "", err
+		if errors.Is(err, ErrInvoiceObjectIntegrityUnavailable) {
+			return nil, fmt.Errorf("%w: object integrity unavailable", ErrInvoiceDocumentUnavailable)
+		}
+		return nil, err
 	}
-	if head.SizeBytes != document.SizeBytes || head.ChecksumSHA256 != expectedChecksum {
-		category := model.InvoiceDocumentDeleteErrorObjectIntegrityMismatch
-		return "", markInvoiceDocumentMissing(document, &category, now.Unix())
+	if object.Body == nil {
+		return nil, fmt.Errorf("%w: object body unavailable", ErrInvoiceDocumentUnavailable)
 	}
-	return store.PresignGet(ctx, *document.ObjectKey, ttl)
+	content, readErr := io.ReadAll(io.LimitReader(object.Body, InvoicePDFMaxBytes+1))
+	closeErr := object.Body.Close()
+	if readErr != nil {
+		return nil, fmt.Errorf("%w: object read interrupted", ErrInvoiceDocumentRetryable)
+	}
+	if int64(len(content)) > InvoicePDFMaxBytes || int64(len(content)) != document.SizeBytes || object.SizeBytes != document.SizeBytes ||
+		object.ChecksumSHA256 != expectedChecksum || object.ETag != *document.ObjectETag {
+		return nil, fmt.Errorf("%w: object integrity unavailable", ErrInvoiceDocumentUnavailable)
+	}
+	digest := sha256.Sum256(content)
+	if hex.EncodeToString(digest[:]) != document.SHA256 {
+		return nil, fmt.Errorf("%w: object integrity unavailable", ErrInvoiceDocumentUnavailable)
+	}
+	if closeErr != nil {
+		logger.LogWarn(ctx, "invoice document body close failed after verified read")
+	}
+	return content, nil
 }
 
 func markInvoiceDocumentMissing(document *model.InvoiceDocument, category *string, now int64) error {
