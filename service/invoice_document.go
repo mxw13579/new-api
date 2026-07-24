@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 
 	"gorm.io/gorm"
@@ -208,8 +209,12 @@ func PromoteInvoiceDocument(ctx context.Context, db *gorm.DB, store InvoiceObjec
 	if err != nil {
 		return nil, err
 	}
-	if head.SizeBytes != validation.SizeBytes || head.ChecksumSHA256 != checksum || strings.TrimSpace(head.ETag) == "" {
+	if head.SizeBytes != validation.SizeBytes || strings.TrimSpace(head.ETag) == "" ||
+		(head.ChecksumSHA256 != "" && head.ChecksumSHA256 != checksum) {
 		return nil, fmt.Errorf("%w: promoted object verification failed", ErrInvoiceDocumentRetryable)
+	}
+	if _, err := readVerifiedInvoiceObject(ctx, store, finalKey, head.ETag, validation.SizeBytes, validation.SHA256); err != nil {
+		return nil, err
 	}
 	attested := db.Model(&model.InvoiceDocument{}).
 		Where("id = ? AND operation_token = ? AND status = ? AND r2_authority_id = ? AND r2_bucket = ?", document.ID, operationToken,
@@ -579,7 +584,11 @@ func bindInvoiceDocumentStoreAuthority(ctx context.Context, db *gorm.DB, store I
 		return ErrInvoiceStoreAuthorityUnbound
 	}
 	head, err := store.Head(ctx, *document.ObjectKey)
-	if err != nil || head.SizeBytes != document.SizeBytes || head.ChecksumSHA256 != expectedChecksum || strings.TrimSpace(head.ETag) == "" {
+	if err != nil || head.SizeBytes != document.SizeBytes || strings.TrimSpace(head.ETag) == "" ||
+		(head.ChecksumSHA256 != "" && head.ChecksumSHA256 != expectedChecksum) {
+		return ErrInvoiceStoreAuthorityUnbound
+	}
+	if _, err := readVerifiedInvoiceObject(ctx, store, *document.ObjectKey, head.ETag, document.SizeBytes, document.SHA256); err != nil {
 		return ErrInvoiceStoreAuthorityUnbound
 	}
 	updated := db.Model(&model.InvoiceDocument{}).
@@ -614,6 +623,40 @@ func invoiceStoreAuthorityCategory(err error) string {
 		return invoiceStoreAuthorityMismatchCategory
 	}
 	return invoiceStoreAuthorityUnboundCategory
+}
+
+func readVerifiedInvoiceObject(ctx context.Context, store InvoiceObjectStore, key, etag string, expectedSize int64, expectedSHA256 string) ([]byte, error) {
+	if store == nil || expectedSize <= 0 || expectedSize > InvoicePDFMaxBytes || strings.TrimSpace(etag) == "" {
+		return nil, ErrInvoiceObjectIntegrityUnavailable
+	}
+	expectedChecksum, err := invoiceObjectChecksum(expectedSHA256)
+	if err != nil {
+		return nil, ErrInvoiceObjectIntegrityUnavailable
+	}
+	object, err := store.Get(ctx, key, etag)
+	if err != nil {
+		return nil, err
+	}
+	if object.Body == nil {
+		return nil, ErrInvoiceObjectIntegrityUnavailable
+	}
+	content, readErr := io.ReadAll(io.LimitReader(object.Body, InvoicePDFMaxBytes+1))
+	closeErr := object.Body.Close()
+	if readErr != nil {
+		return nil, fmt.Errorf("%w: object read interrupted", ErrInvoiceDocumentRetryable)
+	}
+	if int64(len(content)) > InvoicePDFMaxBytes || int64(len(content)) != expectedSize || object.SizeBytes != expectedSize ||
+		object.ETag != etag || (object.ChecksumSHA256 != "" && object.ChecksumSHA256 != expectedChecksum) {
+		return nil, ErrInvoiceObjectIntegrityUnavailable
+	}
+	digest := sha256.Sum256(content)
+	if hex.EncodeToString(digest[:]) != expectedSHA256 {
+		return nil, ErrInvoiceObjectIntegrityUnavailable
+	}
+	if closeErr != nil {
+		logger.LogWarn(ctx, "invoice document body close failed after verified read")
+	}
+	return content, nil
 }
 
 func (lifecycle *InvoiceDocumentLifecycle) resolveFinalizeFailure(ctx context.Context, before *model.InvoiceDocument, token string, operationErr error) (*model.InvoiceDocument, error) {

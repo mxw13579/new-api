@@ -18,12 +18,18 @@ import (
 )
 
 type invoiceObjectStoreStub struct {
-	objects      map[string][]byte
-	deleteErrors map[string]error
-	deletedKeys  []string
-	bucket       string
-	copyError    error
-	headError    error
+	objects              map[string][]byte
+	deleteErrors         map[string]error
+	deletedKeys          []string
+	bucket               string
+	copyError            error
+	headError            error
+	headChecksumOverride *string
+	getChecksumOverride  *string
+	getETagOverride      *string
+	getError             error
+	getBody              io.ReadCloser
+	getCalls             int
 }
 
 const invoiceTestAuthorityID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -110,11 +116,41 @@ func (s *invoiceObjectStoreStub) Head(_ context.Context, key string) (InvoiceObj
 	if err != nil {
 		return InvoiceObjectHead{}, err
 	}
+	if s.headChecksumOverride != nil {
+		checksum = *s.headChecksumOverride
+	}
 	return InvoiceObjectHead{SizeBytes: int64(len(data)), ChecksumSHA256: checksum, ETag: `"stub-etag"`}, nil
 }
 
-func (s *invoiceObjectStoreStub) Get(context.Context, string, string) (InvoiceObjectGet, error) {
-	return InvoiceObjectGet{Body: io.NopCloser(bytes.NewReader(nil))}, nil
+func (s *invoiceObjectStoreStub) Get(_ context.Context, key, ifMatch string) (InvoiceObjectGet, error) {
+	s.getCalls++
+	if s.getError != nil {
+		return InvoiceObjectGet{}, s.getError
+	}
+	data, ok := s.objects[key]
+	if !ok {
+		return InvoiceObjectGet{}, ErrInvoiceObjectNotFound
+	}
+	validation, err := ValidateInvoicePDF(bytes.NewReader(data))
+	if err != nil {
+		return InvoiceObjectGet{}, err
+	}
+	checksum, err := invoiceObjectChecksum(validation.SHA256)
+	if err != nil {
+		return InvoiceObjectGet{}, err
+	}
+	if s.getChecksumOverride != nil {
+		checksum = *s.getChecksumOverride
+	}
+	etag := `"stub-etag"`
+	if s.getETagOverride != nil {
+		etag = *s.getETagOverride
+	}
+	body := s.getBody
+	if body == nil {
+		body = io.NopCloser(bytes.NewReader(data))
+	}
+	return InvoiceObjectGet{Body: body, SizeBytes: int64(len(data)), ChecksumSHA256: checksum, ETag: etag}, nil
 }
 
 type invoicePromotionCASLossStore struct {
@@ -247,6 +283,73 @@ func TestCreateInvoiceDocumentUploadPersistsRandomPrivateKeys(t *testing.T) {
 	assert.Equal(t, `"stub-etag"`, *first.ObjectETag)
 	assert.Regexp(t, `^invoices/[a-f0-9]{32}\.pdf$`, *first.ObjectKey)
 	assert.NotEqual(t, *first.ObjectKey, *second.ObjectKey)
+}
+
+func TestPromoteInvoiceDocumentVerifiesCopiedBytesWhenProviderChecksumIsBlank(t *testing.T) {
+	db := openInvoiceDocumentServiceTestDB(t)
+	store := newInvoiceObjectStoreStub()
+	blank := ""
+	store.headChecksumOverride = &blank
+	store.getChecksumOverride = &blank
+	document, err := CreateInvoiceDocumentUpload(db, "private", 1, 9, 100)
+	require.NoError(t, err)
+
+	promoted, err := PromoteInvoiceDocument(context.Background(), db, store, document.ID, document.OperationToken,
+		bytes.NewReader(buildInvoiceTestPDF(t, "")), 101)
+
+	require.NoError(t, err)
+	assert.Equal(t, model.InvoiceDocumentStatusValidating, promoted.Status)
+	require.NotNil(t, promoted.ObjectETag)
+	assert.Equal(t, `"stub-etag"`, *promoted.ObjectETag)
+	assert.Equal(t, 1, store.getCalls)
+	require.NotNil(t, promoted.StagingObjectKey)
+	assert.NotContains(t, store.objects, *promoted.StagingObjectKey)
+}
+
+func TestPromoteInvoiceDocumentRejectsUnverifiedCopiedObjectBeforeCASAndDelete(t *testing.T) {
+	for _, testCase := range []struct {
+		name      string
+		configure func(*invoiceObjectStoreStub)
+	}{
+		{name: "nonblank provider checksum mismatch", configure: func(store *invoiceObjectStoreStub) {
+			mismatch := "different"
+			store.headChecksumOverride = &mismatch
+		}},
+		{name: "conditional get precondition failed", configure: func(store *invoiceObjectStoreStub) {
+			store.getError = ErrInvoiceObjectIntegrityUnavailable
+		}},
+		{name: "conditional get wrong etag", configure: func(store *invoiceObjectStoreStub) {
+			wrong := `"replacement-etag"`
+			store.getETagOverride = &wrong
+		}},
+		{name: "conditional get overflow", configure: func(store *invoiceObjectStoreStub) {
+			store.getBody = io.NopCloser(strings.NewReader(strings.Repeat("x", int(InvoicePDFMaxBytes+1))))
+		}},
+		{name: "conditional get interrupted read", configure: func(store *invoiceObjectStoreStub) {
+			store.getBody = &invoiceDownloadReadCloser{Reader: errorReader{err: errors.New("interrupted")}}
+		}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			db := openInvoiceDocumentServiceTestDB(t)
+			store := newInvoiceObjectStoreStub()
+			blank := ""
+			store.headChecksumOverride = &blank
+			testCase.configure(store)
+			document, err := CreateInvoiceDocumentUpload(db, "private", 1, 9, 100)
+			require.NoError(t, err)
+
+			_, err = PromoteInvoiceDocument(context.Background(), db, store, document.ID, document.OperationToken,
+				bytes.NewReader(buildInvoiceTestPDF(t, "")), 101)
+
+			require.Error(t, err)
+			var persisted model.InvoiceDocument
+			require.NoError(t, db.First(&persisted, document.ID).Error)
+			assert.Nil(t, persisted.ObjectETag)
+			require.NotNil(t, persisted.StagingObjectKey)
+			assert.Contains(t, store.objects, *persisted.StagingObjectKey)
+			assert.Empty(t, store.deletedKeys)
+		})
+	}
 }
 
 func TestPromoteInvoiceDocumentRequiresStagingDeletionBeforeFinalize(t *testing.T) {

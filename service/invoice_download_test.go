@@ -32,18 +32,19 @@ func (reader *invoiceDownloadReadCloser) Close() error {
 }
 
 type invoiceDownloadStoreStub struct {
-	bucket      string
-	authority   string
-	head        InvoiceObjectHead
-	headErr     error
-	get         InvoiceObjectGet
-	getErr      error
-	headCalls   int
-	getCalls    int
-	deleteCalls int
-	getKey      string
-	getIfMatch  string
-	beforeHead  func()
+	bucket         string
+	authority      string
+	head           InvoiceObjectHead
+	headErr        error
+	get            InvoiceObjectGet
+	getErr         error
+	headCalls      int
+	getCalls       int
+	deleteCalls    int
+	getKey         string
+	getIfMatch     string
+	getBodyFactory func() io.ReadCloser
+	beforeHead     func()
 }
 
 func (store *invoiceDownloadStoreStub) Bucket() string      { return store.bucket }
@@ -63,6 +64,9 @@ func (store *invoiceDownloadStoreStub) Get(_ context.Context, key, ifMatch strin
 	store.getCalls++
 	store.getKey = key
 	store.getIfMatch = ifMatch
+	if store.getBodyFactory != nil {
+		store.get.Body = store.getBodyFactory()
+	}
 	return store.get, store.getErr
 }
 func (store *invoiceDownloadStoreStub) Delete(context.Context, string) error {
@@ -141,6 +145,30 @@ func TestGetInvoiceDocumentDownloadReturnsOnlyVerifiedConditionalBytes(t *testin
 	assert.True(t, store.get.Body.(*invoiceDownloadReadCloser).closed)
 }
 
+func TestGetInvoiceDocumentDownloadAcceptsBlankProviderChecksumAfterLocalVerification(t *testing.T) {
+	application, document := downloadableInvoiceFixture()
+	store := setupInvoiceDownloadTest(t, &application, document)
+	store.get.ChecksumSHA256 = ""
+
+	content, err := GetInvoiceDocumentDownload(context.Background(), 11, application.ID)
+
+	require.NoError(t, err)
+	assert.Equal(t, []byte("invoice-pdf"), content)
+	assert.True(t, store.get.Body.(*invoiceDownloadReadCloser).closed)
+}
+
+func TestGetInvoiceDocumentDownloadIgnoresCloseFailureAfterVerifiedRead(t *testing.T) {
+	application, document := downloadableInvoiceFixture()
+	store := setupInvoiceDownloadTest(t, &application, document)
+	store.get.Body.(*invoiceDownloadReadCloser).err = errors.New("close failed")
+
+	content, err := GetInvoiceDocumentDownload(context.Background(), 11, application.ID)
+
+	require.NoError(t, err)
+	assert.Equal(t, []byte("invoice-pdf"), content)
+	assert.True(t, store.get.Body.(*invoiceDownloadReadCloser).closed)
+}
+
 func TestGetInvoiceDocumentDownloadRequiresExactAuthorityAndBucketBeforeObjectIO(t *testing.T) {
 	for _, testCase := range []struct {
 		name   string
@@ -177,19 +205,46 @@ func TestGetInvoiceDocumentDownloadBindsExplicitlyAttestedLegacyFacts(t *testing
 	document.R2AuthorityID = nil
 	document.ObjectETag = nil
 	store := setupInvoiceDownloadTest(t, &application, document)
+	store.getBodyFactory = func() io.ReadCloser {
+		return &invoiceDownloadReadCloser{Reader: bytes.NewReader([]byte("invoice-pdf"))}
+	}
 
 	content, err := GetInvoiceDocumentDownload(context.Background(), 11, application.ID)
 
 	require.NoError(t, err)
 	assert.Equal(t, []byte("invoice-pdf"), content)
 	assert.Equal(t, 1, store.headCalls)
-	assert.Equal(t, 1, store.getCalls)
+	assert.Equal(t, 2, store.getCalls)
 	var persisted model.InvoiceDocument
 	require.NoError(t, model.DB.First(&persisted, *application.ActiveDocumentID).Error)
 	require.NotNil(t, persisted.R2AuthorityID)
 	assert.Equal(t, invoiceTestAuthorityID, *persisted.R2AuthorityID)
 	require.NotNil(t, persisted.ObjectETag)
 	assert.Equal(t, `"opaque-etag"`, *persisted.ObjectETag)
+}
+
+func TestGetInvoiceDocumentDownloadBindsLegacyObjectWithBlankProviderChecksum(t *testing.T) {
+	t.Setenv("INVOICE_R2_LEGACY_AUTHORITY_ID", invoiceTestAuthorityID)
+	application, document := downloadableInvoiceFixture()
+	document.R2AuthorityID = nil
+	document.ObjectETag = nil
+	store := setupInvoiceDownloadTest(t, &application, document)
+	store.head.ChecksumSHA256 = ""
+	store.get.ChecksumSHA256 = ""
+	store.getBodyFactory = func() io.ReadCloser {
+		return &invoiceDownloadReadCloser{Reader: bytes.NewReader([]byte("invoice-pdf"))}
+	}
+
+	content, err := GetInvoiceDocumentDownload(context.Background(), 11, application.ID)
+
+	require.NoError(t, err)
+	assert.Equal(t, []byte("invoice-pdf"), content)
+	assert.Equal(t, 1, store.headCalls)
+	assert.Equal(t, 2, store.getCalls)
+	var persisted model.InvoiceDocument
+	require.NoError(t, model.DB.First(&persisted, *application.ActiveDocumentID).Error)
+	require.NotNil(t, persisted.R2AuthorityID)
+	require.NotNil(t, persisted.ObjectETag)
 }
 
 func TestGetInvoiceDocumentDownloadLegacyMismatchRemainsDormant(t *testing.T) {

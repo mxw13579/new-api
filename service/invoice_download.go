@@ -2,16 +2,12 @@ package service
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
 	"strings"
 	"time"
 
 	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 )
 
@@ -65,11 +61,7 @@ func GetInvoiceDocumentDownload(ctx context.Context, userID int, applicationID i
 	if document.ObjectETag == nil || strings.TrimSpace(*document.ObjectETag) == "" {
 		return nil, fmt.Errorf("%w: object integrity unavailable", ErrInvoiceDocumentUnavailable)
 	}
-	expectedChecksum, err := invoiceObjectChecksum(document.SHA256)
-	if err != nil {
-		return nil, ErrInvoiceObjectTerminal
-	}
-	object, err := store.Get(ctx, *document.ObjectKey, *document.ObjectETag)
+	content, err := readVerifiedInvoiceObject(ctx, store, *document.ObjectKey, *document.ObjectETag, document.SizeBytes, document.SHA256)
 	if errors.Is(err, ErrInvoiceObjectNotFound) {
 		return nil, markInvoiceDocumentMissing(document, nil, now.Unix())
 	}
@@ -78,25 +70,6 @@ func GetInvoiceDocumentDownload(ctx context.Context, userID int, applicationID i
 			return nil, fmt.Errorf("%w: object integrity unavailable", ErrInvoiceDocumentUnavailable)
 		}
 		return nil, err
-	}
-	if object.Body == nil {
-		return nil, fmt.Errorf("%w: object body unavailable", ErrInvoiceDocumentUnavailable)
-	}
-	content, readErr := io.ReadAll(io.LimitReader(object.Body, InvoicePDFMaxBytes+1))
-	closeErr := object.Body.Close()
-	if readErr != nil {
-		return nil, fmt.Errorf("%w: object read interrupted", ErrInvoiceDocumentRetryable)
-	}
-	if int64(len(content)) > InvoicePDFMaxBytes || int64(len(content)) != document.SizeBytes || object.SizeBytes != document.SizeBytes ||
-		object.ChecksumSHA256 != expectedChecksum || object.ETag != *document.ObjectETag {
-		return nil, fmt.Errorf("%w: object integrity unavailable", ErrInvoiceDocumentUnavailable)
-	}
-	digest := sha256.Sum256(content)
-	if hex.EncodeToString(digest[:]) != document.SHA256 {
-		return nil, fmt.Errorf("%w: object integrity unavailable", ErrInvoiceDocumentUnavailable)
-	}
-	if closeErr != nil {
-		logger.LogWarn(ctx, "invoice document body close failed after verified read")
 	}
 	return content, nil
 }
