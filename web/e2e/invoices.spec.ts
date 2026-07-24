@@ -23,7 +23,7 @@ type InvoiceScenario = 'normal' | 'empty' | 'error'
 interface InvoiceBackendOptions {
   scenario?: InvoiceScenario
   createGate?: Promise<void>
-  language?: 'en' | 'fr'
+  language?: 'en' | 'fr' | 'vi'
 }
 
 const now = 1_900_000_000
@@ -90,7 +90,11 @@ async function installInvoiceBackend(
 ) {
   const scenario = options.scenario || 'normal'
   let created = false
-  const downloadRequests: number[] = []
+  const downloadRequests: Array<{
+    applicationId: number
+    authorization: string | null
+  }> = []
+  const downloadedDocuments: string[] = []
   const cancelRequests: number[] = []
 
   await page.addInitScript((language) => {
@@ -323,7 +327,10 @@ async function installInvoiceBackend(
       /^\/api\/user\/invoices\/(\d+)\/document-url$/
     )
     if (downloadMatch) {
-      downloadRequests.push(Number(downloadMatch[1]))
+      downloadRequests.push({
+        applicationId: Number(downloadMatch[1]),
+        authorization: await request.headerValue('authorization'),
+      })
       await fulfill(route, success({ download_url: '/invoice-e2e.pdf' }))
       return
     }
@@ -337,6 +344,7 @@ async function installInvoiceBackend(
   })
 
   await page.route('**/invoice-e2e.pdf', async (route) => {
+    downloadedDocuments.push(new URL(route.request().url()).pathname)
     await route.fulfill({
       status: 200,
       contentType: 'application/pdf',
@@ -344,7 +352,7 @@ async function installInvoiceBackend(
     })
   })
 
-  return { downloadRequests, cancelRequests }
+  return { downloadRequests, downloadedDocuments, cancelRequests }
 }
 
 test('desktop invoice route supports keyboard application flow and held download suppression', async ({
@@ -473,7 +481,17 @@ test('user history paginates, opens detail, reconciles cancel conflict, and guar
   await expect(page.getByText('INV-PAGE-2')).toBeVisible()
   await page.getByRole('button', { name: 'Previous' }).click()
   await page.getByRole('button', { name: 'Download PDF' }).click()
-  await expect.poll(() => backend.downloadRequests).toEqual([1])
+  await expect
+    .poll(() => backend.downloadRequests)
+    .toEqual([
+      {
+        applicationId: 1,
+        authorization: 'Bearer e2e-access-token',
+      },
+    ])
+  await expect
+    .poll(() => backend.downloadedDocuments)
+    .toEqual(['/invoice-e2e.pdf'])
 })
 
 test.describe('mobile invoice route', () => {
@@ -527,5 +545,52 @@ test.describe('mobile invoice route', () => {
         )
       )
       .toBe(true)
+  })
+
+  test('keeps the Vietnamese application drawer focused and within the viewport', async ({
+    page,
+  }) => {
+    await installInvoiceBackend(page, { language: 'vi' })
+    await page.goto('/invoices')
+
+    await expect(
+      page.getByRole('heading', { name: 'Hóa đơn', exact: true })
+    ).toBeVisible()
+    await page.getByLabel('Hồ sơ hóa đơn').selectOption('1')
+    await page.getByRole('checkbox', { name: 'TOPUP-101' }).check()
+    const reviewButton = page.getByRole('button', {
+      name: 'Kiểm tra yêu cầu',
+    })
+    await reviewButton.click()
+
+    const drawer = page.getByRole('dialog')
+    await expect(drawer.getByText('Xác nhận yêu cầu hóa đơn')).toBeVisible()
+    expect(
+      await drawer.evaluate((element) =>
+        element.contains(document.activeElement)
+      )
+    ).toBe(true)
+    await expect
+      .poll(async () => {
+        const box = await drawer.boundingBox()
+        return box ? Math.ceil(box.x + box.width) : Number.POSITIVE_INFINITY
+      })
+      .toBeLessThanOrEqual(390)
+    expect(
+      await drawer.evaluate(
+        (element) => element.scrollWidth <= element.clientWidth
+      )
+    ).toBe(true)
+
+    await page.keyboard.press('Escape')
+    await expect(drawer).toBeHidden()
+    await expect(reviewButton).toBeFocused()
+    expect(
+      await page.evaluate(
+        () =>
+          document.documentElement.scrollWidth <=
+          document.documentElement.clientWidth
+      )
+    ).toBe(true)
   })
 })
