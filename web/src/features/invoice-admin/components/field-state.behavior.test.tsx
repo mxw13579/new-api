@@ -19,16 +19,24 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import assert from 'node:assert/strict'
 
-import i18next from 'i18next'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { I18nextProvider } from 'react-i18next'
 
 import type { InvoiceApplicationDetail } from '../types'
-import { DocumentUpload } from './document-upload'
-import { SettingsForm } from './settings-form'
 
-const i18n = i18next.createInstance()
-await i18n.init({ lng: 'en', resources: { en: { translation: {} } } })
+type MockModule = (
+  specifier: string,
+  factory: () => Record<string, unknown>
+) => void
+const mockModule = (
+  (await import('bun:test')) as unknown as { mock: { module: MockModule } }
+).mock.module
+
+mockModule('react-i18next', () => ({
+  useTranslation: () => ({ t: (key: string) => key }),
+}))
+
+const { DocumentUpload } = await import('./document-upload')
+const { SettingsForm } = await import('./settings-form')
 
 const application: InvoiceApplicationDetail = {
   id: 7,
@@ -68,9 +76,7 @@ const application: InvoiceApplicationDetail = {
 }
 
 function render(component: React.ReactNode): string {
-  return renderToStaticMarkup(
-    <I18nextProvider i18n={i18n}>{component}</I18nextProvider>
-  )
+  return renderToStaticMarkup(component)
 }
 
 describe('invoice administrator pending field behavior', () => {
