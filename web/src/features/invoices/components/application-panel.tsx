@@ -50,6 +50,7 @@ import {
   getInvoiceOrderSelectionSummary,
   invalidateUserInvoiceMutationQueries,
   isInvoiceProfileEnabled,
+  reconcileInvoiceOrderSelectionAfterError,
   updateInvoiceOrderSelection,
 } from '../user-workspace'
 import { ApplicationConfirmation } from './application-confirmation'
@@ -146,11 +147,16 @@ export function ApplicationPanel(props: ApplicationPanelProps) {
     },
     onError: async (error) => {
       if (error instanceof InvoiceApiError) {
-        if (
-          error.code === 'INVOICE_STATE_CONFLICT' ||
-          error.code === 'INVOICE_TOPUP_INELIGIBLE' ||
-          error.code === 'INVOICE_PAYMENT_EVIDENCE_CONFLICT'
-        ) {
+        const reconciledSelection = reconcileInvoiceOrderSelectionAfterError(
+          orderSelection,
+          error.code
+        )
+        const eligibilityConflict = reconciledSelection !== orderSelection
+        if (eligibilityConflict) {
+          setOrderSelection(reconciledSelection)
+          setConfirmOpen(false)
+        }
+        if (error.code === 'INVOICE_STATE_CONFLICT' || eligibilityConflict) {
           await invalidateUserInvoiceMutationQueries(queryClient)
         }
         setLiveMessageKey(getInvoiceErrorMessageKey(error.code))

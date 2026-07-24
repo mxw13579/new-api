@@ -66,7 +66,7 @@ export function ApplicationProfileSelection(
               value={profile.id}
               disabled={!enabled}
             >
-              {profile.title} 路 v{profile.version}
+              {profile.title} · v{profile.version}
               {!enabled ? ` (${t('Disabled for new applications')})` : ''}
             </NativeSelectOption>
           )

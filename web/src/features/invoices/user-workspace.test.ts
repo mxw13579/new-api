@@ -27,6 +27,7 @@ import {
   invalidateUserInvoiceMutationQueries,
   invoicePageCount,
   isInvoiceProfileEnabled,
+  reconcileInvoiceOrderSelectionAfterError,
   updateInvoiceOrderSelection,
   shouldPollInvoiceApplication,
 } from './user-workspace'
@@ -74,6 +75,54 @@ describe('invoice user workspace behavior', () => {
       amountMinor: 500,
       minimumReached: false,
     })
+  })
+
+  it('recovers after a rejected hidden order disappears from eligibility', () => {
+    for (const code of [
+      'INVOICE_TOPUP_INELIGIBLE',
+      'INVOICE_PAYMENT_EVIDENCE_CONFLICT',
+    ] as const) {
+      let sequence = 0
+      const identity = createInvoiceDraftIdentity(() => `request-${++sequence}`)
+      let selection = createInvoiceOrderSelection()
+      selection = updateInvoiceOrderSelection(
+        selection,
+        { topup_id: 11, paid_amount_minor: 600 },
+        true
+      )
+      selection = updateInvoiceOrderSelection(
+        selection,
+        { topup_id: 22, paid_amount_minor: 500 },
+        true
+      )
+      expect(identity.forDraft('orders:11,22')).toBe('request-1')
+
+      selection = reconcileInvoiceOrderSelectionAfterError(selection, code)
+      expect(getInvoiceOrderSelectionSummary(selection, 500)).toEqual({
+        topupIds: [],
+        amountMinor: 0,
+        minimumReached: false,
+      })
+
+      selection = updateInvoiceOrderSelection(
+        selection,
+        { topup_id: 22, paid_amount_minor: 500 },
+        true
+      )
+      expect(getInvoiceOrderSelectionSummary(selection, 500).topupIds).toEqual([
+        22,
+      ])
+      expect(identity.forDraft('orders:22')).toBe('request-2')
+      expect(identity.forDraft('orders:22')).toBe('request-2')
+    }
+
+    const unchangedSelection = createInvoiceOrderSelection()
+    expect(
+      reconcileInvoiceOrderSelectionAfterError(
+        unchangedSelection,
+        'INVOICE_STATE_CONFLICT'
+      )
+    ).toBe(unchangedSelection)
   })
 
   it('invalidates all user lists, the affected detail, and self quota', async () => {

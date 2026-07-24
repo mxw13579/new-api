@@ -41,7 +41,7 @@ import { Spinner } from '@/components/ui/spinner'
 
 import type { InvoiceConfig, InvoiceType } from '../types'
 
-interface ProfileDraft {
+export interface ProfileDraft {
   id: number | null
   type: InvoiceType
   title: string

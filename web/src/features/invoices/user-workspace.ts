@@ -25,6 +25,7 @@ import type {
   EligibleInvoiceOrder,
   InvoiceApplicationStatus,
   InvoiceDocumentStatus,
+  InvoiceErrorCode,
   InvoiceType,
 } from './types'
 
@@ -73,6 +74,17 @@ export function getInvoiceOrderSelectionSummary(
     amountMinor,
     minimumReached: amountMinor >= minimumAmountMinor,
   }
+}
+
+/** Reconciles selected orders after a server eligibility decision. */
+export function reconcileInvoiceOrderSelectionAfterError(
+  selection: InvoiceOrderSelection,
+  code: InvoiceErrorCode
+): InvoiceOrderSelection {
+  const eligibilityConflict =
+    code === 'INVOICE_TOPUP_INELIGIBLE' ||
+    code === 'INVOICE_PAYMENT_EVIDENCE_CONFLICT'
+  return eligibilityConflict ? createInvoiceOrderSelection() : selection
 }
 
 /** Keeps one idempotency key until the user changes or resets a draft. */

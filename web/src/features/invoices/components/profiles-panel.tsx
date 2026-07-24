@@ -39,13 +39,8 @@ import { Spinner } from '@/components/ui/spinner'
 import { InvoiceApiError } from '../api'
 import { getInvoiceErrorMessageKey } from '../contract'
 import { invoiceQueryKeys } from '../queries'
-import type {
-  InvoiceApi,
-  InvoiceConfig,
-  InvoiceProfile,
-  InvoiceType,
-} from '../types'
-import { ProfileEditor } from './profile-editor'
+import type { InvoiceApi, InvoiceConfig, InvoiceProfile } from '../types'
+import { ProfileEditor, type ProfileDraft } from './profile-editor'
 import { ProfileList } from './profile-list'
 
 interface ProfilesPanelProps {
@@ -55,15 +50,6 @@ interface ProfilesPanelProps {
   error: boolean
   retry: () => void
   config: InvoiceConfig | undefined
-}
-
-interface ProfileDraft {
-  id: number | null
-  type: InvoiceType
-  title: string
-  taxNumber: string
-  isDefault: boolean
-  version: number
 }
 
 const EMPTY_PROFILE_DRAFT: ProfileDraft = {
