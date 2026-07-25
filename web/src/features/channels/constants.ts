@@ -239,6 +239,8 @@ export const ERROR_MESSAGES = {
   REQUIRED_GROUP: 'Group is required',
   INVALID_JSON: 'Invalid JSON format',
   INVALID_MODEL_MAPPING: 'Invalid model mapping format',
+  INVALID_PROXY:
+    'Proxy address must use HTTP, HTTPS, SOCKS5, or SOCKS5H and include a valid host',
   CREATE_FAILED: 'Failed to create channel',
   UPDATE_FAILED: 'Failed to update channel',
   DELETE_FAILED: 'Failed to delete channel',
@@ -384,7 +386,7 @@ export const TYPE_TO_KEY_PROMPT: Record<number, string> = {
   15: 'Format: APIKey|SecretKey',
   18: 'Format: APPID|APISecret|APIKey',
   22: 'Format: APIKey-AppId, e.g., fastgpt-0sp2gtvfdgyi4k30jwlgwf1i-64f335d84283f05518e9e041',
-  23: 'Format: AppId|SecretId|SecretKey',
+  23: 'Format: TokenHub API Key, or legacy AppId|SecretId|SecretKey',
   33: 'Format: Ak|Sk|Region',
   50: 'Format: AccessKey|SecretKey (or just ApiKey if upstream is New API)',
   51: 'Format: Access Key ID|Secret Access Key',
