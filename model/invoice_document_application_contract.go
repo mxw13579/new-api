@@ -82,7 +82,10 @@ func (applicationContract *InvoiceDocumentApplication) FinalizeDocumentTx(tx *go
 		CreatedBy: request.AttestedBy, CreatedAt: now, UpdatedAt: now,
 	}
 	if err := tx.Create(&issuance).Error; err != nil {
-		return FinalizeInvoiceDocumentResult{}, ErrInvoiceIssuanceConflict
+		if isInvoiceIssuanceUniquenessConflict(err) {
+			return FinalizeInvoiceDocumentResult{}, ErrInvoiceIssuanceConflict
+		}
+		return FinalizeInvoiceDocumentResult{}, err
 	}
 	updated := tx.Model(&InvoiceApplication{}).
 		Where("id = ? AND status = ? AND payment_review_status = ? AND active_document_id IS NULL", request.ApplicationID,

@@ -20,9 +20,10 @@ import { hasPermission } from '@/lib/admin-permissions'
 import type { AuthUser } from '@/stores/auth-store'
 
 import type {
+  AdminInvoiceApi,
   InvoiceApplicationDetail,
   InvoiceApplicationStatus,
-  InvoiceSetting,
+  UpdateInvoiceSettingRequest,
 } from '../invoices/types'
 import type {
   InvoiceAdminCapabilities,
@@ -41,9 +42,6 @@ export const INVOICE_ADMIN_PERMISSIONS = {
 
 /** Maximum PDF size accepted by the invoice upload contract. */
 export const MAX_INVOICE_PDF_BYTES = 10 * 1024 * 1024
-
-/** Maximum invoice fee representable by the backend quota domain. */
-export const MAX_INVOICE_FEE_QUOTA = 2_147_483_647
 
 /** Localization key substituted for permission-protected invoice values. */
 export const PROTECTED_INVOICE_VALUE_KEY = 'Protected invoice value'
@@ -98,6 +96,30 @@ export function getInvoiceReviewActions(
   return []
 }
 
+/** Runs the dependent reviewing-to-approved-to-issued browser workflow. */
+export async function approveAndIssueInvoice(
+  api: AdminInvoiceApi,
+  detail: InvoiceApplicationDetail,
+  document: FormData,
+  onUploadFailureApproved: (
+    approved: InvoiceApplicationDetail
+  ) => Promise<void> | void
+): Promise<InvoiceApplicationDetail> {
+  if (detail.status !== 'reviewing') {
+    throw new Error('approve-and-issue requires a reviewing application')
+  }
+  const approved = await api.reviewApplication(detail.id, {
+    action: 'approve',
+    expected_status: 'reviewing',
+  })
+  try {
+    return await api.uploadDocument(detail.id, document)
+  } catch (error) {
+    await onUploadFailureApproved(approved)
+    throw error
+  }
+}
+
 /** Validates and creates the exact invoice PDF multipart request. */
 export function buildInvoiceDocumentFormData(
   detail: InvoiceApplicationDetail,
@@ -125,7 +147,10 @@ export function buildInvoiceDocumentFormData(
   let faceAmountMinor = input.face_amount_minor
   let currency = input.currency
 
-  if (detail.status === 'approved' && detail.document === null) {
+  if (
+    (detail.status === 'reviewing' || detail.status === 'approved') &&
+    detail.document === null
+  ) {
     expectedStatus = 'approved'
   } else if (
     detail.status === 'issued' &&
@@ -165,10 +190,11 @@ export function buildInvoiceDocumentFormData(
   return { ok: true, data: formData }
 }
 
-/** Validates the complete six-field invoice settings object. */
+/** Validates invoice policy and the complete database-backed R2 configuration. */
 export function validateInvoiceSetting(
-  setting: InvoiceSetting
-): InvoiceValidationResult<InvoiceSetting> {
+  setting: UpdateInvoiceSettingRequest,
+  r2SecretConfigured: boolean
+): InvoiceValidationResult<UpdateInvoiceSettingRequest> {
   if (
     !Number.isSafeInteger(setting.application_window_days) ||
     setting.application_window_days <= 0
@@ -182,17 +208,33 @@ export function validateInvoiceSetting(
     return { ok: false, errorKey: 'Minimum invoice amount cannot be negative' }
   }
   if (
-    !Number.isSafeInteger(setting.fee_quota) ||
-    setting.fee_quota < 0 ||
-    setting.fee_quota > MAX_INVOICE_FEE_QUOTA
+    !Number.isSafeInteger(setting.fee_percent) ||
+    setting.fee_percent < 0 ||
+    setting.fee_percent > 100
   ) {
-    return { ok: false, errorKey: 'Invoice fee quota is out of range' }
+    return { ok: false, errorKey: 'Invoice fee percentage is out of range' }
   }
   if (
     !Number.isSafeInteger(setting.pdf_retention_days) ||
     setting.pdf_retention_days <= 0
   ) {
     return { ok: false, errorKey: 'PDF retention must be positive' }
+  }
+  const r2Values = [
+    setting.r2_endpoint,
+    setting.r2_bucket,
+    setting.r2_access_key_id,
+  ].map((value) => value.trim())
+  const publicR2Empty = r2Values.every((value) => value === '')
+  const publicR2Complete = r2Values.every((value) => value !== '')
+  const secretAvailable =
+    r2SecretConfigured || setting.r2_secret_access_key.trim() !== ''
+  if (
+    (!publicR2Empty && !publicR2Complete) ||
+    (publicR2Complete && !secretAvailable) ||
+    (publicR2Empty && setting.r2_secret_access_key.trim() !== '')
+  ) {
+    return { ok: false, errorKey: 'Enter a complete R2 configuration' }
   }
   return { ok: true, data: setting }
 }

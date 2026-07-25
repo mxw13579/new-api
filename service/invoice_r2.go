@@ -8,10 +8,10 @@ import (
 	"fmt"
 	"io"
 	"net/url"
-	"os"
 	"strings"
 
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
@@ -32,6 +32,8 @@ var (
 	ErrInvoiceObjectRetryable = errors.New("invoice object operation retryable")
 	// ErrInvoiceObjectTerminal classifies invalid configuration, unsafe inputs, or non-retryable provider failures.
 	ErrInvoiceObjectTerminal = errors.New("invoice object operation terminal")
+	// ErrInvoiceR2NotConfigured identifies missing or invalid database-backed invoice storage settings.
+	ErrInvoiceR2NotConfigured = errors.New("invoice R2 storage is not configured or invalid")
 	// ErrInvoiceObjectIntegrityUnavailable classifies a failed immutable conditional read.
 	ErrInvoiceObjectIntegrityUnavailable = fmt.Errorf("%w: invoice object integrity unavailable", ErrInvoiceObjectTerminal)
 	// ErrInvoiceObjectBucketUnavailable classifies a terminal response that does not prove an individual object is absent.
@@ -76,19 +78,37 @@ func NewInvoiceR2Store(client invoiceR2Client, authority, bucket string) (*Invoi
 	return &InvoiceR2Store{client: client, authority: authority, bucket: bucket}, nil
 }
 
-// NewInvoiceR2StoreFromEnvironment creates the trusted invoice store from validated HTTPS R2 configuration.
-func NewInvoiceR2StoreFromEnvironment() (*InvoiceR2Store, error) {
-	endpoint := strings.TrimSpace(os.Getenv("INVOICE_R2_ENDPOINT"))
-	bucket := strings.TrimSpace(os.Getenv("INVOICE_R2_BUCKET"))
-	accessKeyID := strings.TrimSpace(os.Getenv("INVOICE_R2_ACCESS_KEY_ID"))
-	secretAccessKey := strings.TrimSpace(os.Getenv("INVOICE_R2_SECRET_ACCESS_KEY"))
+// ValidateInvoiceR2Configuration validates the complete database-backed R2 credential set without making a network request.
+func ValidateInvoiceR2Configuration(endpoint, bucket, accessKeyID, secretAccessKey string) error {
+	endpoint = strings.TrimSpace(endpoint)
+	bucket = strings.TrimSpace(bucket)
+	accessKeyID = strings.TrimSpace(accessKeyID)
+	secretAccessKey = strings.TrimSpace(secretAccessKey)
 	if endpoint == "" || bucket == "" || accessKeyID == "" || secretAccessKey == "" {
-		return nil, ErrInvoiceObjectTerminal
+		return ErrInvoiceR2NotConfigured
 	}
-	normalizedEndpoint, authority, ok := invoiceR2EndpointAuthority(endpoint)
+	_, _, ok := invoiceR2EndpointAuthority(endpoint)
 	if !ok {
-		return nil, ErrInvoiceObjectTerminal
+		return ErrInvoiceR2NotConfigured
 	}
+	return nil
+}
+
+// NewInvoiceR2StoreFromSetting creates the trusted invoice store exclusively from persisted invoice settings.
+func NewInvoiceR2StoreFromSetting() (*InvoiceR2Store, error) {
+	setting := operation_setting.GetInvoiceSetting()
+	return newInvoiceR2StoreFromSetting(setting)
+}
+
+func newInvoiceR2StoreFromSetting(setting operation_setting.InvoiceSetting) (*InvoiceR2Store, error) {
+	endpoint := strings.TrimSpace(setting.R2Endpoint)
+	bucket := strings.TrimSpace(setting.R2Bucket)
+	accessKeyID := strings.TrimSpace(setting.R2AccessKeyID)
+	secretAccessKey := strings.TrimSpace(setting.R2Secret)
+	if err := ValidateInvoiceR2Configuration(endpoint, bucket, accessKeyID, secretAccessKey); err != nil {
+		return nil, err
+	}
+	normalizedEndpoint, authority, _ := invoiceR2EndpointAuthority(endpoint)
 	config := aws.Config{
 		Region: "auto", BaseEndpoint: aws.String(normalizedEndpoint),
 		Credentials: aws.NewCredentialsCache(credentials.NewStaticCredentialsProvider(accessKeyID, secretAccessKey, "")),

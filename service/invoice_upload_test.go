@@ -8,9 +8,42 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestUploadInvoiceDocumentUsesOneSettingSnapshot(t *testing.T) {
+	db := openInvoiceDocumentServiceTestDB(t)
+	previousDB := model.DB
+	model.DB = db
+	t.Cleanup(func() { model.DB = previousDB })
+	seedInvoiceDocumentApplication(t, db, 77, constant.InvoiceApplicationStatusApproved, nil)
+	store := newInvoiceObjectStoreStub()
+	previousFactory := newInvoiceUploadStore
+	previousSetting := operation_setting.GetInvoiceSetting()
+	first := operation_setting.InvoiceSetting{PDFRetentionDays: 31, R2Bucket: "private"}
+	second := operation_setting.InvoiceSetting{PDFRetentionDays: 92, R2Bucket: "rotated"}
+	operation_setting.PublishInvoiceSetting(first)
+	newInvoiceUploadStore = func(setting operation_setting.InvoiceSetting) (InvoiceObjectStore, error) {
+		assert.Equal(t, first, setting)
+		operation_setting.PublishInvoiceSetting(second)
+		return store, nil
+	}
+	t.Cleanup(func() {
+		newInvoiceUploadStore = previousFactory
+		operation_setting.PublishInvoiceSetting(previousSetting)
+	})
+
+	err := UploadInvoiceDocument(context.Background(), 9, 77, dto.InvoiceDocumentUploadRequest{
+		ExpectedStatus: constant.InvoiceApplicationStatusApproved, InvoiceNumber: "INV-77", InvoiceDate: 100,
+		FaceAmountMinor: 100, Currency: constant.InvoiceCurrencyCNY, PDFFactsAttested: true,
+	}, bytes.NewReader(buildInvoiceTestPDF(t, "")))
+	require.NoError(t, err)
+	var document model.InvoiceDocument
+	require.NoError(t, db.Where("application_id = ?", 77).First(&document).Error)
+	assert.Equal(t, 31, document.RetentionDaysSnapshot)
+}
 
 func TestUploadInvoiceDocumentReachesIssuedReplacementPath(t *testing.T) {
 	db := openInvoiceDocumentServiceTestDB(t)

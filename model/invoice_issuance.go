@@ -1,6 +1,18 @@
 package model
 
-import "gorm.io/gorm"
+import (
+	"errors"
+	"strings"
+
+	mysqlDriver "github.com/go-sql-driver/mysql"
+	"github.com/jackc/pgx/v5/pgconn"
+	"gorm.io/gorm"
+)
+
+const (
+	invoiceIssuanceApplicationIndex = "uk_invoice_issuances_application"
+	invoiceIssuanceNumberIndex      = "uk_invoice_issuances_number"
+)
 
 // InvoiceIssuance stores the immutable fiscal identity and face value assigned to one application.
 type InvoiceIssuance struct {
@@ -19,4 +31,27 @@ type InvoiceIssuance struct {
 // BeforeUpdate rejects mutation of persisted issuance facts after creation.
 func (InvoiceIssuance) BeforeUpdate(*gorm.DB) error {
 	return ErrInvoiceIssuanceConflict
+}
+
+func isInvoiceIssuanceUniquenessConflict(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, gorm.ErrDuplicatedKey) {
+		return true
+	}
+	var postgresErr *pgconn.PgError
+	if errors.As(err, &postgresErr) {
+		return postgresErr.Code == "23505" &&
+			(postgresErr.ConstraintName == invoiceIssuanceApplicationIndex || postgresErr.ConstraintName == invoiceIssuanceNumberIndex)
+	}
+	var mysqlErr *mysqlDriver.MySQLError
+	if errors.As(err, &mysqlErr) {
+		message := strings.ToLower(mysqlErr.Message)
+		return mysqlErr.Number == 1062 &&
+			(strings.Contains(message, invoiceIssuanceApplicationIndex) || strings.Contains(message, invoiceIssuanceNumberIndex))
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "unique constraint failed: invoice_issuances.application_id") ||
+		strings.Contains(message, "unique constraint failed: invoice_issuances.invoice_number")
 }

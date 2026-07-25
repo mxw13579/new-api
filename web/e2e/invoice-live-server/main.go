@@ -46,7 +46,7 @@ var livePDF = buildLivePDF()
 var newInvoiceDownloadStore func() (service.InvoiceObjectStore, error)
 
 //go:linkname newInvoiceUploadStore github.com/QuantumNous/new-api/service.newInvoiceUploadStore
-var newInvoiceUploadStore func() (service.InvoiceObjectStore, error)
+var newInvoiceUploadStore func(operation_setting.InvoiceSetting) (service.InvoiceObjectStore, error)
 
 type liveObjectStore struct {
 	mu      sync.Mutex
@@ -139,8 +139,9 @@ func main() {
 	store := &liveObjectStore{objects: map[string][]byte{"invoices/live/private-object.pdf": livePDF}}
 	seedLiveFixture()
 	newInvoiceDownloadStore = func() (service.InvoiceObjectStore, error) { return store, nil }
-	newInvoiceUploadStore = func() (service.InvoiceObjectStore, error) { return store, nil }
-	*operation_setting.GetInvoiceSetting() = operation_setting.InvoiceSetting{PersonalEnabled: true, CompanyEnabled: true, ApplicationWindowDays: 30, MinimumAmountMinor: 1, FeeQuota: 10, PDFRetentionDays: 30}
+	newInvoiceUploadStore = func(operation_setting.InvoiceSetting) (service.InvoiceObjectStore, error) { return store, nil }
+	common.QuotaPerUnit = 0.81
+	operation_setting.PublishInvoiceSetting(operation_setting.InvoiceSetting{PersonalEnabled: true, CompanyEnabled: true, ApplicationWindowDays: 30, MinimumAmountMinor: 1, FeePercent: 10, PDFRetentionDays: 30})
 
 	gin.SetMode(gin.ReleaseMode)
 	engine := gin.New()

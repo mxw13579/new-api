@@ -1,6 +1,7 @@
 package service
 
 import (
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
@@ -13,7 +14,8 @@ func GetInvoiceConfig() dto.InvoiceConfig {
 	return dto.InvoiceConfig{
 		PersonalEnabled: setting.PersonalEnabled, CompanyEnabled: setting.CompanyEnabled,
 		ApplicationWindowDays: setting.ApplicationWindowDays, MinimumAmountMinor: setting.MinimumAmountMinor,
-		FeeQuota: setting.FeeQuota, PDFRetentionDays: setting.PDFRetentionDays, Currency: constant.InvoiceCurrencyCNY,
+		FeePercent: setting.FeePercent, QuotaPerUnit: common.QuotaPerUnit,
+		PDFRetentionDays: setting.PDFRetentionDays, Currency: constant.InvoiceCurrencyCNY,
 	}
 }
 

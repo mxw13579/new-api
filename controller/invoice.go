@@ -33,13 +33,17 @@ func invoiceErrorCode(err error) (string, int) {
 		return constant.InvoiceCodeNotFound, http.StatusNotFound
 	case errors.Is(err, model.ErrInvoiceIdempotencyConflict):
 		return constant.InvoiceCodeIdempotencyConflict, http.StatusConflict
+	case errors.Is(err, model.ErrInvoiceIssuanceConflict):
+		return constant.InvoiceCodeIssuanceConflict, http.StatusConflict
 	case errors.Is(err, model.ErrInvoiceTopUpIneligible), errors.Is(err, model.ErrInvoicePaymentSourceNotEligible), errors.Is(err, model.ErrInvoicePaymentSourceClaimConflict):
 		return constant.InvoiceCodeTopUpIneligible, http.StatusConflict
 	case errors.Is(err, model.ErrInvoicePaymentSourceEvidenceConflict), errors.Is(err, model.ErrInvoicePaymentReviewConflict):
 		return constant.InvoiceCodePaymentEvidenceConflict, http.StatusConflict
 	case errors.Is(err, service.ErrInvoiceDocumentUnavailable):
 		return constant.InvoiceCodeDocumentUnavailable, http.StatusConflict
-	case errors.Is(err, model.ErrInvoiceDocumentConflict), errors.Is(err, model.ErrInvoiceIssuanceConflict),
+	case errors.Is(err, service.ErrInvoiceR2NotConfigured):
+		return constant.InvoiceCodeStorageNotConfigured, http.StatusServiceUnavailable
+	case errors.Is(err, model.ErrInvoiceDocumentConflict),
 		errors.Is(err, model.ErrInvoiceProfileVersionConflict), errors.Is(err, model.ErrInvoiceStateConflict):
 		return constant.InvoiceCodeStateConflict, http.StatusConflict
 	default:
@@ -50,7 +54,11 @@ func invoiceErrorCode(err error) (string, int) {
 func writeInvoiceError(c *gin.Context, err error) {
 	code, status := invoiceErrorCode(err)
 	messageKey := i18n.MsgInvalidParams
-	if status == http.StatusInternalServerError {
+	if code == constant.InvoiceCodeStorageNotConfigured {
+		messageKey = i18n.MsgInvoiceStorageNotConfigured
+	} else if code == constant.InvoiceCodeIssuanceConflict {
+		messageKey = i18n.MsgInvoiceIssuanceConflict
+	} else if status == http.StatusInternalServerError {
 		messageKey = i18n.MsgDatabaseError
 	}
 	c.JSON(status, gin.H{"success": false, "message": common.TranslateMessage(c, messageKey), "data": gin.H{"code": code}})
@@ -187,6 +195,21 @@ func ListInvoiceApplications(c *gin.Context) {
 	}
 	ownerID := c.GetInt("id")
 	result, err := service.ListInvoiceApplicationPage(&ownerID, page, pageSize)
+	if err != nil {
+		writeInvoiceError(c, err)
+		return
+	}
+	writeInvoiceSuccess(c, http.StatusOK, result)
+}
+
+// ListInvoiceFeeHistory returns the authenticated owner's invoice-fee ledger page.
+func ListInvoiceFeeHistory(c *gin.Context) {
+	page, pageSize, err := invoicePage(c)
+	if err != nil {
+		writeInvoiceError(c, err)
+		return
+	}
+	result, err := service.ListInvoiceFeeHistory(c.GetInt("id"), page, pageSize)
 	if err != nil {
 		writeInvoiceError(c, err)
 		return

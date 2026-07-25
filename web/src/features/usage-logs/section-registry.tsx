@@ -28,6 +28,11 @@ const USAGE_LOGS_SECTIONS = [
     build: () => null, // Content is rendered directly in the page component
   },
   {
+    id: 'invoice-fees',
+    titleKey: 'Invoice fees',
+    build: () => null, // Content is rendered directly in the page component
+  },
+  {
     id: 'drawing',
     titleKey: 'Drawing Logs',
     build: () => null, // Content is rendered directly in the page component

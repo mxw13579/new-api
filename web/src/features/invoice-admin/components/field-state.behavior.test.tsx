@@ -19,6 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import { describe, it } from 'bun:test'
 import assert from 'node:assert/strict'
 
+import dayjs from 'dayjs'
 import { renderToStaticMarkup } from 'react-dom/server'
 
 import {
@@ -73,6 +74,7 @@ const application: InvoiceApplicationDetail = {
   policy_snapshot: {
     application_window_days: 30,
     minimum_amount_minor: 0,
+    fee_percent: 0,
     fee_quota: 0,
     pdf_retention_days: 90,
   },
@@ -110,8 +112,12 @@ describe('invoice administrator pending field behavior', () => {
           company_enabled: true,
           application_window_days: 30,
           minimum_amount_minor: 0,
-          fee_quota: 0,
+          fee_percent: 0,
           pdf_retention_days: 90,
+          r2_endpoint: '',
+          r2_bucket: '',
+          r2_access_key_id: '',
+          r2_secret_configured: false,
         }}
         pending
         onSave={() => undefined}
@@ -207,14 +213,22 @@ describe('invoice administrator pending field behavior', () => {
       'invoice-number',
       'invoice-code',
       'invoice-date',
-      'invoice-face-amount',
       'invoice-pdf-attestation',
     ]) {
       assertFieldControlState(html, controlId, false)
     }
+    assertFieldControlState(html, 'invoice-face-amount', true)
     assertFieldControlState(html, 'invoice-currency', true)
     assert.match(html, /id="invoice-pdf-help"/)
     assert.match(html, /aria-describedby="invoice-pdf-help"/)
+    assert.match(
+      html,
+      new RegExp(
+        `id="invoice-date"[^>]*value="${dayjs().format('YYYY-MM-DD')}"`
+      )
+    )
+    assert.match(html, /id="invoice-face-amount"[^>]*value="[^"]*12\.34"/)
+    assert.doesNotMatch(html, /id="invoice-face-amount"[^>]*value="1234"/)
   })
 
   it('renders masked profile details without sensitive values', () => {

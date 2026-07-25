@@ -21,6 +21,7 @@ import (
 func TestPersonalInvoiceRouteContract(t *testing.T) {
 	userRoutes := map[string]string{
 		http.MethodGet + " /invoice/config":          "GetInvoiceConfig",
+		http.MethodGet + " /invoice/fee-ledger":      "ListInvoiceFeeHistory",
 		http.MethodGet + " /invoice/profiles":        "ListInvoiceProfiles",
 		http.MethodPost + " /invoice/profiles":       "CreateInvoiceProfile",
 		http.MethodPut + " /invoice/profiles":        "UpdateInvoiceProfile",
@@ -153,6 +154,47 @@ func TestEveryInvoiceRouteUsesPrivateNoStore(t *testing.T) {
 			assert.True(t, route.disableCache, route.method+" "+route.path)
 		}
 	}
+}
+
+func TestInvoiceFeeLedgerRouteRequiresAuthentication(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	previousDB, previousLogDB := model.DB, model.LOG_DB
+	previousRedis := common.RedisEnabled
+	common.RedisEnabled = false
+	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.InvoiceApplication{}, &model.InvoiceFeeLedgerEntry{}, &model.Log{}))
+	model.DB, model.LOG_DB = db, db
+	t.Cleanup(func() {
+		model.DB, model.LOG_DB = previousDB, previousLogDB
+		common.RedisEnabled = previousRedis
+	})
+
+	token := "invoice-fee-ledger-owner"
+	user := model.User{Username: "fee-ledger-owner", Password: "test-password", AccessToken: &token,
+		Role: common.RoleCommonUser, Status: common.UserStatusEnabled, Group: "default", AffCode: "fee-ledger-owner"}
+	require.NoError(t, db.Create(&user).Error)
+	application := model.InvoiceApplication{ApplicationNo: "INV-FEE-OWNER", UserID: user.Id, RequestID: "fee-owner", RequestFingerprint: "fingerprint",
+		Type: constant.InvoiceTypePersonal, Status: constant.InvoiceApplicationStatusSubmitted, PaymentReviewStatus: constant.InvoicePaymentReviewStatusNone,
+		Currency: constant.InvoiceCurrencyCNY, FeeMethod: "wallet_quota", FeeStatus: constant.InvoiceFeeStatusPaid,
+		ProfileSnapshot: `{}`, PolicySnapshot: `{"fee_percent":5}`, SubmittedAt: 1}
+	require.NoError(t, db.Create(&application).Error)
+	require.NoError(t, db.Create(&model.InvoiceFeeLedgerEntry{ApplicationID: application.ID, UserID: user.Id,
+		EntryType: model.InvoiceFeeEntryTypeCharge, Quota: 5, IdempotencyKey: "fee-owner", Status: model.InvoiceFeeEntryStatusPending}).Error)
+	engine := gin.New()
+	SetApiRouter(engine)
+
+	unauthenticated := httptest.NewRecorder()
+	engine.ServeHTTP(unauthenticated, httptest.NewRequest(http.MethodGet, "/api/user/invoice/fee-ledger", nil))
+	assert.Equal(t, http.StatusUnauthorized, unauthenticated.Code)
+
+	request := httptest.NewRequest(http.MethodGet, "/api/user/invoice/fee-ledger", nil)
+	request.Header.Set("Authorization", "Bearer "+token)
+	authenticated := httptest.NewRecorder()
+	engine.ServeHTTP(authenticated, request)
+	assert.Equal(t, http.StatusOK, authenticated.Code)
+	assert.Contains(t, authenticated.Body.String(), "INV-FEE-OWNER")
+	assertPrivateNoStore(t, authenticated)
 }
 
 func TestInvoiceDocumentProductionRouteMasksCrossOwnerLikeMissing(t *testing.T) {

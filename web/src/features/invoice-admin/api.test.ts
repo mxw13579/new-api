@@ -72,8 +72,13 @@ describe('admin invoice HTTP adapters', () => {
       company_enabled: false,
       application_window_days: 30,
       minimum_amount_minor: 100,
-      fee_quota: 20,
+      fee_percent: 5,
       pdf_retention_days: 90,
+      r2_endpoint:
+        'https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com',
+      r2_bucket: 'private-invoices',
+      r2_access_key_id: 'access-id',
+      r2_secret_access_key: '',
     })
 
     assert.deepEqual(
@@ -95,6 +100,19 @@ describe('admin invoice HTTP adapters', () => {
     assert.deepEqual(calls[3].body, {
       expected_status: 'reviewing',
       reason: 'Incorrect tax identity',
+    })
+    assert.deepEqual(calls.at(-1)?.body, {
+      personal_enabled: true,
+      company_enabled: false,
+      application_window_days: 30,
+      minimum_amount_minor: 100,
+      fee_percent: 5,
+      pdf_retention_days: 90,
+      r2_endpoint:
+        'https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com',
+      r2_bucket: 'private-invoices',
+      r2_access_key_id: 'access-id',
+      r2_secret_access_key: '',
     })
     for (const call of calls) {
       assert.equal(

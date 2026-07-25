@@ -1,9 +1,12 @@
 package model
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/glebarez/sqlite"
+	mysqlDriver "github.com/go-sql-driver/mysql"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -15,6 +18,30 @@ func openInvoiceIssuanceTestDB(t *testing.T) *gorm.DB {
 	require.NoError(t, err)
 	require.NoError(t, db.AutoMigrate(&InvoiceIssuance{}, &InvoiceDocument{}))
 	return db
+}
+
+func TestInvoiceIssuanceUniquenessConflictClassification(t *testing.T) {
+	testCases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "postgres application", err: &pgconn.PgError{Code: "23505", ConstraintName: "uk_invoice_issuances_application"}, want: true},
+		{name: "postgres number", err: &pgconn.PgError{Code: "23505", ConstraintName: "uk_invoice_issuances_number"}, want: true},
+		{name: "postgres unrelated", err: &pgconn.PgError{Code: "23505", ConstraintName: "uk_other"}, want: false},
+		{name: "mysql application", err: &mysqlDriver.MySQLError{Number: 1062, Message: "Duplicate entry '1' for key 'invoice_issuances.uk_invoice_issuances_application'"}, want: true},
+		{name: "mysql number", err: &mysqlDriver.MySQLError{Number: 1062, Message: "Duplicate entry 'INV-1' for key 'uk_invoice_issuances_number'"}, want: true},
+		{name: "mysql unrelated", err: &mysqlDriver.MySQLError{Number: 1062, Message: "Duplicate entry 'x' for key 'uk_other'"}, want: false},
+		{name: "sqlite application", err: errors.New("constraint failed: UNIQUE constraint failed: invoice_issuances.application_id (2067)"), want: true},
+		{name: "sqlite number", err: errors.New("constraint failed: UNIQUE constraint failed: invoice_issuances.invoice_number (2067)"), want: true},
+		{name: "sqlite unrelated", err: errors.New("constraint failed: UNIQUE constraint failed: invoice_documents.object_key (2067)"), want: false},
+		{name: "infrastructure", err: errors.New("connection reset"), want: false},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			assert.Equal(t, testCase.want, isInvoiceIssuanceUniquenessConflict(testCase.err))
+		})
+	}
 }
 
 func TestInvoiceIssuanceAndDocumentSchemaInvariants(t *testing.T) {

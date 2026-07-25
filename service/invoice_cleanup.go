@@ -60,7 +60,7 @@ func (handler *invoiceDocumentCleanupHandler) Run(ctx context.Context, task *mod
 	}
 	store := handler.store
 	if store == nil {
-		configured, err := NewInvoiceR2StoreFromEnvironment()
+		configured, err := NewInvoiceR2StoreFromSetting()
 		if err != nil {
 			handler.finishTask(ctx, task, runnerID, model.SystemTaskStatusFailed, InvoiceDocumentCleanupResult{}, "object_store_unavailable")
 			return

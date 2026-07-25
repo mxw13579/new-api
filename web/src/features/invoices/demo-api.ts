@@ -16,6 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { calculateInvoiceFeeQuota } from './contract'
 import type {
   CreateInvoiceApplicationRequest,
   InvoiceApi,
@@ -25,11 +26,17 @@ import type {
 } from './types'
 
 const now = 1_900_000_000
+const demoFeePercent = 5
+const demoQuotaPerUnit = 500_000
 
 function application(
   id: number,
   overrides: Partial<InvoiceApplicationSummary>
 ): InvoiceApplicationSummary {
+  const amountMinor = overrides.amount_minor ?? 12_800
+  const feeQuota =
+    overrides.fee_quota ??
+    calculateInvoiceFeeQuota(amountMinor, demoFeePercent, demoQuotaPerUnit)
   return {
     id,
     application_no: `INV-DEMO-${id}`,
@@ -37,8 +44,8 @@ function application(
     status: 'submitted',
     payment_review_status: 'none',
     currency: 'CNY',
-    amount_minor: 12_800,
-    fee_quota: 500,
+    amount_minor: amountMinor,
+    fee_quota: feeQuota,
     fee_status: 'paid',
     submitted_at: now - id * 3600,
     reviewed_at: null,
@@ -68,6 +75,7 @@ function detailFromSummary(
     policy_snapshot: {
       application_window_days: 90,
       minimum_amount_minor: 1000,
+      fee_percent: demoFeePercent,
       fee_quota: summary.fee_quota,
       pdf_retention_days: 365,
     },
@@ -155,7 +163,8 @@ export function createInvoiceDemoApi(): InvoiceApi {
         company_enabled: true,
         application_window_days: 90,
         minimum_amount_minor: 1000,
-        fee_quota: 500,
+        fee_percent: demoFeePercent,
+        quota_per_unit: demoQuotaPerUnit,
         pdf_retention_days: 365,
         currency: 'CNY',
       }
@@ -209,10 +218,16 @@ export function createInvoiceDemoApi(): InvoiceApi {
       }
     },
     async createApplication(request: CreateInvoiceApplicationRequest) {
+      const amountMinor = orders
+        .filter((order) => request.topup_ids.includes(order.topup_id))
+        .reduce((total, order) => total + order.paid_amount_minor, 0)
       const created = application(applications.length + 1, {
-        amount_minor: orders
-          .filter((order) => request.topup_ids.includes(order.topup_id))
-          .reduce((total, order) => total + order.paid_amount_minor, 0),
+        amount_minor: amountMinor,
+        fee_quota: calculateInvoiceFeeQuota(
+          amountMinor,
+          demoFeePercent,
+          demoQuotaPerUnit
+        ),
       })
       applications = [created, ...applications]
       return detailFromSummary(created)

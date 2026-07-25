@@ -52,6 +52,7 @@ import {
 } from '@/components/ui/empty'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
+import { formatQuota } from '@/lib/format'
 
 import {
   InvoiceApiError,
@@ -215,10 +216,8 @@ export function HistoryPanel(props: HistoryPanelProps) {
                   </dd>
                 </div>
                 <div>
-                  <dt className='text-muted-foreground'>
-                    {t('Wallet quota fee')}
-                  </dt>
-                  <dd>{application.fee_quota}</dd>
+                  <dt className='text-muted-foreground'>{t('Wallet fee')}</dt>
+                  <dd>{formatQuota(application.fee_quota)}</dd>
                 </div>
                 <div>
                   <dt className='text-muted-foreground'>

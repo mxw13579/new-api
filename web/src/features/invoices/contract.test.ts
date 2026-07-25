@@ -27,6 +27,7 @@ import {
   DOCUMENT_STATUS_CONFIG,
   FEE_STATUS_CONFIG,
   PAYMENT_REVIEW_STATUS_CONFIG,
+  calculateInvoiceFeeQuota,
   canDownloadInvoice,
   formatInvoiceAmount,
   getInvoiceErrorMessageKey,
@@ -38,6 +39,11 @@ import type {
   InvoiceApplicationSummary,
   InvoiceErrorCode,
 } from './types'
+
+test('calculates invoice fees as a percentage of the CNY application amount', () => {
+  assert.equal(calculateInvoiceFeeQuota(7300, 5, 100), 365)
+  assert.equal(calculateInvoiceFeeQuota(7300, 0, 100), 0)
+})
 
 describe('invoice frontend contract', () => {
   test('all four independent status unions have stable labelKey mappings', () => {
@@ -96,15 +102,21 @@ describe('invoice frontend contract', () => {
       'INVOICE_TOPUP_INELIGIBLE',
       'INVOICE_PAYMENT_EVIDENCE_CONFLICT',
       'INVOICE_DOCUMENT_UNAVAILABLE',
+      'INVOICE_STORAGE_NOT_CONFIGURED',
+      'INVOICE_ISSUANCE_CONFLICT',
       'INVOICE_INTERNAL_ERROR',
     ]
 
     for (const code of codes) {
-      assert.match(getInvoiceErrorMessageKey(code), /^Invoice error:/)
+      assert.ok(getInvoiceErrorMessageKey(code).length > 0)
     }
     assert.equal(
       getInvoiceErrorMessageKey('INVOICE_STATE_CONFLICT'),
       'Invoice error: data changed, refresh and try again'
+    )
+    assert.equal(
+      getInvoiceErrorMessageKey('INVOICE_ISSUANCE_CONFLICT'),
+      'Invoice error: invoice number or issuance facts conflict'
     )
   })
 
@@ -185,6 +197,38 @@ describe('invoice frontend contract', () => {
     assert.ok(applications.items.length >= 4)
   })
 
+  test('demo combined-order creation uses the shared percentage fee calculation', async () => {
+    const invoiceApi = createInvoiceDemoApi()
+    const config = await invoiceApi.getConfig()
+    const orders = await invoiceApi.listEligibleOrders({
+      page: 1,
+      page_size: 20,
+    })
+    const selected = orders.items.slice(0, 2)
+    const amountMinor = selected.reduce(
+      (total, order) => total + order.paid_amount_minor,
+      0
+    )
+
+    const created = await invoiceApi.createApplication({
+      profile_id: 1,
+      profile_version: 3,
+      topup_ids: selected.map((order) => order.topup_id),
+      request_id: 'combined-demo-order',
+    })
+
+    assert.equal(created.amount_minor, amountMinor)
+    assert.equal(
+      created.fee_quota,
+      calculateInvoiceFeeQuota(
+        amountMinor,
+        config.fee_percent,
+        config.quota_per_unit
+      )
+    )
+    assert.equal(created.policy_snapshot.fee_quota, created.fee_quota)
+  })
+
   test('all seven locales cover status labelKey and stable error render matrices', async () => {
     const statusKeys = [
       ...Object.values(APPLICATION_STATUS_CONFIG),
@@ -202,8 +246,16 @@ describe('invoice frontend contract', () => {
       'INVOICE_TOPUP_INELIGIBLE',
       'INVOICE_PAYMENT_EVIDENCE_CONFLICT',
       'INVOICE_DOCUMENT_UNAVAILABLE',
+      'INVOICE_STORAGE_NOT_CONFIGURED',
+      'INVOICE_ISSUANCE_CONFLICT',
       'INVOICE_INTERNAL_ERROR',
     ].map((code) => getInvoiceErrorMessageKey(code as InvoiceErrorCode))
+    assert.ok(
+      errorKeys.includes(
+        getInvoiceErrorMessageKey('INVOICE_STORAGE_NOT_CONFIGURED')
+      ),
+      'storage configuration errors must be covered by the dynamic locale matrix'
+    )
 
     for (const locale of ['en', 'zh', 'zh-TW', 'fr', 'ja', 'ru', 'vi']) {
       const raw = await readFile(
@@ -257,8 +309,9 @@ describe('invoice frontend contract', () => {
       'Enter valid invoice issuance facts',
       'Application window must be positive',
       'Minimum invoice amount cannot be negative',
-      'Invoice fee quota is out of range',
+      'Invoice fee percentage is out of range',
       'PDF retention must be positive',
+      'Enter a complete R2 configuration',
     ]) {
       pageKeys.add(dynamicKey)
     }

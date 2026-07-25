@@ -35,7 +35,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { InvoiceApiError } from '../../invoices/api'
 import { InvoiceStatusBadges } from '../../invoices/components/status-badges'
 import { getInvoiceErrorMessageKey } from '../../invoices/contract'
-import { maskInvoiceSensitiveDetail } from '../contract'
+import { approveAndIssueInvoice, maskInvoiceSensitiveDetail } from '../contract'
 import { adminInvoiceQueryKeys } from '../queries'
 import type { AdminInvoiceApi, InvoiceApplicationDetail } from '../types'
 import {
@@ -130,21 +130,49 @@ export function ApplicationDetail(props: ApplicationDetailProps) {
     },
     onError: mutationFailed,
   })
+  const approveAndIssueMutation = useMutation({
+    mutationFn: (input: {
+      detail: InvoiceApplicationDetail
+      document: FormData
+    }) =>
+      approveAndIssueInvoice(
+        props.invoiceApi,
+        input.detail,
+        input.document,
+        async (approved) => converge(approved)
+      ),
+    onSuccess: async (issued) => {
+      await converge(issued)
+      toast.success(t('Invoice PDF saved'))
+    },
+    onError: mutationFailed,
+  })
   let pendingAction: ReviewAction = null
   if (reviewMutation.isPending) pendingAction = reviewMutation.variables.action
   if (rejectMutation.isPending) pendingAction = 'reject'
+  if (approveAndIssueMutation.isPending) pendingAction = 'approve'
   const busy = pendingAction !== null || uploadMutation.isPending
   const detail = detailQuery.data
     ? maskInvoiceSensitiveDetail(detailQuery.data, props.canReadSensitive)
     : undefined
+  const paymentPermitsIssuance =
+    detail !== undefined &&
+    (detail.payment_review_status === 'none' ||
+      detail.payment_review_status === 'resolved_valid')
+  const combinedIssuance =
+    detail !== undefined &&
+    detail.status === 'reviewing' &&
+    detail.document === null &&
+    props.canUploadDocument &&
+    paymentPermitsIssuance
   const uploadEligible =
     detail !== undefined &&
-    ((detail.status === 'approved' && detail.document === null) ||
+    ((detail.status === 'reviewing' && detail.document === null) ||
+      (detail.status === 'approved' && detail.document === null) ||
       (detail.status === 'issued' &&
         detail.issuance !== null &&
         detail.document !== null)) &&
-    (detail.payment_review_status === 'none' ||
-      detail.payment_review_status === 'resolved_valid')
+    paymentPermitsIssuance
 
   return (
     <Sheet
@@ -198,6 +226,7 @@ export function ApplicationDetail(props: ApplicationDetailProps) {
               <ReviewActions
                 application={detail}
                 pendingAction={pendingAction}
+                showStandaloneApprove={!combinedIssuance}
                 onReview={(action) => reviewMutation.mutate({ action, detail })}
                 onReject={(reason) =>
                   rejectMutation
@@ -212,10 +241,17 @@ export function ApplicationDetail(props: ApplicationDetailProps) {
                   <DocumentUpload
                     key={`${detail.status}-${detail.document?.id ?? 'initial'}`}
                     application={detail}
-                    pending={uploadMutation.isPending}
-                    onUpload={(document) =>
-                      uploadMutation.mutate({ id: detail.id, document })
+                    pending={
+                      uploadMutation.isPending ||
+                      approveAndIssueMutation.isPending
                     }
+                    onUpload={(document) => {
+                      if (detail.status === 'reviewing') {
+                        approveAndIssueMutation.mutate({ detail, document })
+                        return
+                      }
+                      uploadMutation.mutate({ id: detail.id, document })
+                    }}
                   />
                 </>
               ) : null}

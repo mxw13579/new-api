@@ -63,6 +63,8 @@ export type InvoiceErrorCode =
   | 'INVOICE_TOPUP_INELIGIBLE'
   | 'INVOICE_PAYMENT_EVIDENCE_CONFLICT'
   | 'INVOICE_DOCUMENT_UNAVAILABLE'
+  | 'INVOICE_STORAGE_NOT_CONFIGURED'
+  | 'INVOICE_ISSUANCE_CONFLICT'
   | 'INVOICE_INTERNAL_ERROR'
 
 /** Defines the invoice policy exposed to the current user. */
@@ -71,7 +73,8 @@ export interface InvoiceConfig {
   company_enabled: boolean
   application_window_days: number
   minimum_amount_minor: number
-  fee_quota: number
+  fee_percent: number
+  quota_per_unit: number
   pdf_retention_days: number
   currency: 'CNY'
 }
@@ -178,6 +181,7 @@ export interface InvoiceProfileSnapshot {
 export interface InvoicePolicySnapshot {
   application_window_days: number
   minimum_amount_minor: number
+  fee_percent: number
   fee_quota: number
   pdf_retention_days: number
 }
@@ -264,18 +268,52 @@ export interface AdminInvoiceApi {
   ): Promise<InvoiceApplicationDetail>
 }
 
-/** Defines the complete editable invoice policy object. */
-export interface InvoiceSetting {
+/** One owner-visible invoice-fee balance transition. */
+export interface InvoiceFeeLedgerEntry {
+  id: number
+  application_id: number
+  application_no: string
+  entry_type: 'charge' | 'refund'
+  fee_percent: number
+  quota: number
+  balance_before: number | null
+  balance_after: number | null
+  status: 'applied' | 'pending'
+  applied_at: number | null
+}
+
+/** Paginated owner-visible invoice-fee ledger response. */
+export type InvoiceFeeLedgerPage = InvoicePage<InvoiceFeeLedgerEntry>
+
+/** Defines the owner-scoped invoice-fee history API. */
+export interface InvoiceFeeLedgerApi {
+  list(request: InvoicePageRequest): Promise<InvoiceFeeLedgerPage>
+}
+
+/** Defines the mutable invoice policy and write-only R2 secret contract. */
+export interface UpdateInvoiceSettingRequest {
   personal_enabled: boolean
   company_enabled: boolean
   application_window_days: number
   minimum_amount_minor: number
-  fee_quota: number
+  fee_percent: number
   pdf_retention_days: number
+  r2_endpoint: string
+  r2_bucket: string
+  r2_access_key_id: string
+  r2_secret_access_key: string
+}
+
+/** Defines the masked invoice setting returned by the server. */
+export interface InvoiceSetting extends Omit<
+  UpdateInvoiceSettingRequest,
+  'r2_secret_access_key'
+> {
+  r2_secret_configured: boolean
 }
 
 /** Defines the independently permissioned invoice-settings API. */
 export interface InvoiceSettingsApi {
   getSetting(): Promise<InvoiceSetting>
-  updateSetting(setting: InvoiceSetting): Promise<InvoiceSetting>
+  updateSetting(setting: UpdateInvoiceSettingRequest): Promise<InvoiceSetting>
 }

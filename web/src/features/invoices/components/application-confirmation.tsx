@@ -40,6 +40,7 @@ import {
 } from '@/components/ui/drawer'
 import { Spinner } from '@/components/ui/spinner'
 import { useIsMobile } from '@/hooks/use-mobile'
+import { formatQuota } from '@/lib/format'
 
 interface ApplicationConfirmationProps {
   open: boolean
@@ -49,6 +50,7 @@ interface ApplicationConfirmationProps {
   profileVersion: number | undefined
   selectedOrderCount: number
   formattedAmount: string
+  feePercent: number
   feeQuota: number
   pending: boolean
   onSubmit: () => void
@@ -78,8 +80,14 @@ export function ApplicationConfirmation(props: ApplicationConfirmationProps) {
           <dd className='font-medium'>{props.formattedAmount}</dd>
         </div>
         <div className='flex justify-between gap-4'>
-          <dt className='text-muted-foreground'>{t('Wallet quota fee')}</dt>
-          <dd>{props.feeQuota}</dd>
+          <dt className='text-muted-foreground'>
+            {t('Invoice fee percentage')}
+          </dt>
+          <dd>{props.feePercent}%</dd>
+        </div>
+        <div className='flex justify-between gap-4'>
+          <dt className='text-muted-foreground'>{t('Wallet fee')}</dt>
+          <dd>{formatQuota(props.feeQuota)}</dd>
         </div>
       </dl>
     </div>

@@ -64,6 +64,22 @@ func writeIneligibleInvoiceEvidence(topUp *TopUp) {
 	topUp.PaymentProviderTradeNo, topUp.PaymentProviderTradeKey = nil, nil
 }
 
+func writeAdminManualCompletionInvoiceEvidence(topUp *TopUp) error {
+	paidAmountMinor, err := invoicePaymentEvidenceMoneyMinor(topUp.Money)
+	if err != nil {
+		return err
+	}
+	currency, eligible := constant.InvoicePaymentEvidenceCurrencyCNY, true
+	paymentState, refunded := constant.InvoicePaymentStateSucceeded, int64(0)
+	version, product := int64(1), constant.InvoicePaymentEvidenceTopUpProduct
+	source := constant.InvoicePaymentEvidenceSourceAdminManualCompletion
+	topUp.PaidAmountMinor, topUp.Currency, topUp.InvoiceEligible = &paidAmountMinor, &currency, &eligible
+	topUp.PaymentState, topUp.RefundedAmountMinor, topUp.PaymentVersion = &paymentState, &refunded, &version
+	topUp.ProductSnapshot, topUp.PaymentEvidenceSource = &product, &source
+	topUp.PaymentEvidenceRunID, topUp.PaymentProviderTradeNo, topUp.PaymentProviderTradeKey = nil, nil, nil
+	return nil
+}
+
 func validVerifiedEpayCompletion(completion VerifiedEpayCompletion) bool {
 	providerTradeNo, providerTradeKey, err := NormalizeEpayProviderTradeIdentity(completion.ProviderTradeNo)
 	return err == nil && providerTradeNo == completion.ProviderTradeNo && providerTradeKey == completion.ProviderTradeKey &&

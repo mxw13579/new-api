@@ -36,6 +36,7 @@ skills-lock.json
 .playwright-mcp
 .ace-tool/
 .tmp/
+.ai_state/
 
 # Local-only live probes and scratch test workspaces.
 .local-tests/

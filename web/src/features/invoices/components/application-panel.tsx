@@ -36,7 +36,11 @@ import {
 import { Skeleton } from '@/components/ui/skeleton'
 
 import { InvoiceApiError } from '../api'
-import { formatInvoiceAmount, getInvoiceErrorMessageKey } from '../contract'
+import {
+  calculateInvoiceFeeQuota,
+  formatInvoiceAmount,
+  getInvoiceErrorMessageKey,
+} from '../contract'
 import type {
   EligibleInvoiceOrder,
   InvoiceApi,
@@ -106,10 +110,17 @@ export function ApplicationPanel(props: ApplicationPanelProps) {
     props.config?.minimum_amount_minor ?? 0
   )
   const minimumReached = !!props.config && selectionSummary.minimumReached
+  const feeQuota = props.config
+    ? calculateInvoiceFeeQuota(
+        selectionSummary.amountMinor,
+        props.config.fee_percent,
+        props.config.quota_per_unit
+      )
+    : Number.POSITIVE_INFINITY
   const quotaAvailable =
     !!props.config &&
     props.walletQuota !== undefined &&
-    props.walletQuota >= props.config.fee_quota
+    props.walletQuota >= feeQuota
   const selectedProfileEnabled =
     !!props.config &&
     !!selectedProfile &&
@@ -123,7 +134,8 @@ export function ApplicationPanel(props: ApplicationPanelProps) {
         profileId: selectedProfile.id,
         profileVersion: selectedProfile.version,
         topupIds,
-        feeQuota: props.config?.fee_quota,
+        feePercent: props.config?.fee_percent,
+        feeQuota,
       })
       return props.invoiceApi.createApplication({
         request_id: draftIdentityRef.current.forDraft(fingerprint),
@@ -292,7 +304,8 @@ export function ApplicationPanel(props: ApplicationPanelProps) {
         profileVersion={selectedProfile?.version}
         selectedOrderCount={orderSelection.size}
         formattedAmount={formatInvoiceAmount(selectionSummary.amountMinor)}
-        feeQuota={props.config?.fee_quota ?? 0}
+        feePercent={props.config?.fee_percent ?? 0}
+        feeQuota={Number.isFinite(feeQuota) ? feeQuota : 0}
         pending={createMutation.isPending}
         onSubmit={() => createMutation.mutate()}
       />

@@ -33,25 +33,38 @@ import { Spinner } from '@/components/ui/spinner'
 import { Switch } from '@/components/ui/switch'
 
 import { validateInvoiceSetting } from '../contract'
-import type { InvoiceSetting } from '../types'
+import type { InvoiceSetting, UpdateInvoiceSettingRequest } from '../types'
+import { R2StorageFields } from './r2-storage-fields'
 
 interface SettingsFormProps {
   setting: InvoiceSetting
   pending: boolean
-  onSave: (setting: InvoiceSetting) => void
+  onSave: (setting: UpdateInvoiceSettingRequest) => void
 }
 
-/** Edits and submits the complete six-field invoice policy object. */
+/** Edits invoice policy and database-backed R2 storage settings. */
 export function SettingsForm(props: SettingsFormProps) {
   const { t } = useTranslation()
-  const [setting, setSetting] = useState(props.setting)
+  const [setting, setSetting] = useState<UpdateInvoiceSettingRequest>({
+    personal_enabled: props.setting.personal_enabled,
+    company_enabled: props.setting.company_enabled,
+    application_window_days: props.setting.application_window_days,
+    minimum_amount_minor: props.setting.minimum_amount_minor,
+    fee_percent: props.setting.fee_percent,
+    pdf_retention_days: props.setting.pdf_retention_days,
+    r2_endpoint: props.setting.r2_endpoint,
+    r2_bucket: props.setting.r2_bucket,
+    r2_access_key_id: props.setting.r2_access_key_id,
+    r2_secret_access_key: '',
+  })
   const [errorKey, setErrorKey] = useState<string | null>(null)
+  const r2Invalid = errorKey === 'Enter a complete R2 configuration'
 
   function numberField(
     field:
       | 'application_window_days'
       | 'minimum_amount_minor'
-      | 'fee_quota'
+      | 'fee_percent'
       | 'pdf_retention_days',
     value: string
   ): void {
@@ -60,7 +73,10 @@ export function SettingsForm(props: SettingsFormProps) {
 
   function submit(event: React.FormEvent<HTMLFormElement>): void {
     event.preventDefault()
-    const result = validateInvoiceSetting(setting)
+    const result = validateInvoiceSetting(
+      setting,
+      props.setting.r2_secret_configured
+    )
     if (!result.ok) {
       setErrorKey(result.errorKey)
       return
@@ -166,23 +182,23 @@ export function SettingsForm(props: SettingsFormProps) {
               data-invalid={errorKey ? true : undefined}
               data-disabled={props.pending || undefined}
             >
-              <FieldLabel htmlFor='invoice-fee-quota'>
-                {t('Fee quota')}
+              <FieldLabel htmlFor='invoice-fee-percent'>
+                {t('Invoice fee percentage')}
               </FieldLabel>
               <Input
-                id='invoice-fee-quota'
+                id='invoice-fee-percent'
                 type='number'
                 min={0}
-                max={2_147_483_647}
+                max={100}
                 step={1}
-                value={setting.fee_quota}
+                value={setting.fee_percent}
                 disabled={props.pending}
                 aria-invalid={errorKey ? true : undefined}
                 aria-describedby={
                   errorKey ? 'invoice-settings-error' : undefined
                 }
                 onChange={(event) =>
-                  numberField('fee_quota', event.target.value)
+                  numberField('fee_percent', event.target.value)
                 }
               />
             </Field>
@@ -210,6 +226,13 @@ export function SettingsForm(props: SettingsFormProps) {
               />
             </Field>
           </div>
+          <R2StorageFields
+            value={setting}
+            secretConfigured={props.setting.r2_secret_configured}
+            disabled={props.pending}
+            invalid={r2Invalid}
+            onChange={setSetting}
+          />
           {errorKey ? (
             <FieldDescription id='invoice-settings-error' role='alert'>
               {t(errorKey)}

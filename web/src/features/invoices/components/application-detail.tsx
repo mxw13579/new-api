@@ -32,6 +32,7 @@ import {
   SheetTitle,
 } from '@/components/ui/sheet'
 import { Skeleton } from '@/components/ui/skeleton'
+import { formatQuota } from '@/lib/format'
 
 import { formatInvoiceAmount } from '../contract'
 import {
@@ -173,10 +174,8 @@ export function ApplicationDetail(props: ApplicationDetailProps) {
                     </dd>
                   </div>
                   <div>
-                    <dt className='text-muted-foreground'>
-                      {t('Wallet quota fee')}
-                    </dt>
-                    <dd>{detail.policy_snapshot.fee_quota}</dd>
+                    <dt className='text-muted-foreground'>{t('Wallet fee')}</dt>
+                    <dd>{formatQuota(detail.policy_snapshot.fee_quota)}</dd>
                   </div>
                   <div>
                     <dt className='text-muted-foreground'>

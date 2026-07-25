@@ -184,7 +184,8 @@ async function installInvoiceBackend(
           company_enabled: true,
           application_window_days: 90,
           minimum_amount_minor: 1_000,
-          fee_quota: 500,
+          fee_percent: 5,
+          quota_per_unit: 500_000,
           pdf_retention_days: 365,
           currency: 'CNY',
         })
@@ -224,6 +225,7 @@ async function installInvoiceBackend(
         policy_snapshot: {
           application_window_days: 90,
           minimum_amount_minor: 1_000,
+          fee_percent: 5,
           fee_quota: 500,
           pdf_retention_days: 365,
         },
@@ -284,6 +286,7 @@ async function installInvoiceBackend(
           policy_snapshot: {
             application_window_days: 90,
             minimum_amount_minor: 1_000,
+            fee_percent: 5,
             fee_quota: 500,
             pdf_retention_days: 365,
           },

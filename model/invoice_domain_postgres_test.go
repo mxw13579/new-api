@@ -27,13 +27,18 @@ func runPersonalInvoicePostgreSQLDomainContract(t *testing.T) {
 	t.Helper()
 	require.NoError(t, DB.AutoMigrate(&User{}, &TopUp{}, &SubscriptionOrder{}))
 	require.NoError(t, migratePersonalInvoiceStructures(DB))
-	previousSetting := *operation_setting.GetInvoiceSetting()
-	t.Cleanup(func() { *operation_setting.GetInvoiceSetting() = previousSetting })
+	previousSetting := operation_setting.GetInvoiceSetting()
+	previousQuotaPerUnit := common.QuotaPerUnit
+	common.QuotaPerUnit = 100
+	t.Cleanup(func() {
+		operation_setting.PublishInvoiceSetting(previousSetting)
+		common.QuotaPerUnit = previousQuotaPerUnit
+	})
 	setFee := func(fee int64) {
-		*operation_setting.GetInvoiceSetting() = operation_setting.InvoiceSetting{
+		operation_setting.PublishInvoiceSetting(operation_setting.InvoiceSetting{
 			PersonalEnabled: true, CompanyEnabled: true, ApplicationWindowDays: 30,
-			MinimumAmountMinor: 1, FeeQuota: fee, PDFRetentionDays: 30,
-		}
+			MinimumAmountMinor: 1, FeePercent: int(fee), PDFRetentionDays: 30,
+		})
 	}
 
 	t.Run("profile_expected_version_and_default_convergence", func(t *testing.T) {
@@ -92,12 +97,12 @@ func runPersonalInvoicePostgreSQLDomainContract(t *testing.T) {
 	t.Run("normalized_idempotency_exact_sum_and_positive_fee", func(t *testing.T) {
 		setFee(25)
 		user, profile := personalInvoicePostgreSQLUserAndProfile(t, "positive", 1000)
-		personalInvoicePostgreSQLTopUp(t, 101, user.Id, "positive-a", 300)
-		personalInvoicePostgreSQLTopUp(t, 102, user.Id, "positive-b", 125)
+		personalInvoicePostgreSQLTopUp(t, 101, user.Id, "positive-a", 75)
+		personalInvoicePostgreSQLTopUp(t, 102, user.Id, "positive-b", 25)
 		request := createInvoiceApplicationRequest("pg-positive", profile, 102, 101, 102)
 		application, err := CreateInvoiceApplication(user.Id, request, nil)
 		require.NoError(t, err)
-		assert.Equal(t, int64(425), application.AmountMinor)
+		assert.Equal(t, int64(100), application.AmountMinor)
 		assert.Equal(t, constant.InvoiceFeeStatusPaid, application.FeeStatus)
 		require.NotNil(t, application.FeeChargeEntryID)
 		assert.Nil(t, application.FeeRefundEntryID)
@@ -106,7 +111,7 @@ func runPersonalInvoicePostgreSQLDomainContract(t *testing.T) {
 		require.NoError(t, DB.Where("application_id = ?", application.ID).Order("topup_id").Find(&items).Error)
 		require.Len(t, items, 2)
 		assert.Equal(t, []int{101, 102}, []int{items[0].TopUpID, items[1].TopUpID})
-		assert.Equal(t, int64(425), items[0].PaidAmountMinor+items[1].PaidAmountMinor)
+		assert.Equal(t, int64(100), items[0].PaidAmountMinor+items[1].PaidAmountMinor)
 		var charges []InvoiceFeeLedgerEntry
 		require.NoError(t, DB.Where("application_id = ? AND entry_type = ?", application.ID, InvoiceFeeEntryTypeCharge).Find(&charges).Error)
 		require.Len(t, charges, 1)

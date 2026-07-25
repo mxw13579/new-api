@@ -2,13 +2,14 @@ package dto
 
 // InvoiceConfig exposes the active invoice policy and fixed settlement currency.
 type InvoiceConfig struct {
-	PersonalEnabled       bool   `json:"personal_enabled"`
-	CompanyEnabled        bool   `json:"company_enabled"`
-	ApplicationWindowDays int    `json:"application_window_days"`
-	MinimumAmountMinor    int64  `json:"minimum_amount_minor"`
-	FeeQuota              int64  `json:"fee_quota"`
-	PDFRetentionDays      int    `json:"pdf_retention_days"`
-	Currency              string `json:"currency"`
+	PersonalEnabled       bool    `json:"personal_enabled"`
+	CompanyEnabled        bool    `json:"company_enabled"`
+	ApplicationWindowDays int     `json:"application_window_days"`
+	MinimumAmountMinor    int64   `json:"minimum_amount_minor"`
+	FeePercent            int     `json:"fee_percent"`
+	QuotaPerUnit          float64 `json:"quota_per_unit"`
+	PDFRetentionDays      int     `json:"pdf_retention_days"`
+	Currency              string  `json:"currency"`
 }
 
 // InvoiceProfile represents a versioned personal or company invoicing identity.
@@ -103,6 +104,28 @@ type InvoiceApplicationPage struct {
 	Total    int64                       `json:"total"`
 }
 
+// InvoiceFeeHistoryItem exposes one owner-visible fee balance transition.
+type InvoiceFeeHistoryItem struct {
+	ID            int64  `json:"id"`
+	ApplicationID int64  `json:"application_id"`
+	ApplicationNo string `json:"application_no"`
+	EntryType     string `json:"entry_type"`
+	FeePercent    int    `json:"fee_percent"`
+	Quota         int64  `json:"quota"`
+	BalanceBefore *int64 `json:"balance_before"`
+	BalanceAfter  *int64 `json:"balance_after"`
+	Status        string `json:"status"`
+	AppliedAt     *int64 `json:"applied_at"`
+}
+
+// InvoiceFeeHistoryPage is a bounded owner-scoped ledger page.
+type InvoiceFeeHistoryPage struct {
+	Items    []InvoiceFeeHistoryItem `json:"items"`
+	Page     int                     `json:"page"`
+	PageSize int                     `json:"page_size"`
+	Total    int64                   `json:"total"`
+}
+
 // InvoiceProfileSnapshot preserves the buyer identity used when an application was submitted.
 type InvoiceProfileSnapshot struct {
 	Type      string `json:"type"`
@@ -115,6 +138,7 @@ type InvoiceProfileSnapshot struct {
 type InvoicePolicySnapshot struct {
 	ApplicationWindowDays int   `json:"application_window_days"`
 	MinimumAmountMinor    int64 `json:"minimum_amount_minor"`
+	FeePercent            int   `json:"fee_percent"`
 	FeeQuota              int64 `json:"fee_quota"`
 	PDFRetentionDays      int   `json:"pdf_retention_days"`
 }

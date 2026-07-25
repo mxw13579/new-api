@@ -21,6 +21,7 @@ import type {
   InvoiceApplicationDetail,
   InvoiceSetting,
   InvoiceSettingsApi,
+  UpdateInvoiceSettingRequest,
 } from '../invoices/types'
 
 /** Re-exports shared invoice contracts through the administrator feature. */
@@ -29,6 +30,7 @@ export type {
   InvoiceApplicationDetail,
   InvoiceSetting,
   InvoiceSettingsApi,
+  UpdateInvoiceSettingRequest,
 }
 
 /** Describes the four independent administrator invoice capabilities. */

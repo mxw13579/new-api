@@ -72,6 +72,11 @@ func validateInvoicePaymentSourceEvidence(tx *gorm.DB, topUp *TopUp) error {
 		return validateTrustedInvoicePaymentSourceEvidence(topUp)
 	case constant.InvoicePaymentEvidenceSourceLegacyBackfill:
 		return validateLegacyInvoicePaymentSourceEvidence(tx, topUp)
+	case constant.InvoicePaymentEvidenceSourceAdminManualCompletion:
+		if topUp.PaymentEvidenceRunID != nil || topUp.PaymentProviderTradeNo != nil || topUp.PaymentProviderTradeKey != nil {
+			return ErrInvoicePaymentSourceEvidenceConflict
+		}
+		return nil
 	default:
 		return ErrInvoicePaymentSourceEvidenceConflict
 	}

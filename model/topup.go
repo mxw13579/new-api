@@ -624,7 +624,13 @@ func ManualCompleteTopUp(tradeNo string, callerIp string) error {
 		}
 
 		if topUp.Status == common.TopUpStatusSuccess {
-			return nil
+			if topUp.InvoiceApplicationID != nil || (topUp.InvoiceEligible != nil && *topUp.InvoiceEligible) {
+				return nil
+			}
+			if err := writeAdminManualCompletionInvoiceEvidence(topUp); err != nil {
+				return err
+			}
+			return tx.Save(topUp).Error
 		}
 		if topUp.Status != common.TopUpStatusPending {
 			return errors.New("topup is not pending")
@@ -635,7 +641,13 @@ func ManualCompleteTopUp(tradeNo string, callerIp string) error {
 			return err
 		}
 		result, err = creditWalletTopUpTx(tx, topUp, quotaToAdd, topUp.PaymentProvider)
-		return err
+		if err != nil {
+			return err
+		}
+		if err := writeAdminManualCompletionInvoiceEvidence(topUp); err != nil {
+			return err
+		}
+		return tx.Save(topUp).Error
 	})
 
 	if err != nil {

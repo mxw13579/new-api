@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func setupInvoiceApplicationTest(t *testing.T, quota int, feeQuota int64) (int, *InvoiceProfile) {
+func setupInvoiceApplicationTest(t *testing.T, quota int, feePercent int64) (int, *InvoiceProfile) {
 	t.Helper()
 	truncateTables(t)
 	require.NoError(t, DB.AutoMigrate(
@@ -26,12 +26,17 @@ func setupInvoiceApplicationTest(t *testing.T, quota int, feeQuota int64) (int, 
 		DB.Exec("DELETE FROM invoice_profiles")
 	})
 
-	previous := *operation_setting.GetInvoiceSetting()
-	*operation_setting.GetInvoiceSetting() = operation_setting.InvoiceSetting{
+	previous := operation_setting.GetInvoiceSetting()
+	previousQuotaPerUnit := common.QuotaPerUnit
+	common.QuotaPerUnit = 100
+	operation_setting.PublishInvoiceSetting(operation_setting.InvoiceSetting{
 		PersonalEnabled: true, CompanyEnabled: true, ApplicationWindowDays: 30,
-		MinimumAmountMinor: 1, FeeQuota: feeQuota, PDFRetentionDays: 30,
-	}
-	t.Cleanup(func() { *operation_setting.GetInvoiceSetting() = previous })
+		MinimumAmountMinor: 1, FeePercent: int(feePercent), PDFRetentionDays: 30,
+	})
+	t.Cleanup(func() {
+		operation_setting.PublishInvoiceSetting(previous)
+		common.QuotaPerUnit = previousQuotaPerUnit
+	})
 
 	user := User{Username: "invoice-app-user", Password: "password", Quota: quota}
 	require.NoError(t, DB.Create(&user).Error)
@@ -58,13 +63,13 @@ func createInvoiceApplicationRequest(requestID string, profile *InvoiceProfile, 
 
 func TestCreateInvoiceApplicationClaimsSortedWholeTopUpsAndChargesAtomically(t *testing.T) {
 	userID, profile := setupInvoiceApplicationTest(t, 100, 25)
-	createInvoiceTopUp(t, 31, userID, 300)
-	createInvoiceTopUp(t, 12, userID, 125)
+	createInvoiceTopUp(t, 31, userID, 75)
+	createInvoiceTopUp(t, 12, userID, 25)
 
 	application, err := CreateInvoiceApplication(userID,
 		createInvoiceApplicationRequest("request-charge", profile, 31, 12, 31), NewTopUpInvoicePaymentSource())
 	require.NoError(t, err)
-	assert.Equal(t, int64(425), application.AmountMinor)
+	assert.Equal(t, int64(100), application.AmountMinor)
 	assert.Equal(t, constant.InvoiceFeeStatusPaid, application.FeeStatus)
 	require.NotNil(t, application.FeeChargeEntryID)
 	assert.Nil(t, application.FeeRefundEntryID)
@@ -77,7 +82,7 @@ func TestCreateInvoiceApplicationClaimsSortedWholeTopUpsAndChargesAtomically(t *
 	require.NoError(t, DB.Where("application_id = ?", application.ID).Order("topup_id").Find(&items).Error)
 	require.Len(t, items, 2)
 	assert.Equal(t, []int{12, 31}, []int{items[0].TopUpID, items[1].TopUpID})
-	assert.Equal(t, int64(425), items[0].PaidAmountMinor+items[1].PaidAmountMinor)
+	assert.Equal(t, int64(100), items[0].PaidAmountMinor+items[1].PaidAmountMinor)
 
 	var ledger []InvoiceFeeLedgerEntry
 	require.NoError(t, DB.Where("application_id = ?", application.ID).Find(&ledger).Error)
@@ -85,6 +90,35 @@ func TestCreateInvoiceApplicationClaimsSortedWholeTopUpsAndChargesAtomically(t *
 	assert.Equal(t, InvoiceFeeEntryTypeCharge, ledger[0].EntryType)
 	assert.Equal(t, InvoiceFeeEntryStatusApplied, ledger[0].Status)
 	assert.Equal(t, 25, ledger[0].Quota)
+}
+
+func TestCreateInvoiceApplicationChargesConfiguredPercentageOfInvoiceAmount(t *testing.T) {
+	userID, profile := setupInvoiceApplicationTest(t, 1000, 5)
+	createInvoiceTopUp(t, 32, userID, 7300)
+
+	application, err := CreateInvoiceApplication(userID,
+		createInvoiceApplicationRequest("request-percentage-charge", profile, 32), nil)
+	require.NoError(t, err)
+	assert.Equal(t, int64(7300), application.AmountMinor)
+	assert.Equal(t, 365, application.FeeQuota)
+
+	var user User
+	require.NoError(t, DB.First(&user, userID).Error)
+	assert.Equal(t, 635, user.Quota)
+	assert.Contains(t, application.PolicySnapshot, `"fee_percent":5`)
+	assert.Contains(t, application.PolicySnapshot, `"fee_quota":365`)
+}
+
+func TestCreateInvoiceApplicationBlocksLegacyQuotaUntilPercentageSaved(t *testing.T) {
+	userID, profile := setupInvoiceApplicationTest(t, 1000, 0)
+	createInvoiceTopUp(t, 33, userID, 100)
+	setting := operation_setting.GetInvoiceSetting()
+	setting.FeePercentMigrationRequired = true
+	operation_setting.PublishInvoiceSetting(setting)
+
+	_, err := CreateInvoiceApplication(userID,
+		createInvoiceApplicationRequest("request-legacy-fee", profile, 33), nil)
+	assert.ErrorIs(t, err, ErrInvoiceStateConflict)
 }
 
 func TestCreateInvoiceApplicationIdempotencyAndFingerprintConflict(t *testing.T) {
@@ -111,7 +145,7 @@ func TestCreateInvoiceApplicationIdempotencyAndFingerprintConflict(t *testing.T)
 
 	var user User
 	require.NoError(t, DB.First(&user, userID).Error)
-	assert.Equal(t, 90, user.Quota, "idempotent retry must not charge twice")
+	assert.Equal(t, 70, user.Quota, "idempotent retry must not charge twice")
 	var count int64
 	require.NoError(t, DB.Model(&InvoiceFeeLedgerEntry{}).Count(&count).Error)
 	assert.Equal(t, int64(1), count)

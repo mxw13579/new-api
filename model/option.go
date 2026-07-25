@@ -1,8 +1,10 @@
 package model
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -19,6 +21,8 @@ type Option struct {
 	Key   string `json:"key" gorm:"primaryKey"`
 	Value string `json:"value"`
 }
+
+var invoiceSettingUpdateMutex sync.Mutex
 
 func AllOption() ([]*Option, error) {
 	var options []*Option
@@ -188,8 +192,29 @@ func InitOptionMap() {
 }
 
 func loadOptionsFromDatabase() {
+	loadOptionsFromDatabaseWithHook(nil)
+}
+
+func loadOptionsFromDatabaseWithHook(afterRead func()) {
+	invoiceSettingUpdateMutex.Lock()
 	options, _ := AllOption()
+	if afterRead != nil {
+		afterRead()
+	}
+	invoiceOptions := make(map[string]string)
+	otherOptions := make([]*Option, 0, len(options))
 	for _, option := range options {
+		if strings.HasPrefix(option.Key, "invoice_setting.") {
+			invoiceOptions[option.Key] = option.Value
+			continue
+		}
+		otherOptions = append(otherOptions, option)
+	}
+	if err := publishInvoiceOptions(invoiceOptions); err != nil {
+		common.SysLog("failed to update invoice option map: " + err.Error())
+	}
+	invoiceSettingUpdateMutex.Unlock()
+	for _, option := range otherOptions {
 		err := updateOptionMap(option.Key, option.Value)
 		if err != nil {
 			common.SysLog("failed to update option map: " + err.Error())
@@ -206,6 +231,9 @@ func SyncOptions(frequency int) {
 }
 
 func UpdateOption(key string, value string) error {
+	if strings.HasPrefix(key, "invoice_setting.") {
+		return UpdateOptionsBulk(map[string]string{key: value})
+	}
 	// Save to database first
 	option := Option{
 		Key: key,
@@ -227,10 +255,64 @@ func UpdateOption(key string, value string) error {
 // is touched — safe for callers that must commit a set of related options
 // atomically (e.g. payment gateway binding).
 func UpdateOptionsBulk(values map[string]string) error {
+	for key := range values {
+		if strings.HasPrefix(key, "invoice_setting.") {
+			return UpdateInvoiceSettingOptions(func(operation_setting.InvoiceSetting) (map[string]string, error) {
+				return values, nil
+			})
+		}
+	}
+	return updateOptionsBulk(values, nil)
+}
+
+// UpdateInvoiceSettingOptions serializes the complete invoice-setting read,
+// database commit, and runtime publication as one operation.
+func UpdateInvoiceSettingOptions(build func(operation_setting.InvoiceSetting) (map[string]string, error)) error {
+	return updateInvoiceSettingOptions(build, nil)
+}
+
+func updateInvoiceSettingOptions(build func(operation_setting.InvoiceSetting) (map[string]string, error), afterCommit func()) error {
+	invoiceSettingUpdateMutex.Lock()
+	defer invoiceSettingUpdateMutex.Unlock()
+	current := operation_setting.GetInvoiceSetting()
+	values, err := build(current)
+	if err != nil {
+		return err
+	}
+	candidate, err := prepareInvoiceSettingCandidate(current, values)
+	if err != nil {
+		return err
+	}
+	if err := persistOptionsBulk(values); err != nil {
+		return err
+	}
+	if afterCommit != nil {
+		afterCommit()
+	}
+	publishInvoiceCandidate(values, candidate)
+	return nil
+}
+
+func updateOptionsBulk(values map[string]string, afterCommit func()) error {
 	if len(values) == 0 {
 		return nil
 	}
-	err := DB.Transaction(func(tx *gorm.DB) error {
+	if err := persistOptionsBulk(values); err != nil {
+		return err
+	}
+	if afterCommit != nil {
+		afterCommit()
+	}
+	for k, v := range values {
+		if err := updateOptionMap(k, v); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func persistOptionsBulk(values map[string]string) error {
+	return DB.Transaction(func(tx *gorm.DB) error {
 		for k, v := range values {
 			option := Option{Key: k}
 			if err := tx.FirstOrCreate(&option, Option{Key: k}).Error; err != nil {
@@ -243,15 +325,84 @@ func UpdateOptionsBulk(values map[string]string) error {
 		}
 		return nil
 	})
+}
+
+func publishInvoiceOptions(values map[string]string) error {
+	if len(values) == 0 {
+		return nil
+	}
+	candidate, err := prepareInvoiceSettingCandidate(operation_setting.GetInvoiceSetting(), values)
 	if err != nil {
 		return err
 	}
-	for k, v := range values {
-		if err := updateOptionMap(k, v); err != nil {
-			return err
+	publishInvoiceCandidate(values, candidate)
+	return nil
+}
+
+// prepareInvoiceSettingCandidate is the trust boundary that strictly validates the typed snapshot before persistence.
+// It prevents post-commit parsing so runtime publication remains infallible.
+func prepareInvoiceSettingCandidate(current operation_setting.InvoiceSetting, values map[string]string) (operation_setting.InvoiceSetting, error) {
+	candidate := current
+	hasLegacyQuota := false
+	hasFeePercent := false
+	for key, value := range values {
+		if !strings.HasPrefix(key, "invoice_setting.") {
+			return current, fmt.Errorf("invalid invoice setting key %q", key)
+		}
+		var err error
+		switch strings.TrimPrefix(key, "invoice_setting.") {
+		case "personal_enabled":
+			candidate.PersonalEnabled, err = strconv.ParseBool(value)
+		case "company_enabled":
+			candidate.CompanyEnabled, err = strconv.ParseBool(value)
+		case "application_window_days":
+			candidate.ApplicationWindowDays, err = strconv.Atoi(value)
+		case "minimum_amount_minor":
+			candidate.MinimumAmountMinor, err = strconv.ParseInt(value, 10, 64)
+		case "fee_percent":
+			candidate.FeePercent, err = strconv.Atoi(value)
+			hasFeePercent = true
+		case "pdf_retention_days":
+			candidate.PDFRetentionDays, err = strconv.Atoi(value)
+		case "r2_endpoint":
+			candidate.R2Endpoint = value
+		case "r2_bucket":
+			candidate.R2Bucket = value
+		case "r2_access_key_id":
+			candidate.R2AccessKeyID = value
+		case "r2_secret":
+			candidate.R2Secret = value
+		case "fee_quota":
+			_, err = strconv.ParseInt(value, 10, 64)
+			hasLegacyQuota = true
+		default:
+			return current, fmt.Errorf("unknown invoice setting key %q", key)
+		}
+		if err != nil {
+			return current, fmt.Errorf("invalid invoice setting %q: %w", key, err)
 		}
 	}
-	return nil
+	if hasFeePercent {
+		candidate.FeePercentMigrationRequired = false
+	} else if hasLegacyQuota {
+		candidate.FeePercentMigrationRequired = true
+	}
+	if err := candidate.Validate(); err != nil {
+		return current, err
+	}
+	return candidate, nil
+}
+
+func publishInvoiceCandidate(values map[string]string, candidate operation_setting.InvoiceSetting) {
+	common.OptionMapRWMutex.Lock()
+	if common.OptionMap == nil {
+		common.OptionMap = make(map[string]string)
+	}
+	for key, value := range values {
+		common.OptionMap[key] = value
+	}
+	common.OptionMapRWMutex.Unlock()
+	operation_setting.PublishInvoiceSetting(candidate)
 }
 
 func updateOptionMap(key string, value string) (err error) {
@@ -260,6 +411,9 @@ func updateOptionMap(key string, value string) (err error) {
 		delete(common.OptionMap, key)
 		common.OptionMapRWMutex.Unlock()
 		return nil
+	}
+	if strings.HasPrefix(key, "invoice_setting.") {
+		return publishInvoiceOptions(map[string]string{key: value})
 	}
 	common.OptionMapRWMutex.Lock()
 	defer common.OptionMapRWMutex.Unlock()

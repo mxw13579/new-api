@@ -104,6 +104,7 @@ export function useSidebarData(): SidebarData {
           {
             title: t('Usage Logs'),
             url: '/usage-logs/common',
+            activeUrls: ['/usage-logs/invoice-fees'],
             icon: FileText,
           },
           {

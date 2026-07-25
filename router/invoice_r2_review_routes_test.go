@@ -98,18 +98,9 @@ func setupInvoiceReviewRouteFixture(t *testing.T) *invoiceReviewRouteFixture {
 	require.NoError(t, db.Callback().Update().Before("gorm:update").Register(callbackPrefix+":update", countDomainWrite))
 	require.NoError(t, db.Callback().Delete().Before("gorm:delete").Register(callbackPrefix+":delete", countDomainWrite))
 
-	objectServer := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
-		fixture.objectCalls.Add(1)
-	}))
-	t.Setenv("INVOICE_R2_ENDPOINT", objectServer.URL)
-	t.Setenv("INVOICE_R2_BUCKET", "test-fake-private-bucket")
-	t.Setenv("INVOICE_R2_ACCESS_KEY_ID", "test-fake-access-key")
-	t.Setenv("INVOICE_R2_SECRET_ACCESS_KEY", "test-fake-secret-key")
-
 	fixture.engine = gin.New()
 	SetApiRouter(fixture.engine)
 	t.Cleanup(func() {
-		objectServer.Close()
 		_ = db.Callback().Create().Remove(callbackPrefix + ":create")
 		_ = db.Callback().Update().Remove(callbackPrefix + ":update")
 		_ = db.Callback().Delete().Remove(callbackPrefix + ":delete")

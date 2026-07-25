@@ -54,13 +54,13 @@ export function ApplicationPolicy(props: ApplicationPolicyProps) {
       <AlertTitle>{t('Invoice policy')}</AlertTitle>
       <AlertDescription>
         {t(
-          'Orders from the last {{days}} days are eligible. Minimum {{minimum}}, fee {{fee}} wallet quota, PDF retention {{retention}} days.',
+          'Orders from the last {{days}} days are eligible. Minimum {{minimum}}, invoice fee {{fee}}%, PDF retention {{retention}} days.',
           {
             days: props.config?.application_window_days,
             minimum: props.formatAmount(
               props.config?.minimum_amount_minor ?? 0
             ),
-            fee: props.config?.fee_quota,
+            fee: props.config?.fee_percent,
             retention: props.config?.pdf_retention_days,
           }
         )}

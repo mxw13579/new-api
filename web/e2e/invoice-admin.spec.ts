@@ -30,6 +30,14 @@ interface AdminBackendOptions {
   role?: number
   language?: 'en' | 'ru'
   conflictReviewOnce?: boolean
+  approvalFailureOnce?: boolean
+  uploadFailureOnce?: boolean
+  initialR2?: {
+    endpoint: string
+    bucket: string
+    accessKeyId: string
+    secretConfigured: boolean
+  }
 }
 
 const now = 1_900_000_000
@@ -75,6 +83,7 @@ function detail(
     policy_snapshot: {
       application_window_days: 90,
       minimum_amount_minor: 1_000,
+      fee_percent: 5,
       fee_quota: 500,
       pdf_retention_days: 365,
     },
@@ -148,16 +157,23 @@ async function installAdminBackend(
     [8, detail(8, 'reviewing')],
   ])
   let conflictPending = options.conflictReviewOnce ?? false
+  let approvalFailurePending = options.approvalFailureOnce ?? false
+  let uploadFailurePending = options.uploadFailureOnce ?? false
   let savedSetting = {
     personal_enabled: true,
     company_enabled: false,
     application_window_days: 90,
     minimum_amount_minor: 1_000,
-    fee_quota: 500,
+    fee_percent: 5,
     pdf_retention_days: 365,
+    r2_endpoint: options.initialR2?.endpoint ?? '',
+    r2_bucket: options.initialR2?.bucket ?? '',
+    r2_access_key_id: options.initialR2?.accessKeyId ?? '',
+    r2_secret_configured: options.initialR2?.secretConfigured ?? false,
   }
   const settingWrites: unknown[] = []
   const uploadBodies: string[] = []
+  const operationCalls: string[] = []
 
   await page.addInitScript((language) => {
     window.localStorage.setItem('setup_status_checked', 'true')
@@ -230,8 +246,21 @@ async function installAdminBackend(
     }
     if (path === '/api/option/invoice') {
       if (request.method() === 'PUT') {
-        savedSetting = JSON.parse(request.postData() || '{}')
-        settingWrites.push(savedSetting)
+        const update = JSON.parse(request.postData() || '{}')
+        settingWrites.push(update)
+        const publicR2Empty =
+          update.r2_endpoint === '' &&
+          update.r2_bucket === '' &&
+          update.r2_access_key_id === ''
+        savedSetting = {
+          ...update,
+          r2_secret_configured: publicR2Empty
+            ? false
+            : Boolean(update.r2_secret_access_key) ||
+              savedSetting.r2_secret_configured,
+        }
+        delete (savedSetting as { r2_secret_access_key?: string })
+          .r2_secret_access_key
       }
       await fulfill(route, success(savedSetting))
       return
@@ -273,6 +302,22 @@ async function installAdminBackend(
       }
       if (action === 'review') {
         const body = JSON.parse(request.postData() || '{}')
+        operationCalls.push(
+          `review:${id}:${body.action}:${body.expected_status}`
+        )
+        if (body.action === 'approve' && approvalFailurePending) {
+          approvalFailurePending = false
+          await fulfill(
+            route,
+            {
+              success: false,
+              message: 'approval failed',
+              data: { code: 'INVOICE_STATE_CONFLICT' },
+            },
+            409
+          )
+          return
+        }
         const nextStatus = body.action === 'approve' ? 'approved' : 'reviewing'
         applications.set(id, detail(id, nextStatus))
       } else if (action === 'reject') {
@@ -281,9 +326,23 @@ async function installAdminBackend(
           reject_reason: JSON.parse(request.postData() || '{}').reason,
         })
       } else {
+        operationCalls.push(`upload:${id}`)
         uploadBodies.push(
           (await request.postDataBuffer())?.toString('utf8') || ''
         )
+        if (uploadFailurePending) {
+          uploadFailurePending = false
+          await fulfill(
+            route,
+            {
+              success: false,
+              message: 'upload failed',
+              data: { code: 'INVOICE_STORAGE_NOT_CONFIGURED' },
+            },
+            503
+          )
+          return
+        }
         applications.set(id, detail(id, 'issued'))
       }
       await fulfill(route, success(applications.get(id)))
@@ -292,7 +351,23 @@ async function installAdminBackend(
     await fulfill(route, success(null))
   })
 
-  return { settingWrites, uploadBodies }
+  return { settingWrites, uploadBodies, operationCalls }
+}
+
+async function fillIssuanceForm(page: Page): Promise<void> {
+  await page.getByLabel('PDF document').setInputFiles({
+    name: 'invoice.pdf',
+    mimeType: 'application/pdf',
+    buffer: Buffer.from('%PDF-1.7 e2e'),
+  })
+  await page.getByLabel('Invoice number').fill('E2E-NUMBER')
+  await page.getByLabel('Invoice code').fill('E2E-CODE')
+  await page.getByLabel('Invoice date').fill('2030-03-17')
+  await page
+    .getByRole('checkbox', {
+      name: 'I confirm the PDF matches these issuance facts.',
+    })
+    .check()
 }
 
 test('admin routes enforce independent permissions and mask sensitive values in the DOM', async ({
@@ -321,6 +396,13 @@ test('admin routes enforce independent permissions and mask sensitive values in 
   await expect(page.locator('body')).not.toContainText('91310000SECRET')
   await expect(page.getByRole('button', { name: 'Upload PDF' })).toHaveCount(0)
 
+  await page.keyboard.press('Escape')
+  await page.getByRole('button', { name: 'View details' }).nth(1).click()
+  await expect(
+    page.getByRole('button', { name: 'Approve invoice' })
+  ).toBeVisible()
+  await expect(page.getByLabel('PDF document')).toHaveCount(0)
+
   await page.goto('/invoice-settings')
   await expect(page).toHaveURL(/\/403\/?$/)
 })
@@ -339,29 +421,18 @@ test('admin review conflict refetches before approve/reject and strict PDF repla
   ).toBeVisible()
   await expect(
     page.getByRole('button', { name: 'Approve invoice' })
-  ).toBeVisible()
-  await page.getByRole('button', { name: 'Approve invoice' }).click()
-  await expect(page.getByText('Invoice review updated')).toBeVisible()
-
-  await page.getByRole('button', { name: 'Upload PDF' }).click()
+  ).toHaveCount(0)
+  await page.getByRole('button', { name: 'Approve and issue invoice' }).click()
   await expect(page.getByRole('alert')).toContainText(
     'Select a non-empty invoice PDF'
   )
-  await page.getByLabel('PDF document').setInputFiles({
-    name: 'invoice.pdf',
-    mimeType: 'application/pdf',
-    buffer: Buffer.from('%PDF-1.7 e2e'),
-  })
-  await page.getByLabel('Invoice number').fill('E2E-NUMBER')
-  await page.getByLabel('Invoice code').fill('E2E-CODE')
-  await page.getByLabel('Invoice date').fill('2030-03-17')
-  await page
-    .getByRole('checkbox', {
-      name: 'I confirm the PDF matches these issuance facts.',
-    })
-    .check()
-  await page.getByRole('button', { name: 'Upload PDF' }).click()
+  await fillIssuanceForm(page)
+  await page.getByRole('button', { name: 'Approve and issue invoice' }).click()
   await expect(page.getByText('Invoice PDF saved')).toBeVisible()
+  expect(backend.operationCalls).toEqual([
+    'review:7:approve:reviewing',
+    'upload:7',
+  ])
   expect(backend.uploadBodies[0]).toContain('name="expected_status"')
   expect(backend.uploadBodies[0]).toContain('approved')
   await expect(page.getByLabel('Invoice number')).toBeDisabled()
@@ -381,7 +452,53 @@ test('admin review conflict refetches before approve/reject and strict PDF repla
   ).toBeVisible()
 })
 
-test('invoice settings validates and saves the complete six-field object', async ({
+test('approve-and-issue never uploads after approval failure', async ({
+  page,
+}) => {
+  const backend = await installAdminBackend(page, { approvalFailureOnce: true })
+  await page.goto('/admin-invoices')
+  await page.getByRole('button', { name: 'View details' }).nth(1).click()
+  await fillIssuanceForm(page)
+  await page.getByRole('button', { name: 'Approve and issue invoice' }).click()
+
+  await expect(
+    page.getByText('Invoice error: data changed, refresh and try again')
+  ).toBeVisible()
+  expect(backend.operationCalls).toEqual(['review:8:approve:reviewing'])
+  await expect(
+    page.getByRole('button', { name: 'Approve and issue invoice' })
+  ).toBeVisible()
+})
+
+test('upload failure converges to approved and retries without another approval', async ({
+  page,
+}) => {
+  const backend = await installAdminBackend(page, { uploadFailureOnce: true })
+  await page.goto('/admin-invoices')
+  await page.getByRole('button', { name: 'View details' }).nth(1).click()
+  await fillIssuanceForm(page)
+  await page.getByRole('button', { name: 'Approve and issue invoice' }).click()
+
+  await expect(
+    page.getByText('Invoice PDF storage is not configured or invalid')
+  ).toBeVisible()
+  expect(backend.operationCalls).toEqual([
+    'review:8:approve:reviewing',
+    'upload:8',
+  ])
+  await expect(page.getByRole('button', { name: 'Upload PDF' })).toBeVisible()
+
+  await fillIssuanceForm(page)
+  await page.getByRole('button', { name: 'Upload PDF' }).click()
+  await expect(page.getByText('Invoice PDF saved')).toBeVisible()
+  expect(backend.operationCalls).toEqual([
+    'review:8:approve:reviewing',
+    'upload:8',
+    'upload:8',
+  ])
+})
+
+test('invoice settings validates and saves percentage fees and R2 fields', async ({
   page,
 }) => {
   const backend = await installAdminBackend(page)
@@ -400,7 +517,7 @@ test('invoice settings validates and saves the complete six-field object', async
 
   await page.getByLabel('Application window days').fill('30')
   await page.getByLabel('Minimum amount in minor units').fill('2500')
-  await page.getByLabel('Fee quota').fill('750')
+  await page.getByLabel('Invoice fee percentage').fill('5')
   await page.getByLabel('PDF retention days').fill('120')
   await page.getByRole('switch', { name: 'Enable company invoices' }).click()
   await page.getByRole('button', { name: 'Save invoice settings' }).click()
@@ -411,10 +528,83 @@ test('invoice settings validates and saves the complete six-field object', async
       company_enabled: true,
       application_window_days: 30,
       minimum_amount_minor: 2500,
-      fee_quota: 750,
+      fee_percent: 5,
       pdf_retention_days: 120,
+      r2_endpoint: '',
+      r2_bucket: '',
+      r2_access_key_id: '',
+      r2_secret_access_key: '',
     },
   ])
+})
+
+test('invoice settings masks and preserves an already configured R2 secret', async ({
+  page,
+}) => {
+  const backend = await installAdminBackend(page, {
+    initialR2: {
+      endpoint:
+        'https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com',
+      bucket: 'private-invoices',
+      accessKeyId: 'configured-access-id',
+      secretConfigured: true,
+    },
+  })
+  await page.goto('/invoice-settings')
+
+  await expect(page.getByLabel('R2 secret access key')).toHaveValue('')
+  await expect(
+    page.getByText('Leave blank to keep the current secret.')
+  ).toBeVisible()
+  await page.getByRole('button', { name: 'Save invoice settings' }).click()
+
+  expect(backend.settingWrites).toHaveLength(1)
+  expect(backend.settingWrites[0]).not.toHaveProperty('r2_secret_configured')
+  expect(backend.settingWrites[0]).toMatchObject({
+    r2_access_key_id: 'configured-access-id',
+    r2_secret_access_key: '',
+  })
+})
+
+test('invoice settings saves a complete new R2 configuration', async ({
+  page,
+}) => {
+  const backend = await installAdminBackend(page)
+  await page.goto('/invoice-settings')
+
+  await page
+    .getByLabel('R2 endpoint')
+    .fill('https://fedcba9876543210fedcba9876543210.r2.cloudflarestorage.com')
+  await page.getByLabel('R2 bucket').fill('new-private-invoices')
+  await page.getByLabel('R2 access key ID').fill('new-access-id')
+  await page.getByLabel('R2 secret access key').fill('test-fake-r2-secret')
+  await page.getByRole('button', { name: 'Save invoice settings' }).click()
+
+  await expect(page.getByText('Invoice settings saved')).toBeVisible()
+  expect(backend.settingWrites).toHaveLength(1)
+  expect(backend.settingWrites[0]).not.toHaveProperty('r2_secret_configured')
+  expect(backend.settingWrites[0]).toMatchObject({
+    r2_bucket: 'new-private-invoices',
+    r2_access_key_id: 'new-access-id',
+    r2_secret_access_key: 'test-fake-r2-secret',
+  })
+})
+
+test('invoice settings rejects an incomplete R2 configuration', async ({
+  page,
+}) => {
+  const backend = await installAdminBackend(page)
+  await page.goto('/invoice-settings')
+
+  await page
+    .getByLabel('R2 endpoint')
+    .fill('https://fedcba9876543210fedcba9876543210.r2.cloudflarestorage.com')
+  await page.getByRole('button', { name: 'Save invoice settings' }).click()
+
+  await expect(
+    page.getByRole('alert').getByText('Enter a complete R2 configuration')
+  ).toBeVisible()
+  expect(backend.settingWrites).toEqual([])
 })
 
 test.describe('mobile admin invoices', () => {

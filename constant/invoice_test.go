@@ -16,6 +16,7 @@ func TestInvoicePaymentEvidenceConstants(t *testing.T) {
 	assert.Equal(t, "invoice_payment_evidence_apply", InvoicePaymentEvidenceTaskType)
 	assert.Equal(t, "trusted_callback_v1", InvoicePaymentEvidenceSourceTrustedCallback)
 	assert.Equal(t, "legacy_backfill_v1", InvoicePaymentEvidenceSourceLegacyBackfill)
+	assert.Equal(t, "admin_manual_completion_v1", InvoicePaymentEvidenceSourceAdminManualCompletion)
 	assert.Equal(t, "CNY", InvoicePaymentEvidenceCurrencyCNY)
 	assert.Equal(t, "succeeded", InvoicePaymentStateSucceeded)
 	assert.Equal(t, "平台额度充值", InvoicePaymentEvidenceTopUpProduct)
@@ -26,4 +27,9 @@ func TestInvoicePaymentEvidenceConstants(t *testing.T) {
 	assert.Equal(t, "RUN_STATE_CONFLICT", InvoicePaymentEvidenceCodeRunStateConflict)
 	assert.Equal(t, "CUTOVER_NOT_READY", InvoicePaymentEvidenceCodeCutoverNotReady)
 	assert.Equal(t, "INTERNAL_ERROR", InvoicePaymentEvidenceCodeInternalError)
+}
+
+func TestInvoiceIssuanceConflictCodeIsStableAndDistinct(t *testing.T) {
+	assert.Equal(t, "INVOICE_ISSUANCE_CONFLICT", InvoiceCodeIssuanceConflict)
+	assert.NotEqual(t, InvoiceCodeStateConflict, InvoiceCodeIssuanceConflict)
 }

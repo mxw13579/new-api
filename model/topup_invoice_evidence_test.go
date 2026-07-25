@@ -164,7 +164,7 @@ func TestCompleteVerifiedEpayWalletTopUpRejectsSubscriptionMirror(t *testing.T) 
 	assert.Nil(t, got.PaymentVersion)
 }
 
-func TestNonTrustedWalletCompletionWritesIneligibleBarrier(t *testing.T) {
+func TestManualCompleteTopUpWritesAdminAttestedInvoiceEvidence(t *testing.T) {
 	setupInvoiceEvidenceTopUpTest(t)
 	insertInvoiceEvidenceUser(t, 305)
 	topUp := insertPendingEpayTopUp(t, "merchant-manual", 305, 1)
@@ -174,18 +174,55 @@ func TestNonTrustedWalletCompletionWritesIneligibleBarrier(t *testing.T) {
 	var got TopUp
 	require.NoError(t, DB.First(&got, topUp.Id).Error)
 	require.NotNil(t, got.InvoiceEligible)
-	assert.False(t, *got.InvoiceEligible)
+	assert.True(t, *got.InvoiceEligible)
 	require.NotNil(t, got.PaymentVersion)
 	assert.Equal(t, int64(1), *got.PaymentVersion)
-	assert.Nil(t, got.PaidAmountMinor)
-	assert.Nil(t, got.Currency)
-	assert.Nil(t, got.PaymentState)
-	assert.Nil(t, got.RefundedAmountMinor)
-	assert.Nil(t, got.ProductSnapshot)
-	assert.Nil(t, got.PaymentEvidenceSource)
+	require.NotNil(t, got.PaidAmountMinor)
+	assert.Equal(t, int64(100), *got.PaidAmountMinor)
+	require.NotNil(t, got.Currency)
+	assert.Equal(t, constant.InvoicePaymentEvidenceCurrencyCNY, *got.Currency)
+	require.NotNil(t, got.PaymentState)
+	assert.Equal(t, constant.InvoicePaymentStateSucceeded, *got.PaymentState)
+	require.NotNil(t, got.RefundedAmountMinor)
+	assert.Zero(t, *got.RefundedAmountMinor)
+	require.NotNil(t, got.ProductSnapshot)
+	assert.Equal(t, constant.InvoicePaymentEvidenceTopUpProduct, *got.ProductSnapshot)
+	require.NotNil(t, got.PaymentEvidenceSource)
+	assert.Equal(t, constant.InvoicePaymentEvidenceSourceAdminManualCompletion, *got.PaymentEvidenceSource)
 	assert.Nil(t, got.PaymentEvidenceRunID)
 	assert.Nil(t, got.PaymentProviderTradeNo)
 	assert.Nil(t, got.PaymentProviderTradeKey)
+
+	eligible, err := ListEligibleInvoiceTopUps(305, 1)
+	require.NoError(t, err)
+	require.Len(t, eligible, 1)
+	assert.Equal(t, topUp.Id, eligible[0].Id)
+}
+
+func TestManualCompleteTopUpUpgradesExistingIneligibleBarrierWithoutCreditingAgain(t *testing.T) {
+	setupInvoiceEvidenceTopUpTest(t)
+	insertInvoiceEvidenceUser(t, 306)
+	topUp := insertPendingEpayTopUp(t, "merchant-manual-existing", 306, 1)
+	topUp.Status = common.TopUpStatusSuccess
+	topUp.CompleteTime = 12345
+	writeIneligibleInvoiceEvidence(&topUp)
+	require.NoError(t, DB.Save(&topUp).Error)
+
+	require.NoError(t, ManualCompleteTopUp(topUp.TradeNo, ""))
+
+	var got TopUp
+	require.NoError(t, DB.First(&got, topUp.Id).Error)
+	require.NotNil(t, got.InvoiceEligible)
+	assert.True(t, *got.InvoiceEligible)
+	require.NotNil(t, got.PaymentEvidenceSource)
+	assert.Equal(t, constant.InvoicePaymentEvidenceSourceAdminManualCompletion, *got.PaymentEvidenceSource)
+	var user User
+	require.NoError(t, DB.First(&user, 306).Error)
+	assert.Zero(t, user.Quota)
+	eligible, err := ListEligibleInvoiceTopUps(306, 1)
+	require.NoError(t, err)
+	require.Len(t, eligible, 1)
+	assert.Equal(t, topUp.Id, eligible[0].Id)
 }
 
 func TestCompleteVerifiedEpayWalletTopUpDuplicateCompletionConflicts(t *testing.T) {

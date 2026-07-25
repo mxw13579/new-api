@@ -23,13 +23,15 @@ import { describe, test } from 'node:test'
 import type { AuthUser } from '@/stores/auth-store'
 
 import type {
+  AdminInvoiceApi,
   InvoiceApplicationDetail,
-  InvoiceSetting,
+  UpdateInvoiceSettingRequest,
 } from '../invoices/types'
 import {
   INVOICE_ADMIN_PERMISSIONS,
   MAX_INVOICE_PDF_BYTES,
   PROTECTED_INVOICE_VALUE_KEY,
+  approveAndIssueInvoice,
   buildInvoiceDocumentFormData,
   getInvoiceReviewActions,
   getInvoiceAdminCapabilities,
@@ -67,12 +69,32 @@ const baseDetail: InvoiceApplicationDetail = {
   policy_snapshot: {
     application_window_days: 30,
     minimum_amount_minor: 100,
+    fee_percent: 0,
     fee_quota: 0,
     pdf_retention_days: 90,
   },
   items: [],
   issuance: null,
   document: null,
+}
+
+function issuanceApi(
+  review: AdminInvoiceApi['reviewApplication'],
+  upload: AdminInvoiceApi['uploadDocument']
+): AdminInvoiceApi {
+  return {
+    async listApplications() {
+      throw new Error('unused')
+    },
+    async getApplication() {
+      throw new Error('unused')
+    },
+    reviewApplication: review,
+    async rejectApplication() {
+      throw new Error('unused')
+    },
+    uploadDocument: upload,
+  }
 }
 
 function adminWithPermissions(actions: Record<string, boolean>): AuthUser {
@@ -166,6 +188,112 @@ describe('invoice admin contracts', () => {
     assert.equal(form.data.get('face_amount_minor'), '1234')
   })
 
+  test('builds reviewing issuance facts for the approved upload transition', () => {
+    const form = buildInvoiceDocumentFormData(
+      { ...baseDetail, status: 'reviewing' },
+      {
+        file: new File(['%PDF-1.7'], 'invoice.pdf', {
+          type: 'application/pdf',
+        }),
+        invoice_number: 'N-REVIEWING',
+        invoice_code: 'C-REVIEWING',
+        invoice_date: 1_752_000_000,
+        face_amount_minor: 1234,
+        currency: 'CNY',
+        pdf_facts_attested: true,
+      }
+    )
+
+    assert.equal(form.ok, true)
+    if (!form.ok) return
+    assert.equal(form.data.get('expected_status'), 'approved')
+  })
+
+  test('approves then uploads in strict order', async () => {
+    const calls: string[] = []
+    const reviewing = { ...baseDetail, status: 'reviewing' as const }
+    const approved = { ...baseDetail, status: 'approved' as const }
+    const issued = { ...baseDetail, status: 'issued' as const }
+    const document = new FormData()
+    document.set('expected_status', 'approved')
+    const api = issuanceApi(
+      async (_id, request) => {
+        calls.push(`review:${request.action}:${request.expected_status}`)
+        return approved
+      },
+      async (_id, document) => {
+        calls.push(`upload:${document.get('expected_status')}`)
+        return issued
+      }
+    )
+
+    const result = await approveAndIssueInvoice(api, reviewing, document, () =>
+      assert.fail('successful upload does not need retry convergence')
+    )
+
+    assert.equal(result, issued)
+    assert.deepEqual(calls, ['review:approve:reviewing', 'upload:approved'])
+  })
+
+  test('never uploads after approval failure', async () => {
+    let uploadCalls = 0
+    const api = issuanceApi(
+      async () => {
+        throw new Error('approval failed')
+      },
+      async () => {
+        uploadCalls += 1
+        return baseDetail
+      }
+    )
+
+    await assert.rejects(
+      approveAndIssueInvoice(
+        api,
+        { ...baseDetail, status: 'reviewing' },
+        new FormData(),
+        () => assert.fail('approval state must not publish')
+      ),
+      /approval failed/
+    )
+    assert.equal(uploadCalls, 0)
+  })
+
+  test('keeps the returned approved detail when upload fails', async () => {
+    const approved = { ...baseDetail, status: 'approved' as const }
+    let converged: InvoiceApplicationDetail | null = null
+    let releaseConvergence: (() => void) | undefined
+    let rejected = false
+    const api = issuanceApi(
+      async () => approved,
+      async () => {
+        throw new Error('upload failed')
+      }
+    )
+
+    const result = approveAndIssueInvoice(
+      api,
+      { ...baseDetail, status: 'reviewing' },
+      new FormData(),
+      async (detail) => {
+        converged = detail
+        await new Promise<void>((resolve) => {
+          releaseConvergence = resolve
+        })
+      }
+    )
+    void result.catch(() => {
+      rejected = true
+    })
+    await new Promise<void>((resolve) => setTimeout(resolve, 0))
+
+    assert.equal(rejected, false)
+    assert.ok(releaseConvergence)
+    releaseConvergence()
+    await assert.rejects(result, /upload failed/)
+    assert.deepEqual(converged, approved)
+  })
+
   test('locks replacement issuance facts to the existing issued invoice', () => {
     const issued: InvoiceApplicationDetail = {
       ...baseDetail,
@@ -241,24 +369,33 @@ describe('invoice admin contracts', () => {
     )
   })
 
-  test('validates and returns the complete six-field settings object', () => {
-    const valid: InvoiceSetting = {
+  test('validates percentage fees and complete database-backed R2 settings', () => {
+    const valid: UpdateInvoiceSettingRequest = {
       personal_enabled: true,
       company_enabled: false,
       application_window_days: 30,
       minimum_amount_minor: 0,
-      fee_quota: 2_147_483_647,
+      fee_percent: 5,
       pdf_retention_days: 90,
+      r2_endpoint:
+        'https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com',
+      r2_bucket: 'private-invoices',
+      r2_access_key_id: 'access-id',
+      r2_secret_access_key: '',
     }
-    assert.deepEqual(validateInvoiceSetting(valid), { ok: true, data: valid })
+    assert.deepEqual(validateInvoiceSetting(valid, true), {
+      ok: true,
+      data: valid,
+    })
 
     for (const invalid of [
       { ...valid, application_window_days: 0 },
       { ...valid, minimum_amount_minor: -1 },
-      { ...valid, fee_quota: 2_147_483_648 },
+      { ...valid, fee_percent: 101 },
       { ...valid, pdf_retention_days: 0 },
+      { ...valid, r2_bucket: '' },
     ]) {
-      assert.equal(validateInvoiceSetting(invalid).ok, false)
+      assert.equal(validateInvoiceSetting(invalid, true).ok, false)
     }
   })
 

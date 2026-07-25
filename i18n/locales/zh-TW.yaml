@@ -4,6 +4,8 @@
 # Common messages
 common.invalid_params: "無效的參數"
 common.database_error: "資料庫出錯，請聯繫管理員"
+invoice.storage_not_configured: "發票 PDF 儲存未設定或設定無效"
+invoice.issuance_conflict: "發票號碼或開票資訊與既有發票衝突"
 common.retry_later: "請稍後重試"
 common.generate_failed: "生成失敗"
 common.not_found: "未找到"

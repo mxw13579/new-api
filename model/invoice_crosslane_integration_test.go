@@ -1,6 +1,7 @@
 package model
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -17,6 +18,46 @@ func openInvoiceCrosslaneTestDB(t *testing.T) *gorm.DB {
 	require.NoError(t, err)
 	require.NoError(t, db.AutoMigrate(&InvoiceApplication{}, &InvoiceIssuance{}, &InvoiceDocument{}))
 	return db
+}
+
+func TestInvoiceDocumentApplicationContractPreservesIssuanceInfrastructureError(t *testing.T) {
+	db := openInvoiceCrosslaneTestDB(t)
+	now := time.Now().Unix()
+	application := InvoiceApplication{
+		ApplicationNo: "INV-CROSSLANE-ERROR", UserID: 43, RequestID: "request-error", RequestFingerprint: "fingerprint-error",
+		Type: constant.InvoiceTypeCompany, Status: constant.InvoiceApplicationStatusApproved,
+		PaymentReviewStatus: constant.InvoicePaymentReviewStatusNone, Currency: constant.InvoiceCurrencyCNY,
+		AmountMinor: 1234, FeeStatus: constant.InvoiceFeeStatusNotRequired,
+		ProfileSnapshot: `{}`, PolicySnapshot: `{}`, SubmittedAt: now,
+	}
+	require.NoError(t, db.Create(&application).Error)
+	document := InvoiceDocument{
+		ApplicationID: application.ID, R2Bucket: "private", ContentType: InvoicePDFContentType,
+		SizeBytes: 32, SHA256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		Status: InvoiceDocumentStatusValidating, OperationToken: "token-error", OperationStartedAt: now,
+		UploadedBy: 7, UploadedAt: now, CreatedAt: now, UpdatedAt: now,
+	}
+	require.NoError(t, db.Create(&document).Error)
+	sentinel := errors.New("issuance database unavailable")
+	require.NoError(t, db.Callback().Create().Before("gorm:create").Register("test:invoice-issuance-infrastructure-error", func(tx *gorm.DB) {
+		if tx.Statement.Table == "invoice_issuances" {
+			tx.AddError(sentinel)
+		}
+	}))
+
+	err := db.Transaction(func(tx *gorm.DB) error {
+		_, finalizeErr := NewInvoiceDocumentApplicationContract().FinalizeDocumentTx(tx, FinalizeInvoiceDocumentRequest{
+			ApplicationID: application.ID, DocumentID: document.ID, OperationToken: document.OperationToken,
+			ExpectedStatus:              constant.InvoiceApplicationStatusApproved,
+			ExpectedPaymentReviewStatus: constant.InvoicePaymentReviewStatusNone,
+			Issuance: InvoiceIssuanceFacts{InvoiceNumber: "NO-ERROR", InvoiceDate: now,
+				FaceAmountMinor: application.AmountMinor, Currency: application.Currency},
+			PDFFactsAttested: true, AttestedBy: 7,
+		})
+		return finalizeErr
+	})
+	require.ErrorIs(t, err, sentinel)
+	assert.NotErrorIs(t, err, ErrInvoiceIssuanceConflict)
 }
 
 func TestInvoiceDocumentApplicationContractFinalizesAtomically(t *testing.T) {

@@ -21,6 +21,7 @@ import { describe, test } from 'node:test'
 
 import {
   InvoiceApiError,
+  createHttpInvoiceFeeLedgerApi,
   createHttpInvoiceApi,
   downloadInvoiceDocument,
   saveInvoiceDocumentBlob,
@@ -60,6 +61,7 @@ describe('HTTP InvoiceApi adapter', () => {
       },
     }
     const invoiceApi = createHttpInvoiceApi(transport)
+    const feeLedgerApi = createHttpInvoiceFeeLedgerApi(transport)
 
     await invoiceApi.getConfig()
     await invoiceApi.listProfiles()
@@ -87,6 +89,7 @@ describe('HTTP InvoiceApi adapter', () => {
     await invoiceApi.listApplications({ page: 3, page_size: 10 })
     await invoiceApi.getApplication(7)
     await invoiceApi.cancelApplication(7)
+    await feeLedgerApi.list({ page: 4, page_size: 25 })
     assert.deepEqual(calls[3].body, {
       id: 4,
       expected_version: 9,
@@ -95,8 +98,11 @@ describe('HTTP InvoiceApi adapter', () => {
       is_default: true,
     })
     assert.deepEqual(calls[4].body, { id: 4, expected_version: 10 })
-    assert.equal(calls.at(-1)?.url, '/api/user/invoices/7/cancel')
-    assert.equal(calls.length, 10)
+    assert.equal(
+      calls.at(-1)?.url,
+      '/api/user/invoice/fee-ledger?page=4&page_size=25'
+    )
+    assert.equal(calls.length, 11)
     assert.equal('requestDocumentDownloadUrl' in invoiceApi, false)
     assert.equal('getDocumentDownloadUrl' in invoiceApi, false)
     for (const call of calls) {
@@ -323,6 +329,43 @@ describe('HTTP InvoiceApi adapter', () => {
       createHttpInvoiceApi(transport).getApplication(99),
       (error: unknown) =>
         error instanceof InvoiceApiError && error.code === 'INVOICE_NOT_FOUND'
+    )
+  })
+
+  test('preserves issuance conflicts from rejected response envelopes', async () => {
+    const transport: InvoiceHttpTransport = {
+      get: async () => {
+        throw new Error('unused')
+      },
+      post: async () => {
+        throw {
+          response: {
+            data: {
+              success: false,
+              message: 'duplicate invoice number',
+              data: { code: 'INVOICE_ISSUANCE_CONFLICT' },
+            },
+          },
+        }
+      },
+      put: async () => {
+        throw new Error('unused')
+      },
+      delete: async () => {
+        throw new Error('unused')
+      },
+    }
+
+    await assert.rejects(
+      createHttpInvoiceApi(transport).createApplication({
+        request_id: 'issuance-conflict',
+        profile_id: 1,
+        profile_version: 1,
+        topup_ids: [7],
+      }),
+      (error: unknown) =>
+        error instanceof InvoiceApiError &&
+        error.code === 'INVOICE_ISSUANCE_CONFLICT'
     )
   })
 

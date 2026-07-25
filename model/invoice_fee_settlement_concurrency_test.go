@@ -17,7 +17,7 @@ import (
 	"gorm.io/gorm"
 )
 
-func setupInvoiceFeeSettlementConcurrentSQLite(t *testing.T, quota int, feeQuota int64) (int, *InvoiceProfile) {
+func setupInvoiceFeeSettlementConcurrentSQLite(t *testing.T, quota int, feePercent int64) (int, *InvoiceProfile) {
 	t.Helper()
 	previousDB, previousLogDB := DB, LOG_DB
 	previousMainType, previousLogType := common.MainDatabaseType(), common.LogDatabaseType()
@@ -41,12 +41,17 @@ func setupInvoiceFeeSettlementConcurrentSQLite(t *testing.T, quota int, feeQuota
 		_ = sqlDB.Close()
 	})
 
-	previousSetting := *operation_setting.GetInvoiceSetting()
-	*operation_setting.GetInvoiceSetting() = operation_setting.InvoiceSetting{
+	previousSetting := operation_setting.GetInvoiceSetting()
+	previousQuotaPerUnit := common.QuotaPerUnit
+	common.QuotaPerUnit = 100
+	operation_setting.PublishInvoiceSetting(operation_setting.InvoiceSetting{
 		PersonalEnabled: true, CompanyEnabled: true, ApplicationWindowDays: 30,
-		MinimumAmountMinor: 1, FeeQuota: feeQuota, PDFRetentionDays: 30,
-	}
-	t.Cleanup(func() { *operation_setting.GetInvoiceSetting() = previousSetting })
+		MinimumAmountMinor: 1, FeePercent: int(feePercent), PDFRetentionDays: 30,
+	})
+	t.Cleanup(func() {
+		operation_setting.PublishInvoiceSetting(previousSetting)
+		common.QuotaPerUnit = previousQuotaPerUnit
+	})
 
 	user := User{Username: "invoice-fee-concurrent", Password: "password", Quota: quota}
 	require.NoError(t, DB.Create(&user).Error)

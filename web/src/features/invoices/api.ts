@@ -30,6 +30,8 @@ import type {
   InvoiceApplicationSummary,
   InvoiceConfig,
   InvoiceErrorCode,
+  InvoiceFeeLedgerApi,
+  InvoiceFeeLedgerPage,
   InvoiceApi,
   InvoicePage,
   InvoicePageRequest,
@@ -108,6 +110,8 @@ const invoiceErrorCodes = new Set<InvoiceErrorCode>([
   'INVOICE_TOPUP_INELIGIBLE',
   'INVOICE_PAYMENT_EVIDENCE_CONFLICT',
   'INVOICE_DOCUMENT_UNAVAILABLE',
+  'INVOICE_STORAGE_NOT_CONFIGURED',
+  'INVOICE_ISSUANCE_CONFLICT',
   'INVOICE_INTERNAL_ERROR',
 ])
 
@@ -302,6 +306,22 @@ export function createHttpInvoiceApi(
         transport.post(
           `/api/user/invoices/${applicationId}/cancel`,
           undefined,
+          INVOICE_REQUEST_CONFIG
+        )
+      )
+    },
+  }
+}
+
+/** Creates the owner-scoped invoice-fee history adapter. */
+export function createHttpInvoiceFeeLedgerApi(
+  transport: InvoiceHttpTransport
+): InvoiceFeeLedgerApi {
+  return {
+    async list(request: InvoicePageRequest) {
+      return invoiceRequest<InvoiceFeeLedgerPage>(
+        transport.get(
+          pageUrl('/api/user/invoice/fee-ledger', request),
           INVOICE_REQUEST_CONFIG
         )
       )

@@ -33,6 +33,7 @@ import type {
   InvoiceSettingsApi,
   RejectInvoiceApplicationRequest,
   ReviewInvoiceApplicationRequest,
+  UpdateInvoiceSettingRequest,
 } from '../invoices/types'
 
 function pageUrl(path: string, request: InvoicePageRequest): string {
@@ -110,7 +111,7 @@ export function createHttpInvoiceSettingsApi(
         transport.get('/api/option/invoice', INVOICE_REQUEST_CONFIG)
       )
     },
-    async updateSetting(setting: InvoiceSetting) {
+    async updateSetting(setting: UpdateInvoiceSettingRequest) {
       return invoiceRequest<InvoiceSetting>(
         transport.put('/api/option/invoice', setting, INVOICE_REQUEST_CONFIG)
       )

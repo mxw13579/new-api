@@ -18,9 +18,17 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { api } from '@/lib/api'
 
-import { createHttpInvoiceApi, type InvoiceHttpTransport } from './api'
+import {
+  createHttpInvoiceApi,
+  createHttpInvoiceFeeLedgerApi,
+  type InvoiceHttpTransport,
+} from './api'
+
+const invoiceTransport = api as unknown as InvoiceHttpTransport
 
 /** Production invoice API backed by the authenticated application client. */
-export const invoiceApi = createHttpInvoiceApi(
-  api as unknown as InvoiceHttpTransport
-)
+export const invoiceApi = createHttpInvoiceApi(invoiceTransport)
+
+/** Production owner-scoped invoice fee history API. */
+export const invoiceFeeLedgerApi =
+  createHttpInvoiceFeeLedgerApi(invoiceTransport)

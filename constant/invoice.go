@@ -73,12 +73,16 @@ const (
 	InvoiceCodeIdempotencyConflict = "INVOICE_IDEMPOTENCY_CONFLICT"
 	// InvoiceCodeStateConflict identifies an illegal or stale invoice lifecycle transition.
 	InvoiceCodeStateConflict = "INVOICE_STATE_CONFLICT"
+	// InvoiceCodeIssuanceConflict identifies conflicting immutable issuance facts.
+	InvoiceCodeIssuanceConflict = "INVOICE_ISSUANCE_CONFLICT"
 	// InvoiceCodeTopUpIneligible identifies an order that cannot be claimed for invoicing.
 	InvoiceCodeTopUpIneligible = "INVOICE_TOPUP_INELIGIBLE"
 	// InvoiceCodePaymentEvidenceConflict identifies immutable payment-evidence drift.
 	InvoiceCodePaymentEvidenceConflict = "INVOICE_PAYMENT_EVIDENCE_CONFLICT"
 	// InvoiceCodeDocumentUnavailable identifies a verified document lifecycle restriction.
 	InvoiceCodeDocumentUnavailable = "INVOICE_DOCUMENT_UNAVAILABLE"
+	// InvoiceCodeStorageNotConfigured identifies missing or invalid invoice PDF storage settings.
+	InvoiceCodeStorageNotConfigured = "INVOICE_STORAGE_NOT_CONFIGURED"
 	// InvoiceCodeInternalError identifies an unexpected invoice infrastructure failure.
 	InvoiceCodeInternalError = "INVOICE_INTERNAL_ERROR"
 
@@ -88,9 +92,11 @@ const (
 	InvoicePaymentEvidenceTaskType              = "invoice_payment_evidence_apply"
 	InvoicePaymentEvidenceSourceTrustedCallback = "trusted_callback_v1"
 	InvoicePaymentEvidenceSourceLegacyBackfill  = "legacy_backfill_v1"
-	InvoicePaymentEvidenceCurrencyCNY           = "CNY"
-	InvoicePaymentStateSucceeded                = "succeeded"
-	InvoicePaymentEvidenceTopUpProduct          = "平台额度充值"
+	// InvoicePaymentEvidenceSourceAdminManualCompletion identifies administrator-confirmed payment evidence.
+	InvoicePaymentEvidenceSourceAdminManualCompletion = "admin_manual_completion_v1"
+	InvoicePaymentEvidenceCurrencyCNY                 = "CNY"
+	InvoicePaymentStateSucceeded                      = "succeeded"
+	InvoicePaymentEvidenceTopUpProduct                = "平台额度充值"
 
 	InvoicePaymentEvidenceCodeInvalidRequest   = "INVALID_REQUEST"
 	InvoicePaymentEvidenceCodeRunNotFound      = "RUN_NOT_FOUND"

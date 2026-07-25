@@ -15,7 +15,7 @@ var (
 	// ErrInvoiceDocumentUnavailable indicates that lifecycle, retention, or immutable object state forbids a download.
 	ErrInvoiceDocumentUnavailable = errors.New("invoice document unavailable")
 	invoiceDownloadNow            = time.Now
-	newInvoiceDownloadStore       = func() (InvoiceObjectStore, error) { return NewInvoiceR2StoreFromEnvironment() }
+	newInvoiceDownloadStore       = func() (InvoiceObjectStore, error) { return NewInvoiceR2StoreFromSetting() }
 )
 
 func invoiceDocumentDownloadEligible(application *model.InvoiceApplication, document *model.InvoiceDocument, now time.Time) error {

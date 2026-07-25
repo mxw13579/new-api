@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
@@ -133,31 +134,30 @@ func TestInvoiceR2AuthorityIDRequiresExactLowercaseHex(t *testing.T) {
 	}
 }
 
-func TestInvoiceR2StoreFromEnvironmentDerivesAuthorityFromCloudflareAccount(t *testing.T) {
+func TestInvoiceR2StoreFromSettingDerivesAuthorityFromCloudflareAccount(t *testing.T) {
 	lowerAccount := "0123456789abcdef0123456789abcdef"
 	upperAccount := strings.ToUpper(lowerAccount)
 	expectedDigest := sha256.Sum256([]byte("cloudflare-r2:" + lowerAccount))
 	expectedAuthority := hex.EncodeToString(expectedDigest[:])
 
-	setInvoiceR2Environment(t, "https://"+upperAccount+".r2.cloudflarestorage.com:443/", "first-access", "first-secret")
-	t.Setenv("INVOICE_R2_AUTHORITY_ID", "ignored-invalid-manual-authority")
-	first, err := NewInvoiceR2StoreFromEnvironment()
+	setInvoiceR2Setting(t, "https://"+upperAccount+".r2.cloudflarestorage.com:443/", "first-access", "first-secret")
+	first, err := NewInvoiceR2StoreFromSetting()
 	require.NoError(t, err)
 	assert.Equal(t, expectedAuthority, first.AuthorityID())
 
-	setInvoiceR2Environment(t, "https://"+lowerAccount+".r2.cloudflarestorage.com", "rotated-access", "rotated-secret")
-	rotated, err := NewInvoiceR2StoreFromEnvironment()
+	setInvoiceR2Setting(t, "https://"+lowerAccount+".r2.cloudflarestorage.com", "rotated-access", "rotated-secret")
+	rotated, err := NewInvoiceR2StoreFromSetting()
 	require.NoError(t, err)
 	assert.Equal(t, first.AuthorityID(), rotated.AuthorityID())
 
 	otherAccount := "1123456789abcdef0123456789abcdef"
-	setInvoiceR2Environment(t, "https://"+otherAccount+".r2.cloudflarestorage.com", "rotated-access", "rotated-secret")
-	other, err := NewInvoiceR2StoreFromEnvironment()
+	setInvoiceR2Setting(t, "https://"+otherAccount+".r2.cloudflarestorage.com", "rotated-access", "rotated-secret")
+	other, err := NewInvoiceR2StoreFromSetting()
 	require.NoError(t, err)
 	assert.NotEqual(t, first.AuthorityID(), other.AuthorityID())
 }
 
-func TestInvoiceR2StoreFromEnvironmentRejectsNonstandardEndpoints(t *testing.T) {
+func TestInvoiceR2StoreFromSettingRejectsNonstandardEndpoints(t *testing.T) {
 	account := "0123456789abcdef0123456789abcdef"
 	tests := []struct {
 		name     string
@@ -176,9 +176,9 @@ func TestInvoiceR2StoreFromEnvironmentRejectsNonstandardEndpoints(t *testing.T) 
 	}
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {
-			setInvoiceR2Environment(t, testCase.endpoint, "test-access", "test-secret")
-			store, err := NewInvoiceR2StoreFromEnvironment()
-			assert.ErrorIs(t, err, ErrInvoiceObjectTerminal)
+			setInvoiceR2Setting(t, testCase.endpoint, "test-access", "test-secret")
+			store, err := NewInvoiceR2StoreFromSetting()
+			assert.ErrorIs(t, err, ErrInvoiceR2NotConfigured)
 			assert.Nil(t, store)
 		})
 	}
@@ -231,10 +231,12 @@ func TestInvoiceR2AdapterClassifiesProviderErrors(t *testing.T) {
 func int64Pointer(value int64) *int64    { return &value }
 func stringPointer(value string) *string { return &value }
 
-func setInvoiceR2Environment(t *testing.T, endpoint, accessKeyID, secretAccessKey string) {
+func setInvoiceR2Setting(t *testing.T, endpoint, accessKeyID, secretAccessKey string) {
 	t.Helper()
-	t.Setenv("INVOICE_R2_ENDPOINT", endpoint)
-	t.Setenv("INVOICE_R2_BUCKET", "private-invoices")
-	t.Setenv("INVOICE_R2_ACCESS_KEY_ID", accessKeyID)
-	t.Setenv("INVOICE_R2_SECRET_ACCESS_KEY", secretAccessKey)
+	previous := operation_setting.GetInvoiceSetting()
+	operation_setting.PublishInvoiceSetting(operation_setting.InvoiceSetting{
+		ApplicationWindowDays: 30, PDFRetentionDays: 30,
+		R2Endpoint: endpoint, R2Bucket: "private-invoices", R2AccessKeyID: accessKeyID, R2Secret: secretAccessKey,
+	})
+	t.Cleanup(func() { operation_setting.PublishInvoiceSetting(previous) })
 }

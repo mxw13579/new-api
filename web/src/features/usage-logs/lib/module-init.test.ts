@@ -34,5 +34,13 @@ describe('usage-log module initialization', () => {
     ])
     assert.equal(typeof apiModule.getUserLogs, 'function')
     assert.equal(typeof utilsModule.fetchLogsByCategory, 'function')
+
+    const sectionModule = await import('../section-registry')
+    assert.deepEqual(sectionModule.USAGE_LOGS_SECTION_IDS, [
+      'common',
+      'invoice-fees',
+      'drawing',
+      'task',
+    ])
   })
 })

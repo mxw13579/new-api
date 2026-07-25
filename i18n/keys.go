@@ -28,6 +28,13 @@ const (
 	MsgBatchTooMany      = "common.batch_too_many"
 )
 
+const (
+	// MsgInvoiceStorageNotConfigured identifies the localized missing-storage message.
+	MsgInvoiceStorageNotConfigured = "invoice.storage_not_configured"
+	// MsgInvoiceIssuanceConflict identifies conflicting immutable issuance facts.
+	MsgInvoiceIssuanceConflict = "invoice.issuance_conflict"
+)
+
 // Auth middleware messages
 const (
 	MsgAuthNotLoggedIn           = "auth.not_logged_in"

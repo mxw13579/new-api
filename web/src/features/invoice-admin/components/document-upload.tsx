@@ -20,6 +20,7 @@ import dayjs from 'dayjs'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import {
@@ -41,6 +42,7 @@ import {
 } from '@/components/ui/select'
 import { Spinner } from '@/components/ui/spinner'
 
+import { formatInvoiceAmount } from '../../invoices/contract'
 import { buildInvoiceDocumentFormData } from '../contract'
 import type { InvoiceApplicationDetail } from '../types'
 
@@ -56,6 +58,7 @@ interface DocumentUploadProps {
 export function DocumentUpload(props: DocumentUploadProps) {
   const { t } = useTranslation()
   const replacement = props.application.status === 'issued'
+  const approveAndIssue = props.application.status === 'reviewing'
   const issuance = props.application.issuance
   const [file, setFile] = useState<File | null>(null)
   const [invoiceNumber, setInvoiceNumber] = useState(
@@ -63,15 +66,22 @@ export function DocumentUpload(props: DocumentUploadProps) {
   )
   const [invoiceCode, setInvoiceCode] = useState(issuance?.invoice_code ?? '')
   const [invoiceDate, setInvoiceDate] = useState(
-    issuance ? dayjs.unix(issuance.invoice_date).format('YYYY-MM-DD') : ''
-  )
-  const [faceAmountMinor, setFaceAmountMinor] = useState(
     issuance
-      ? String(issuance.face_amount_minor)
-      : String(props.application.amount_minor)
+      ? dayjs.unix(issuance.invoice_date).format('YYYY-MM-DD')
+      : dayjs().format('YYYY-MM-DD')
   )
+  const faceAmountMinor =
+    issuance?.face_amount_minor ?? props.application.amount_minor
   const [attested, setAttested] = useState(false)
   const [errorKey, setErrorKey] = useState<string | null>(null)
+  const fileInvalid =
+    errorKey === 'Select a non-empty invoice PDF' ||
+    errorKey === 'Invoice PDF must be at most 10 MiB'
+  const attestationInvalid =
+    errorKey === 'Confirm that the PDF facts are correct'
+  let submitLabel = t('Upload PDF')
+  if (replacement) submitLabel = t('Replace PDF')
+  else if (approveAndIssue) submitLabel = t('Approve and issue invoice')
 
   function submit(event: React.FormEvent<HTMLFormElement>): void {
     event.preventDefault()
@@ -83,7 +93,7 @@ export function DocumentUpload(props: DocumentUploadProps) {
       invoice_number: invoiceNumber,
       invoice_code: invoiceCode,
       invoice_date: invoiceDateSeconds,
-      face_amount_minor: Number(faceAmountMinor),
+      face_amount_minor: faceAmountMinor,
       currency: 'CNY',
       pdf_facts_attested: attested,
     })
@@ -110,7 +120,7 @@ export function DocumentUpload(props: DocumentUploadProps) {
         </FieldDescription>
         <FieldGroup>
           <Field
-            data-invalid={errorKey ? true : undefined}
+            data-invalid={fileInvalid || undefined}
             data-disabled={props.pending || undefined}
           >
             <FieldLabel htmlFor='invoice-pdf-file'>
@@ -121,9 +131,9 @@ export function DocumentUpload(props: DocumentUploadProps) {
               type='file'
               accept='application/pdf,.pdf'
               disabled={props.pending}
-              aria-invalid={errorKey ? true : undefined}
+              aria-invalid={fileInvalid || undefined}
               aria-describedby={
-                errorKey ? 'invoice-upload-error' : 'invoice-pdf-help'
+                fileInvalid ? 'invoice-upload-error' : 'invoice-pdf-help'
               }
               onChange={(event) => setFile(event.target.files?.[0] ?? null)}
             />
@@ -167,18 +177,14 @@ export function DocumentUpload(props: DocumentUploadProps) {
                 onChange={(event) => setInvoiceDate(event.target.value)}
               />
             </Field>
-            <Field data-disabled={replacement || props.pending || undefined}>
+            <Field data-disabled>
               <FieldLabel htmlFor='invoice-face-amount'>
-                {t('Face amount in minor units')}
+                {t('Invoice amount')}
               </FieldLabel>
               <Input
                 id='invoice-face-amount'
-                type='number'
-                min={1}
-                step={1}
-                value={faceAmountMinor}
-                disabled={replacement || props.pending}
-                onChange={(event) => setFaceAmountMinor(event.target.value)}
+                value={formatInvoiceAmount(faceAmountMinor)}
+                disabled
               />
             </Field>
             <Field data-disabled>
@@ -200,15 +206,17 @@ export function DocumentUpload(props: DocumentUploadProps) {
 
           <Field
             orientation='horizontal'
-            data-invalid={errorKey ? true : undefined}
+            data-invalid={attestationInvalid || undefined}
             data-disabled={props.pending || undefined}
           >
             <Checkbox
               id='invoice-pdf-attestation'
               checked={attested}
               disabled={props.pending}
-              aria-invalid={errorKey ? true : undefined}
-              aria-describedby={errorKey ? 'invoice-upload-error' : undefined}
+              aria-invalid={attestationInvalid || undefined}
+              aria-describedby={
+                attestationInvalid ? 'invoice-upload-error' : undefined
+              }
               onCheckedChange={(checked) => setAttested(checked === true)}
             />
             <FieldLabel
@@ -220,14 +228,14 @@ export function DocumentUpload(props: DocumentUploadProps) {
           </Field>
 
           {errorKey ? (
-            <FieldDescription id='invoice-upload-error' role='alert'>
-              {t(errorKey)}
-            </FieldDescription>
+            <Alert id='invoice-upload-error' variant='destructive' role='alert'>
+              <AlertDescription>{t(errorKey)}</AlertDescription>
+            </Alert>
           ) : null}
 
           <Button type='submit' disabled={props.pending}>
             {props.pending ? <Spinner data-icon='inline-start' /> : null}
-            {replacement ? t('Replace PDF') : t('Upload PDF')}
+            {submitLabel}
           </Button>
         </FieldGroup>
       </FieldSet>

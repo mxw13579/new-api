@@ -24,6 +24,7 @@ import { SectionPageLayout } from '@/components/layout'
 import type { NavGroup } from '@/components/layout/types'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { CacheStatsDialog } from '@/features/system-settings/general/channel-affinity/cache-stats-dialog'
+import { InvoiceFeeHistoryPanel } from '@/features/wallet/components/dialogs/invoice-fee-history-panel'
 import { useSidebarConfig } from '@/hooks/use-sidebar-config'
 
 import { UserInfoDialog } from './components/dialogs/user-info-dialog'
@@ -41,11 +42,15 @@ import {
 } from './section-registry'
 
 const route = getRouteApi('/_authenticated/usage-logs/$section')
+const COMMON_LOG_SECTIONS = ['common', 'invoice-fees'] as const
 const TASK_LOG_SECTIONS = ['drawing', 'task'] as const
 
 const SECTION_META: Record<UsageLogsSectionId, { titleKey: string }> = {
   common: {
     titleKey: 'Common Logs',
+  },
+  'invoice-fees': {
+    titleKey: 'Invoice fees',
   },
   drawing: {
     titleKey: 'Drawing Logs',
@@ -117,10 +122,11 @@ function UsageLogsContent() {
     [setViewScope]
   )
 
-  const pageMeta =
-    activeCategory === 'common' ? SECTION_META.common : SECTION_META.task
-  const showTaskSwitcher =
-    activeCategory !== 'common' && visibleSections.length > 1
+  const pageMeta = SECTION_META[activeCategory]
+  const showCommonSwitcher = COMMON_LOG_SECTIONS.some(
+    (section) => section === activeCategory
+  )
+  const showTaskSwitcher = !showCommonSwitcher && visibleSections.length > 1
 
   return (
     <>
@@ -128,7 +134,7 @@ function UsageLogsContent() {
         <SectionPageLayout.Title>
           {t(pageMeta.titleKey)}
         </SectionPageLayout.Title>
-        {canManageScope && (
+        {canManageScope && activeCategory !== 'invoice-fees' && (
           <SectionPageLayout.Actions>
             <Tabs value={viewScope} onValueChange={handleViewScopeChange}>
               <TabsList>
@@ -140,6 +146,17 @@ function UsageLogsContent() {
         )}
         <SectionPageLayout.Content>
           <div className='flex h-full min-h-0 flex-col gap-4'>
+            {showCommonSwitcher && (
+              <Tabs value={activeCategory} onValueChange={handleSectionChange}>
+                <TabsList>
+                  {COMMON_LOG_SECTIONS.map((section) => (
+                    <TabsTrigger key={section} value={section}>
+                      {t(SECTION_META[section].titleKey)}
+                    </TabsTrigger>
+                  ))}
+                </TabsList>
+              </Tabs>
+            )}
             {showTaskSwitcher && (
               <Tabs value={activeCategory} onValueChange={handleSectionChange}>
                 <TabsList className='max-w-full flex-wrap justify-start group-data-horizontal/tabs:h-auto'>
@@ -152,7 +169,11 @@ function UsageLogsContent() {
               </Tabs>
             )}
             <div className='min-h-0 flex-1'>
-              <UsageLogsTable logCategory={activeCategory} />
+              {activeCategory === 'invoice-fees' ? (
+                <InvoiceFeeHistoryPanel enabled paginationInFooter />
+              ) : (
+                <UsageLogsTable logCategory={activeCategory} />
+              )}
             </div>
           </div>
         </SectionPageLayout.Content>

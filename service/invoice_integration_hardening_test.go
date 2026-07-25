@@ -47,12 +47,17 @@ func TestInvoiceIntegrationHardeningPostgreSQLRestore(t *testing.T) {
 
 func runInvoiceIntegrationHardeningScenario(t *testing.T, harness invoiceRestoreHarness) {
 	t.Helper()
-	previousSetting := *operation_setting.GetInvoiceSetting()
-	*operation_setting.GetInvoiceSetting() = operation_setting.InvoiceSetting{
+	previousSetting := operation_setting.GetInvoiceSetting()
+	previousQuotaPerUnit := common.QuotaPerUnit
+	common.QuotaPerUnit = 8
+	operation_setting.PublishInvoiceSetting(operation_setting.InvoiceSetting{
 		PersonalEnabled: true, CompanyEnabled: true, ApplicationWindowDays: 30,
-		MinimumAmountMinor: 1, FeeQuota: 10, PDFRetentionDays: 30,
-	}
-	t.Cleanup(func() { *operation_setting.GetInvoiceSetting() = previousSetting })
+		MinimumAmountMinor: 1, FeePercent: 10, PDFRetentionDays: 30,
+	})
+	t.Cleanup(func() {
+		operation_setting.PublishInvoiceSetting(previousSetting)
+		common.QuotaPerUnit = previousQuotaPerUnit
+	})
 
 	store := newInvoiceIntegrationStore()
 	ids := seedInvoiceIntegrationScenario(t, harness.db, store)

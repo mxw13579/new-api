@@ -51,6 +51,7 @@ export type ReviewAction = 'reviewing' | 'approve' | 'reject' | null
 interface ReviewActionsProps {
   application: InvoiceApplicationDetail
   pendingAction: ReviewAction
+  showStandaloneApprove: boolean
   onReview: (action: 'reviewing' | 'approve') => void
   onReject: (reason: string) => Promise<void>
 }
@@ -98,7 +99,7 @@ export function ReviewActions(props: ReviewActionsProps) {
               {t('Start review')}
             </Button>
           ) : null}
-          {actions.includes('approve') ? (
+          {actions.includes('approve') && props.showStandaloneApprove ? (
             <Button
               disabled={pending}
               onClick={() => props.onReview('approve')}

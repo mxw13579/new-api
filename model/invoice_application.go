@@ -14,6 +14,7 @@ import (
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/google/uuid"
+	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
 )
 
@@ -193,28 +194,19 @@ func CreateInvoiceApplication(userID int, request dto.CreateInvoiceApplicationRe
 		return nil, err
 	}
 
-	setting := *operation_setting.GetInvoiceSetting()
+	setting := operation_setting.GetInvoiceSetting()
 	if err := setting.Validate(); err != nil {
 		return nil, err
+	}
+	if setting.FeePercentMigrationRequired {
+		return nil, ErrInvoiceStateConflict
 	}
 	if (profile.Type == constant.InvoiceTypePersonal && !setting.PersonalEnabled) ||
 		(profile.Type == constant.InvoiceTypeCompany && !setting.CompanyEnabled) {
 		return nil, ErrInvoiceStateConflict
 	}
-	feeQuota := int(setting.FeeQuota)
-	feeStatus := constant.InvoiceFeeStatusNotRequired
-	if feeQuota > 0 {
-		feeStatus = constant.InvoiceFeeStatusPaid
-	}
 	profileJSON, err := common.Marshal(dto.InvoiceProfileSnapshot{
 		Type: profile.Type, Title: profile.Title, TaxNumber: profile.TaxNumber, Version: profile.Version,
-	})
-	if err != nil {
-		return nil, err
-	}
-	policyJSON, err := common.Marshal(dto.InvoicePolicySnapshot{
-		ApplicationWindowDays: setting.ApplicationWindowDays, MinimumAmountMinor: setting.MinimumAmountMinor,
-		FeeQuota: setting.FeeQuota, PDFRetentionDays: setting.PDFRetentionDays,
 	})
 	if err != nil {
 		return nil, err
@@ -226,9 +218,10 @@ func CreateInvoiceApplication(userID int, request dto.CreateInvoiceApplicationRe
 		ApplicationNo: "INV-" + uuid.NewString(), UserID: userID, RequestID: request.RequestID,
 		RequestFingerprint: fingerprint, Type: profile.Type, Status: constant.InvoiceApplicationStatusSubmitted,
 		PaymentReviewStatus: constant.InvoicePaymentReviewStatusNone, Currency: constant.InvoiceCurrencyCNY,
-		FeeQuota: feeQuota, FeeMethod: InvoiceFeeMethodWalletQuota, FeeStatus: feeStatus,
-		ProfileSnapshot: string(profileJSON), PolicySnapshot: string(policyJSON), SubmittedAt: time.Now().Unix(),
+		FeeMethod: InvoiceFeeMethodWalletQuota, FeeStatus: constant.InvoiceFeeStatusNotRequired,
+		ProfileSnapshot: string(profileJSON), PolicySnapshot: "{}", SubmittedAt: time.Now().Unix(),
 	}
+	feeQuota := 0
 
 	err = runInvoiceTransaction(func(tx *gorm.DB) error {
 		if err := tx.Create(application).Error; err != nil {
@@ -284,10 +277,38 @@ func CreateInvoiceApplication(userID int, request dto.CreateInvoiceApplicationRe
 		if amountMinor < setting.MinimumAmountMinor {
 			return ErrInvoiceTopUpIneligible
 		}
+		if setting.FeePercent > 0 {
+			if common.QuotaPerUnit <= 0 || math.IsNaN(common.QuotaPerUnit) || math.IsInf(common.QuotaPerUnit, 0) {
+				return ErrInvoiceStateConflict
+			}
+			feeValue := decimal.NewFromInt(amountMinor).
+				Mul(decimal.NewFromInt(int64(setting.FeePercent))).
+				Mul(decimal.NewFromFloat(common.QuotaPerUnit)).
+				Div(decimal.NewFromInt(10_000))
+			var clamp *common.QuotaClamp
+			feeQuota, clamp = common.QuotaFromDecimalChecked(feeValue)
+			if clamp != nil || feeQuota < 0 {
+				return ErrInvoiceStateConflict
+			}
+		}
+		feeStatus := constant.InvoiceFeeStatusNotRequired
+		if feeQuota > 0 {
+			feeStatus = constant.InvoiceFeeStatusPaid
+		}
+		policyJSON, err := common.Marshal(dto.InvoicePolicySnapshot{
+			ApplicationWindowDays: setting.ApplicationWindowDays, MinimumAmountMinor: setting.MinimumAmountMinor,
+			FeePercent: setting.FeePercent, FeeQuota: int64(feeQuota), PDFRetentionDays: setting.PDFRetentionDays,
+		})
+		if err != nil {
+			return err
+		}
 		if err := tx.Create(&items).Error; err != nil {
 			return err
 		}
 		application.AmountMinor = amountMinor
+		application.FeeQuota = feeQuota
+		application.FeeStatus = feeStatus
+		application.PolicySnapshot = string(policyJSON)
 
 		if feeQuota > 0 {
 			var user User

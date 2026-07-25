@@ -23,6 +23,7 @@ type invoiceRoute struct {
 
 var invoiceUserRoutes = []invoiceRoute{
 	{http.MethodGet, "/invoice/config", "GetInvoiceConfig", controller.GetInvoiceConfig, nil, true},
+	{http.MethodGet, "/invoice/fee-ledger", "ListInvoiceFeeHistory", controller.ListInvoiceFeeHistory, nil, true},
 	{http.MethodGet, "/invoice/profiles", "ListInvoiceProfiles", controller.ListInvoiceProfiles, nil, true},
 	{http.MethodPost, "/invoice/profiles", "CreateInvoiceProfile", controller.CreateInvoiceProfile, nil, true},
 	{http.MethodPut, "/invoice/profiles", "UpdateInvoiceProfile", controller.UpdateInvoiceProfile, nil, true},

@@ -13,18 +13,21 @@ import (
 	"gorm.io/gorm"
 )
 
-var newInvoiceUploadStore = func() (InvoiceObjectStore, error) { return NewInvoiceR2StoreFromEnvironment() }
+var newInvoiceUploadStore = func(setting operation_setting.InvoiceSetting) (InvoiceObjectStore, error) {
+	return newInvoiceR2StoreFromSetting(setting)
+}
 
 // UploadInvoiceDocument validates and promotes an administrator-attested PDF for initial issuance or replacement.
 func UploadInvoiceDocument(ctx context.Context, actorID int, applicationID int64, request dto.InvoiceDocumentUploadRequest, reader io.Reader) error {
 	if actorID <= 0 || applicationID <= 0 || reader == nil || !validInvoiceDocumentUploadRequest(request) {
 		return model.ErrInvoiceDocumentConflict
 	}
-	store, err := newInvoiceUploadStore()
+	setting := operation_setting.GetInvoiceSetting()
+	store, err := newInvoiceUploadStore(setting)
 	if err != nil {
 		return err
 	}
-	return uploadInvoiceDocument(ctx, model.DB, store, store.Bucket(), operation_setting.GetInvoiceSetting().PDFRetentionDays,
+	return uploadInvoiceDocument(ctx, model.DB, store, store.Bucket(), setting.PDFRetentionDays,
 		actorID, applicationID, request, reader, time.Now().Unix())
 }
 

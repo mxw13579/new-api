@@ -113,6 +113,10 @@ const ERROR_MESSAGE_KEYS: Record<InvoiceErrorCode, string> = {
   INVOICE_PAYMENT_EVIDENCE_CONFLICT:
     'Invoice error: payment evidence changed, refresh and try again',
   INVOICE_DOCUMENT_UNAVAILABLE: 'Invoice error: document unavailable',
+  INVOICE_STORAGE_NOT_CONFIGURED:
+    'Invoice PDF storage is not configured or invalid',
+  INVOICE_ISSUANCE_CONFLICT:
+    'Invoice error: invoice number or issuance facts conflict',
   INVOICE_INTERNAL_ERROR: 'Invoice error: service unavailable',
 }
 
@@ -129,6 +133,26 @@ export function getInvoiceErrorMessageKey(code: InvoiceErrorCode): string {
 /** Formats integer CNY minor units for invoice-domain presentation. */
 export function formatInvoiceAmount(minor: number): string {
   return INVOICE_CURRENCY_FORMATTER.format(minor / 100)
+}
+
+/** Calculates the wallet quota charged for a percentage-based invoice fee. */
+export function calculateInvoiceFeeQuota(
+  amountMinor: number,
+  feePercent: number,
+  quotaPerUnit: number
+): number {
+  if (
+    !Number.isSafeInteger(amountMinor) ||
+    amountMinor < 0 ||
+    !Number.isSafeInteger(feePercent) ||
+    feePercent < 0 ||
+    feePercent > 100 ||
+    !Number.isFinite(quotaPerUnit) ||
+    quotaPerUnit <= 0
+  ) {
+    return Number.POSITIVE_INFINITY
+  }
+  return Math.round((amountMinor * feePercent * quotaPerUnit) / 10_000)
 }
 
 /**

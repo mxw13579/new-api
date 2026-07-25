@@ -142,6 +142,10 @@ func UpdateOption(c *gin.Context) {
 		})
 		return
 	}
+	if strings.HasPrefix(option.Key, "invoice_setting.") {
+		common.ApiErrorMsg(c, "invoice settings must be updated through the dedicated invoice settings endpoint")
+		return
+	}
 	switch option.Value.(type) {
 	case bool:
 		option.Value = common.Interface2String(option.Value.(bool))

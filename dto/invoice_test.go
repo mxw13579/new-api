@@ -58,8 +58,8 @@ func TestPersonalInvoiceDTOJSONContract(t *testing.T) {
 
 	assertJSONContract(t, InvoiceConfig{
 		PersonalEnabled: true, CompanyEnabled: true, ApplicationWindowDays: 90,
-		MinimumAmountMinor: 100, FeeQuota: 20, PDFRetentionDays: 365, Currency: "CNY",
-	}, `{"personal_enabled":true,"company_enabled":true,"application_window_days":90,"minimum_amount_minor":100,"fee_quota":20,"pdf_retention_days":365,"currency":"CNY"}`)
+		MinimumAmountMinor: 100, FeePercent: 5, QuotaPerUnit: 500000, PDFRetentionDays: 365, Currency: "CNY",
+	}, `{"personal_enabled":true,"company_enabled":true,"application_window_days":90,"minimum_amount_minor":100,"fee_percent":5,"quota_per_unit":500000,"pdf_retention_days":365,"currency":"CNY"}`)
 
 	assertJSONContract(t, CreateInvoiceProfileRequest{Type: "company", Title: "Example Ltd", TaxNumber: "TAX", IsDefault: true},
 		`{"type":"company","title":"Example Ltd","tax_number":"TAX","is_default":true}`)

@@ -77,6 +77,24 @@ func TestUpdateOptionAllowsZeroRechargeRebateRatioWithoutPaymentCompliance(t *te
 	require.True(t, response.Success)
 }
 
+func TestRootUpdateOptionRejectsInvoiceSettingKeys(t *testing.T) {
+	setupOptionControllerTestDB(t)
+	previous := operation_setting.GetInvoiceSetting()
+	t.Cleanup(func() { operation_setting.PublishInvoiceSetting(previous) })
+
+	ctx, recorder := newAuthenticatedContext(t, http.MethodPut, "/api/option/", OptionUpdateRequest{
+		Key: "invoice_setting.fee_percent", Value: "5",
+	}, 1)
+	UpdateOption(ctx)
+
+	response := decodeAPIResponse(t, recorder)
+	require.False(t, response.Success)
+	var count int64
+	require.NoError(t, model.DB.Model(&model.Option{}).Where("key = ?", "invoice_setting.fee_percent").Count(&count).Error)
+	require.Zero(t, count)
+	require.Equal(t, previous, operation_setting.GetInvoiceSetting())
+}
+
 func setupOptionControllerTestDB(t *testing.T) {
 	t.Helper()
 	db := openTokenControllerTestDB(t)
