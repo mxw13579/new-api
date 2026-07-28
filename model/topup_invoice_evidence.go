@@ -3,6 +3,7 @@ package model
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"math"
 	"strconv"
 	"strings"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/logger"
 	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
 )
@@ -21,6 +23,7 @@ type VerifiedEpayCompletion struct {
 	Method           string
 	PaidAmountMinor  int64
 	AcceptedAt       int64
+	CallerIP         string
 }
 
 func NormalizeEpayProviderTradeIdentity(value string) (string, string, error) {
@@ -169,5 +172,6 @@ func CompleteVerifiedEpayWalletTopUp(completion VerifiedEpayCompletion) error {
 		return err
 	}
 	invalidateWalletTopUpQuotaCache(creditResult)
+	RecordTopupLog(creditResult.UserId, fmt.Sprintf("Epay wallet topup succeeded, quota: %v, paid amount: %.2f", logger.LogQuota(creditResult.QuotaToAdd), creditResult.Money), completion.CallerIP, creditResult.PaymentMethod, PaymentProviderEpay)
 	return nil
 }

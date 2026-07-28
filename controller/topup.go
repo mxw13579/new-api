@@ -313,6 +313,7 @@ func EpayNotify(c *gin.Context) {
 		return
 	}
 	completion, ok := verifiedEpayCompletion(c.Request)
+	completion.CallerIP = c.ClientIP()
 	if !ok || model.CompleteVerifiedEpayWalletTopUp(completion) != nil {
 		_, _ = c.Writer.Write([]byte("fail"))
 		return

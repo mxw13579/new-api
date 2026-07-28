@@ -249,4 +249,7 @@ func TestEpayNotifyVerifiedSuccessPersistsSignedProviderIdentity(t *testing.T) {
 	require.NotNil(t, topUp.PaymentProviderTradeKey)
 	require.NotNil(t, topUp.InvoiceEligible)
 	assert.True(t, *topUp.InvoiceEligible)
+	var logCount int64
+	require.NoError(t, db.Model(&model.Log{}).Where("user_id = ? AND type = ?", 902, model.LogTypeTopup).Count(&logCount).Error)
+	assert.Equal(t, int64(1), logCount)
 }

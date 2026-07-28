@@ -102,7 +102,7 @@ func TestCompleteVerifiedEpayWalletTopUpWritesTrustedEvidenceAtomically(t *testi
 	assert.Equal(t, 1000, user.Quota)
 	var logCount int64
 	require.NoError(t, DB.Model(&Log{}).Where("user_id = ? AND type = ?", 301, LogTypeTopup).Count(&logCount).Error)
-	assert.Zero(t, logCount)
+	assert.Equal(t, int64(1), logCount)
 }
 
 func TestCompleteVerifiedEpayWalletTopUpRejectsTamperAndProviderCollision(t *testing.T) {
@@ -242,6 +242,9 @@ func TestCompleteVerifiedEpayWalletTopUpDuplicateCompletionConflicts(t *testing.
 
 	require.NoError(t, CompleteVerifiedEpayWalletTopUp(completion))
 	require.Error(t, CompleteVerifiedEpayWalletTopUp(completion))
+	var logCount int64
+	require.NoError(t, DB.Model(&Log{}).Where("user_id = ? AND type = ?", 306, LogTypeTopup).Count(&logCount).Error)
+	assert.Equal(t, int64(1), logCount)
 }
 
 func TestVerifiedEpayCompletionRejectsMissingTopUp(t *testing.T) {
