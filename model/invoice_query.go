@@ -2,9 +2,48 @@ package model
 
 import (
 	"errors"
+	"sort"
 
 	"gorm.io/gorm"
 )
+
+// InvoiceUserIdentity contains the account identity exposed on administrator invoice projections.
+type InvoiceUserIdentity struct {
+	UserID      int
+	Username    string
+	DisplayName string
+}
+
+// ListInvoiceUserIdentities loads a bounded set of account identities in one query.
+func ListInvoiceUserIdentities(userIDs []int) (map[int]InvoiceUserIdentity, error) {
+	unique := make(map[int]struct{}, len(userIDs))
+	for _, userID := range userIDs {
+		if userID > 0 {
+			unique[userID] = struct{}{}
+		}
+	}
+	ids := make([]int, 0, len(unique))
+	for userID := range unique {
+		ids = append(ids, userID)
+	}
+	sort.Ints(ids)
+	if len(ids) == 0 {
+		return map[int]InvoiceUserIdentity{}, nil
+	}
+	var rows []struct {
+		ID          int
+		Username    string
+		DisplayName string
+	}
+	if err := DB.Model(&User{}).Select("id, username, display_name").Where("id IN ?", ids).Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	identities := make(map[int]InvoiceUserIdentity, len(rows))
+	for _, row := range rows {
+		identities[row.ID] = InvoiceUserIdentity{UserID: row.ID, Username: row.Username, DisplayName: row.DisplayName}
+	}
+	return identities, nil
+}
 
 // ListEligibleInvoiceTopUps returns unclaimed top-ups whose trusted payment evidence remains invoice eligible.
 func ListEligibleInvoiceTopUps(userID int, cutoff int64) ([]TopUp, error) {

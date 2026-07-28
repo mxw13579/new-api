@@ -75,25 +75,28 @@ type CreateInvoiceApplicationRequest struct {
 
 // InvoiceApplicationSummary exposes invoice, fee, payment-review, and document lifecycle state.
 type InvoiceApplicationSummary struct {
-	ID                  int64  `json:"id"`
-	ApplicationNo       string `json:"application_no"`
-	Type                string `json:"type"`
-	Status              string `json:"status"`
-	PaymentReviewStatus string `json:"payment_review_status"`
-	Currency            string `json:"currency"`
-	AmountMinor         int64  `json:"amount_minor"`
-	FeeQuota            int64  `json:"fee_quota"`
-	FeeStatus           string `json:"fee_status"`
-	SubmittedAt         int64  `json:"submitted_at"`
-	ReviewedAt          *int64 `json:"reviewed_at"`
-	CancelledAt         *int64 `json:"cancelled_at"`
-	IssuedAt            *int64 `json:"issued_at"`
-	RejectReason        string `json:"reject_reason"`
-	DocumentStatus      string `json:"document_status"`
-	DocumentExpiresAt   *int64 `json:"document_expires_at"`
-	DocumentDeletedAt   *int64 `json:"document_deleted_at"`
-	CanCancel           bool   `json:"can_cancel"`
-	CanDownload         bool   `json:"can_download"`
+	ID                  int64   `json:"id"`
+	UserID              *int    `json:"user_id,omitempty"`
+	Username            *string `json:"username,omitempty"`
+	DisplayName         *string `json:"display_name,omitempty"`
+	ApplicationNo       string  `json:"application_no"`
+	Type                string  `json:"type"`
+	Status              string  `json:"status"`
+	PaymentReviewStatus string  `json:"payment_review_status"`
+	Currency            string  `json:"currency"`
+	AmountMinor         int64   `json:"amount_minor"`
+	FeeQuota            int64   `json:"fee_quota"`
+	FeeStatus           string  `json:"fee_status"`
+	SubmittedAt         int64   `json:"submitted_at"`
+	ReviewedAt          *int64  `json:"reviewed_at"`
+	CancelledAt         *int64  `json:"cancelled_at"`
+	IssuedAt            *int64  `json:"issued_at"`
+	RejectReason        string  `json:"reject_reason"`
+	DocumentStatus      string  `json:"document_status"`
+	DocumentExpiresAt   *int64  `json:"document_expires_at"`
+	DocumentDeletedAt   *int64  `json:"document_deleted_at"`
+	CanCancel           bool    `json:"can_cancel"`
+	CanDownload         bool    `json:"can_download"`
 }
 
 // InvoiceApplicationPage is a paginated collection of invoice application summaries.
@@ -104,21 +107,24 @@ type InvoiceApplicationPage struct {
 	Total    int64                       `json:"total"`
 }
 
-// InvoiceFeeHistoryItem exposes one owner-visible fee balance transition.
+// InvoiceFeeHistoryItem exposes one fee balance transition with optional administrator-only owner identity.
 type InvoiceFeeHistoryItem struct {
-	ID            int64  `json:"id"`
-	ApplicationID int64  `json:"application_id"`
-	ApplicationNo string `json:"application_no"`
-	EntryType     string `json:"entry_type"`
-	FeePercent    int    `json:"fee_percent"`
-	Quota         int64  `json:"quota"`
-	BalanceBefore *int64 `json:"balance_before"`
-	BalanceAfter  *int64 `json:"balance_after"`
-	Status        string `json:"status"`
-	AppliedAt     *int64 `json:"applied_at"`
+	ID            int64   `json:"id"`
+	UserID        *int    `json:"user_id,omitempty"`
+	Username      *string `json:"username,omitempty"`
+	DisplayName   *string `json:"display_name,omitempty"`
+	ApplicationID int64   `json:"application_id"`
+	ApplicationNo string  `json:"application_no"`
+	EntryType     string  `json:"entry_type"`
+	FeePercent    int     `json:"fee_percent"`
+	Quota         int64   `json:"quota"`
+	BalanceBefore *int64  `json:"balance_before"`
+	BalanceAfter  *int64  `json:"balance_after"`
+	Status        string  `json:"status"`
+	AppliedAt     *int64  `json:"applied_at"`
 }
 
-// InvoiceFeeHistoryPage is a bounded owner-scoped ledger page.
+// InvoiceFeeHistoryPage is a bounded fee-ledger page.
 type InvoiceFeeHistoryPage struct {
 	Items    []InvoiceFeeHistoryItem `json:"items"`
 	Page     int                     `json:"page"`

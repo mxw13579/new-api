@@ -194,7 +194,7 @@ func ListInvoiceApplications(c *gin.Context) {
 		return
 	}
 	ownerID := c.GetInt("id")
-	result, err := service.ListInvoiceApplicationPage(&ownerID, page, pageSize)
+	result, err := service.ListInvoiceApplicationPage(&ownerID, page, pageSize, false)
 	if err != nil {
 		writeInvoiceError(c, err)
 		return
@@ -209,7 +209,23 @@ func ListInvoiceFeeHistory(c *gin.Context) {
 		writeInvoiceError(c, err)
 		return
 	}
-	result, err := service.ListInvoiceFeeHistory(c.GetInt("id"), page, pageSize)
+	ownerID := c.GetInt("id")
+	result, err := service.ListInvoiceFeeHistory(&ownerID, page, pageSize)
+	if err != nil {
+		writeInvoiceError(c, err)
+		return
+	}
+	writeInvoiceSuccess(c, http.StatusOK, result)
+}
+
+// AdminListInvoiceFeeHistory returns the global invoice-fee ledger for authorized reviewers.
+func AdminListInvoiceFeeHistory(c *gin.Context) {
+	page, pageSize, err := invoicePage(c)
+	if err != nil {
+		writeInvoiceError(c, err)
+		return
+	}
+	result, err := service.ListInvoiceFeeHistory(nil, page, pageSize)
 	if err != nil {
 		writeInvoiceError(c, err)
 		return
@@ -225,7 +241,7 @@ func GetInvoiceApplication(c *gin.Context) {
 		return
 	}
 	ownerID := c.GetInt("id")
-	detail, err := service.GetInvoiceApplicationDetail(id, &ownerID, true)
+	detail, err := service.GetInvoiceApplicationDetail(id, &ownerID, true, false)
 	if err != nil {
 		writeInvoiceError(c, err)
 		return
@@ -275,7 +291,7 @@ func AdminListInvoiceApplications(c *gin.Context) {
 		writeInvoiceError(c, err)
 		return
 	}
-	result, err := service.ListInvoiceApplicationPage(nil, page, pageSize)
+	result, err := service.ListInvoiceApplicationPage(nil, page, pageSize, true)
 	if err != nil {
 		writeInvoiceError(c, err)
 		return
@@ -291,7 +307,7 @@ func AdminGetInvoiceApplication(c *gin.Context) {
 		return
 	}
 	includeSensitive := authz.Can(c.GetInt("id"), c.GetInt("role"), authz.InvoiceSensitiveRead)
-	detail, err := service.GetInvoiceApplicationDetail(id, nil, includeSensitive)
+	detail, err := service.GetInvoiceApplicationDetail(id, nil, includeSensitive, true)
 	if err != nil {
 		writeInvoiceError(c, err)
 		return
@@ -317,7 +333,7 @@ func AdminReviewInvoiceApplication(c *gin.Context) {
 		return
 	}
 	includeSensitive := authz.Can(c.GetInt("id"), c.GetInt("role"), authz.InvoiceSensitiveRead)
-	detail, err := service.GetInvoiceApplicationDetail(application.ID, nil, includeSensitive)
+	detail, err := service.GetInvoiceApplicationDetail(application.ID, nil, includeSensitive, true)
 	if err != nil {
 		writeInvoiceError(c, err)
 		return
@@ -343,7 +359,7 @@ func AdminRejectInvoiceApplication(c *gin.Context) {
 		return
 	}
 	includeSensitive := authz.Can(c.GetInt("id"), c.GetInt("role"), authz.InvoiceSensitiveRead)
-	detail, err := service.GetInvoiceApplicationDetail(application.ID, nil, includeSensitive)
+	detail, err := service.GetInvoiceApplicationDetail(application.ID, nil, includeSensitive, true)
 	if err != nil {
 		writeInvoiceError(c, err)
 		return
@@ -414,7 +430,8 @@ func AdminUploadInvoiceDocument(c *gin.Context) {
 		return
 	}
 	includeSensitive := authz.Can(c.GetInt("id"), c.GetInt("role"), authz.InvoiceSensitiveRead)
-	detail, err := service.GetInvoiceApplicationDetail(id, nil, includeSensitive)
+	includeIdentity := authz.Can(c.GetInt("id"), c.GetInt("role"), authz.InvoiceReview)
+	detail, err := service.GetInvoiceApplicationDetail(id, nil, includeSensitive, includeIdentity)
 	if err != nil {
 		writeInvoiceError(c, err)
 		return

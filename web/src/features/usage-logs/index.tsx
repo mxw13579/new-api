@@ -23,9 +23,11 @@ import { useTranslation } from 'react-i18next'
 import { SectionPageLayout } from '@/components/layout'
 import type { NavGroup } from '@/components/layout/types'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { getInvoiceAdminCapabilities } from '@/features/invoice-admin/contract'
 import { CacheStatsDialog } from '@/features/system-settings/general/channel-affinity/cache-stats-dialog'
 import { InvoiceFeeHistoryPanel } from '@/features/wallet/components/dialogs/invoice-fee-history-panel'
 import { useSidebarConfig } from '@/hooks/use-sidebar-config'
+import { useAuthStore } from '@/stores/auth-store'
 
 import { UserInfoDialog } from './components/dialogs/user-info-dialog'
 import {
@@ -62,6 +64,8 @@ const SECTION_META: Record<UsageLogsSectionId, { titleKey: string }> = {
 
 function UsageLogsContent() {
   const { t } = useTranslation()
+  const user = useAuthStore((state) => state.auth.user)
+  const canReviewInvoices = getInvoiceAdminCapabilities(user).canReview
   const navigate = useNavigate()
   const params = route.useParams()
   const activeCategory: UsageLogsSectionId =
@@ -134,7 +138,8 @@ function UsageLogsContent() {
         <SectionPageLayout.Title>
           {t(pageMeta.titleKey)}
         </SectionPageLayout.Title>
-        {canManageScope && activeCategory !== 'invoice-fees' && (
+        {((activeCategory === 'invoice-fees' && canReviewInvoices) ||
+          (activeCategory !== 'invoice-fees' && canManageScope)) && (
           <SectionPageLayout.Actions>
             <Tabs value={viewScope} onValueChange={handleViewScopeChange}>
               <TabsList>
@@ -170,7 +175,11 @@ function UsageLogsContent() {
             )}
             <div className='min-h-0 flex-1'>
               {activeCategory === 'invoice-fees' ? (
-                <InvoiceFeeHistoryPanel enabled paginationInFooter />
+                <InvoiceFeeHistoryPanel
+                  enabled
+                  paginationInFooter
+                  scope={canReviewInvoices ? viewScope : 'self'}
+                />
               ) : (
                 <UsageLogsTable logCategory={activeCategory} />
               )}

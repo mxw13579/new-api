@@ -5,9 +5,9 @@ import (
 	"github.com/QuantumNous/new-api/model"
 )
 
-// ListInvoiceFeeHistory returns a bounded fee-ledger page for one authenticated owner.
-func ListInvoiceFeeHistory(userID, page, pageSize int) (dto.InvoiceFeeHistoryPage, error) {
-	records, total, err := model.ListInvoiceFeeHistory(userID, (page-1)*pageSize, pageSize)
+// ListInvoiceFeeHistory returns a bounded fee-ledger page, optionally restricted to one owner.
+func ListInvoiceFeeHistory(ownerID *int, page, pageSize int) (dto.InvoiceFeeHistoryPage, error) {
+	records, total, err := model.ListInvoiceFeeHistory(ownerID, (page-1)*pageSize, pageSize)
 	if err != nil {
 		return dto.InvoiceFeeHistoryPage{}, err
 	}
@@ -27,6 +27,11 @@ func ListInvoiceFeeHistory(userID, page, pageSize int) (dto.InvoiceFeeHistoryPag
 			EntryType: record.EntryType, FeePercent: record.FeePercent, Quota: int64(record.Quota),
 			BalanceBefore: before, BalanceAfter: after, Status: record.Status, AppliedAt: record.AppliedAt,
 		})
+		if ownerID == nil {
+			items[len(items)-1].UserID = &record.UserID
+			items[len(items)-1].Username = &record.Username
+			items[len(items)-1].DisplayName = &record.DisplayName
+		}
 	}
 	return dto.InvoiceFeeHistoryPage{Items: items, Page: page, PageSize: pageSize, Total: total}, nil
 }

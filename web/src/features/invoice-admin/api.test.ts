@@ -20,7 +20,11 @@ import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 
 import { InvoiceApiError, type InvoiceHttpTransport } from '../invoices/api'
-import { createHttpAdminInvoiceApi, createHttpInvoiceSettingsApi } from './api'
+import {
+  createHttpAdminInvoiceApi,
+  createHttpAdminInvoiceFeeLedgerApi,
+  createHttpInvoiceSettingsApi,
+} from './api'
 
 describe('admin invoice HTTP adapters', () => {
   test('use isolated endpoints and both skip flags on every request', async () => {
@@ -48,6 +52,7 @@ describe('admin invoice HTTP adapters', () => {
       },
     }
     const adminApi = createHttpAdminInvoiceApi(transport)
+    const adminFeeApi = createHttpAdminInvoiceFeeLedgerApi(transport)
     const settingsApi = createHttpInvoiceSettingsApi(transport)
     const document = new FormData()
     document.set(
@@ -66,6 +71,7 @@ describe('admin invoice HTTP adapters', () => {
       reason: 'Incorrect tax identity',
     })
     await adminApi.uploadDocument(17, document)
+    await adminFeeApi.list({ page: 2, page_size: 10 })
     await settingsApi.getSetting()
     await settingsApi.updateSetting({
       personal_enabled: true,
@@ -89,6 +95,10 @@ describe('admin invoice HTTP adapters', () => {
         { method: 'POST', url: '/api/admin/invoices/17/review' },
         { method: 'POST', url: '/api/admin/invoices/17/reject' },
         { method: 'POST', url: '/api/admin/invoices/17/document' },
+        {
+          method: 'GET',
+          url: '/api/admin/invoice/fee-ledger?page=2&page_size=10',
+        },
         { method: 'GET', url: '/api/option/invoice' },
         { method: 'PUT', url: '/api/option/invoice' },
       ]

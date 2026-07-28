@@ -1,9 +1,12 @@
 package controller
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -12,9 +15,11 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/service/authz"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
@@ -22,6 +27,68 @@ import (
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
+
+func TestAdminUploadInvoiceDocumentOmitsOwnerIdentityWithoutReviewPermission(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(
+		&model.User{}, &model.CasbinRule{}, &model.AuthzRole{}, &model.InvoiceApplication{},
+		&model.InvoiceItem{}, &model.InvoiceIssuance{}, &model.InvoiceDocument{},
+	))
+	previousDB := model.DB
+	model.DB = db
+	require.NoError(t, authz.Init(db))
+	t.Cleanup(func() { model.DB = previousDB })
+
+	owner := model.User{Username: "private-invoice-owner", DisplayName: "Private Owner", AffCode: "private-owner-aff"}
+	require.NoError(t, db.Create(&owner).Error)
+	application := model.InvoiceApplication{
+		ApplicationNo: "INV-UPLOAD-ONLY", UserID: owner.Id, RequestID: "request", RequestFingerprint: "fingerprint",
+		Type: constant.InvoiceTypePersonal, Status: constant.InvoiceApplicationStatusApproved,
+		PaymentReviewStatus: constant.InvoicePaymentReviewStatusNone, Currency: constant.InvoiceCurrencyCNY,
+		FeeStatus: constant.InvoiceFeeStatusNotRequired, ProfileSnapshot: `{}`, PolicySnapshot: `{}`, SubmittedAt: 1,
+	}
+	require.NoError(t, db.Create(&application).Error)
+	const actorID = 7001
+	require.NoError(t, db.Create(&model.User{Id: actorID, Username: "upload-only-admin", Role: common.RoleAdminUser, AffCode: "upload-only-aff"}).Error)
+	require.NoError(t, authz.SetUserPermissions(actorID, authz.PermissionsMap{
+		authz.ResourceInvoice: {authz.ActionInvoiceDocumentUpload: true, authz.ActionInvoiceReview: false},
+	}))
+
+	previousUpload := uploadInvoiceDocument
+	uploadInvoiceDocument = func(context.Context, int, int64, dto.InvoiceDocumentUploadRequest, io.Reader) error { return nil }
+	t.Cleanup(func() { uploadInvoiceDocument = previousUpload })
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	require.NoError(t, writer.WriteField("expected_status", constant.InvoiceApplicationStatusApproved))
+	require.NoError(t, writer.WriteField("invoice_number", "N-UPLOAD-ONLY"))
+	require.NoError(t, writer.WriteField("invoice_code", ""))
+	require.NoError(t, writer.WriteField("invoice_date", "100"))
+	require.NoError(t, writer.WriteField("face_amount_minor", "0"))
+	require.NoError(t, writer.WriteField("currency", constant.InvoiceCurrencyCNY))
+	require.NoError(t, writer.WriteField("pdf_facts_attested", "true"))
+	file, err := writer.CreateFormFile("file", "invoice.pdf")
+	require.NoError(t, err)
+	_, err = file.Write([]byte("%PDF-1.7\n%%EOF"))
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+
+	recorder := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(recorder)
+	context.Request = httptest.NewRequest(http.MethodPost, "/", &body)
+	context.Request.Header.Set("Content-Type", writer.FormDataContentType())
+	context.Params = gin.Params{{Key: "id", Value: strconv.FormatInt(application.ID, 10)}}
+	context.Set("id", actorID)
+	context.Set("role", common.RoleAdminUser)
+	AdminUploadInvoiceDocument(context)
+
+	assert.Equal(t, http.StatusOK, recorder.Code)
+	assert.NotContains(t, recorder.Body.String(), "user_id")
+	assert.NotContains(t, recorder.Body.String(), `"username"`)
+	assert.NotContains(t, recorder.Body.String(), "display_name")
+	assert.NotContains(t, recorder.Body.String(), "private-invoice-owner")
+	assert.NotContains(t, recorder.Body.String(), "Private Owner")
+}
 
 type invoiceControllerEnvelope struct {
 	Success bool   `json:"success"`

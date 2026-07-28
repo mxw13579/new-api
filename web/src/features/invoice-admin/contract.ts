@@ -46,6 +46,18 @@ export const MAX_INVOICE_PDF_BYTES = 10 * 1024 * 1024
 /** Localization key substituted for permission-protected invoice values. */
 export const PROTECTED_INVOICE_VALUE_KEY = 'Protected invoice value'
 
+/** Resolves the administrator-facing account label without hiding its immutable ID. */
+export function getInvoiceOwnerLabel(owner: {
+  user_id: number
+  username?: string
+  display_name?: string
+}): { name: string; userId: number } {
+  return {
+    name: owner.display_name?.trim() || owner.username?.trim() || '',
+    userId: owner.user_id,
+  }
+}
+
 /** Resolves each invoice administrator capability independently. */
 export function getInvoiceAdminCapabilities(
   user: AuthUser | null | undefined

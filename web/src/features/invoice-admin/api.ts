@@ -27,6 +27,8 @@ import type {
   AdminInvoiceApi,
   InvoiceApplicationDetail,
   InvoiceApplicationSummary,
+  InvoiceFeeLedgerApi,
+  InvoiceFeeLedgerPage,
   InvoicePage,
   InvoicePageRequest,
   InvoiceSetting,
@@ -42,6 +44,22 @@ function pageUrl(path: string, request: InvoicePageRequest): string {
     page_size: String(request.page_size),
   })
   return `${path}?${params.toString()}`
+}
+
+/** Creates the global invoice-fee ledger adapter for authorized reviewers. */
+export function createHttpAdminInvoiceFeeLedgerApi(
+  transport: InvoiceHttpTransport
+): InvoiceFeeLedgerApi {
+  return {
+    async list(request: InvoicePageRequest) {
+      return invoiceRequest<InvoiceFeeLedgerPage>(
+        transport.get(
+          pageUrl('/api/admin/invoice/fee-ledger', request),
+          INVOICE_REQUEST_CONFIG
+        )
+      )
+    },
+  }
 }
 
 /** Creates the independently cached administrator invoice adapter. */
@@ -123,6 +141,10 @@ const invoiceTransport = api as unknown as InvoiceHttpTransport
 
 /** Production administrator invoice API. */
 export const adminInvoiceApi = createHttpAdminInvoiceApi(invoiceTransport)
+
+/** Production global invoice-fee ledger API for authorized reviewers. */
+export const adminInvoiceFeeLedgerApi =
+  createHttpAdminInvoiceFeeLedgerApi(invoiceTransport)
 
 /** Production invoice policy settings API. */
 export const invoiceSettingsApi = createHttpInvoiceSettingsApi(invoiceTransport)

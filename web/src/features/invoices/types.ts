@@ -149,6 +149,9 @@ export interface CreateInvoiceApplicationRequest {
 /** Summarizes application, fee, payment-review, and document state. */
 export interface InvoiceApplicationSummary {
   id: number
+  user_id?: number
+  username?: string
+  display_name?: string
   application_no: string
   type: InvoiceType
   status: InvoiceApplicationStatus
@@ -268,9 +271,12 @@ export interface AdminInvoiceApi {
   ): Promise<InvoiceApplicationDetail>
 }
 
-/** One owner-visible invoice-fee balance transition. */
+/** One invoice-fee balance transition with optional administrator-only owner identity. */
 export interface InvoiceFeeLedgerEntry {
   id: number
+  user_id?: number
+  username?: string
+  display_name?: string
   application_id: number
   application_no: string
   entry_type: 'charge' | 'refund'
@@ -285,7 +291,7 @@ export interface InvoiceFeeLedgerEntry {
 /** Paginated owner-visible invoice-fee ledger response. */
 export type InvoiceFeeLedgerPage = InvoicePage<InvoiceFeeLedgerEntry>
 
-/** Defines the owner-scoped invoice-fee history API. */
+/** Defines a paginated invoice-fee history API. */
 export interface InvoiceFeeLedgerApi {
   list(request: InvoicePageRequest): Promise<InvoiceFeeLedgerPage>
 }

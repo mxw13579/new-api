@@ -26,6 +26,8 @@ import { StatusBadge } from '@/components/status-badge'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 
+import { adminInvoiceFeeLedgerApi } from '../../../invoice-admin/api'
+import { getInvoiceOwnerLabel } from '../../../invoice-admin/contract'
 import { invoiceFeeLedgerApi } from '../../../invoices/production-api'
 import type { InvoiceFeeLedgerEntry } from '../../../invoices/types'
 import { createInvoiceFeeEntryPresentation } from '../../lib/invoice-fee-history'
@@ -34,10 +36,11 @@ const PAGE_SIZE = 10
 
 interface InvoiceFeeHistoryPanelProps {
   enabled: boolean
+  scope?: 'all' | 'self'
   paginationInFooter?: boolean
 }
 
-/** Shows owner-scoped invoice fee transitions only after its tab is selected. */
+/** Shows self or authorized all-platform invoice fee transitions after its tab is selected. */
 export function InvoiceFeeHistoryPanel(props: InvoiceFeeHistoryPanelProps) {
   const { t } = useTranslation()
   const [pagination, setPagination] = useState<PaginationState>({
@@ -48,11 +51,15 @@ export function InvoiceFeeHistoryPanel(props: InvoiceFeeHistoryPanelProps) {
     queryKey: [
       'wallet',
       'invoice-fees',
+      props.scope ?? 'self',
       pagination.pageIndex + 1,
       pagination.pageSize,
     ],
     queryFn: () =>
-      invoiceFeeLedgerApi.list({
+      (props.scope === 'all'
+        ? adminInvoiceFeeLedgerApi
+        : invoiceFeeLedgerApi
+      ).list({
         page: pagination.pageIndex + 1,
         page_size: pagination.pageSize,
       }),
@@ -63,6 +70,33 @@ export function InvoiceFeeHistoryPanel(props: InvoiceFeeHistoryPanelProps) {
   const total = feeQuery.data?.total ?? 0
   const columns = useMemo<ColumnDef<InvoiceFeeLedgerEntry>[]>(
     () => [
+      ...(props.scope === 'all'
+        ? [
+            {
+              accessorKey: 'user_id',
+              header: t('User'),
+              cell: ({ row }: { row: { original: InvoiceFeeLedgerEntry } }) => {
+                if (row.original.user_id === undefined) return null
+                const owner = getInvoiceOwnerLabel({
+                  user_id: row.original.user_id,
+                  username: row.original.username,
+                  display_name: row.original.display_name,
+                })
+                return (
+                  <div>
+                    <div className='font-medium'>
+                      {owner.name || t('Not available')}
+                    </div>
+                    <div className='text-muted-foreground font-mono text-xs'>
+                      {t('User ID')}: {owner.userId}
+                    </div>
+                  </div>
+                )
+              },
+              size: 160,
+            } satisfies ColumnDef<InvoiceFeeLedgerEntry>,
+          ]
+        : []),
       {
         accessorKey: 'applied_at',
         header: t('Time'),
@@ -168,7 +202,7 @@ export function InvoiceFeeHistoryPanel(props: InvoiceFeeHistoryPanelProps) {
         meta: { mobileOrder: 6 },
       },
     ],
-    [t]
+    [props.scope, t]
   )
   const { table } = useDataTable({
     data: entries,

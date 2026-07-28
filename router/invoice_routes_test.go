@@ -34,6 +34,7 @@ func TestPersonalInvoiceRouteContract(t *testing.T) {
 		http.MethodGet + " /invoices/:id/document":   "DownloadInvoiceDocument",
 	}
 	adminRoutes := map[string]string{
+		http.MethodGet + " /invoice/fee-ledger":     "AdminListInvoiceFeeHistory",
 		http.MethodGet + " /invoices":               "AdminListInvoiceApplications",
 		http.MethodGet + " /invoices/:id":           "AdminGetInvoiceApplication",
 		http.MethodPost + " /invoices/:id/review":   "AdminReviewInvoiceApplication",
@@ -47,6 +48,26 @@ func TestPersonalInvoiceRouteContract(t *testing.T) {
 	assertInvoiceRouteSet(t, invoiceUserRoutes, userRoutes)
 	assertInvoiceRouteSet(t, invoiceAdminRoutes, adminRoutes)
 	assertInvoiceRouteSet(t, invoiceOptionRoutes, optionRoutes)
+}
+
+func TestInvoiceAdminFeeLedgerUsesReviewPermissionAndOwnerRouteRemainsSelfScoped(t *testing.T) {
+	var owner, admin *invoiceRoute
+	for i := range invoiceUserRoutes {
+		if invoiceUserRoutes[i].path == "/invoice/fee-ledger" {
+			owner = &invoiceUserRoutes[i]
+		}
+	}
+	for i := range invoiceAdminRoutes {
+		if invoiceAdminRoutes[i].path == "/invoice/fee-ledger" {
+			admin = &invoiceAdminRoutes[i]
+		}
+	}
+	require.NotNil(t, owner)
+	assert.Nil(t, owner.permission)
+	require.NotNil(t, admin)
+	require.NotNil(t, admin.permission)
+	assert.Equal(t, authz.InvoiceReview, *admin.permission)
+	assert.NotEqual(t, owner.handlerName, admin.handlerName)
 }
 
 func TestInvoiceSettingRoutesUseInvoicePermissionForAdminAndRoot(t *testing.T) {
@@ -156,19 +177,20 @@ func TestEveryInvoiceRouteUsesPrivateNoStore(t *testing.T) {
 	}
 }
 
-func TestInvoiceFeeLedgerRouteRequiresAuthentication(t *testing.T) {
+func TestInvoiceFeeLedgerRoutesEnforceScopePermissionIdentityAndNoStore(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	previousDB, previousLogDB := model.DB, model.LOG_DB
 	previousRedis := common.RedisEnabled
 	common.RedisEnabled = false
 	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
 	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&model.User{}, &model.InvoiceApplication{}, &model.InvoiceFeeLedgerEntry{}, &model.Log{}))
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.CasbinRule{}, &model.AuthzRole{}, &model.InvoiceApplication{}, &model.InvoiceFeeLedgerEntry{}, &model.Log{}))
 	model.DB, model.LOG_DB = db, db
 	t.Cleanup(func() {
 		model.DB, model.LOG_DB = previousDB, previousLogDB
 		common.RedisEnabled = previousRedis
 	})
+	require.NoError(t, authz.Init(db))
 
 	token := "invoice-fee-ledger-owner"
 	user := model.User{Username: "fee-ledger-owner", Password: "test-password", AccessToken: &token,
@@ -181,6 +203,24 @@ func TestInvoiceFeeLedgerRouteRequiresAuthentication(t *testing.T) {
 	require.NoError(t, db.Create(&application).Error)
 	require.NoError(t, db.Create(&model.InvoiceFeeLedgerEntry{ApplicationID: application.ID, UserID: user.Id,
 		EntryType: model.InvoiceFeeEntryTypeCharge, Quota: 5, IdempotencyKey: "fee-owner", Status: model.InvoiceFeeEntryStatusPending}).Error)
+	otherToken := "invoice-fee-ledger-other"
+	other := model.User{Username: "fee-ledger-other", DisplayName: "Other Owner", Password: "test-password", AccessToken: &otherToken,
+		Role: common.RoleCommonUser, Status: common.UserStatusEnabled, Group: "default", AffCode: "fee-ledger-other"}
+	require.NoError(t, db.Create(&other).Error)
+	otherApplication := model.InvoiceApplication{ApplicationNo: "INV-FEE-OTHER", UserID: other.Id, RequestID: "fee-other", RequestFingerprint: "other-fingerprint",
+		Type: constant.InvoiceTypePersonal, Status: constant.InvoiceApplicationStatusSubmitted, PaymentReviewStatus: constant.InvoicePaymentReviewStatusNone,
+		Currency: constant.InvoiceCurrencyCNY, FeeMethod: "wallet_quota", FeeStatus: constant.InvoiceFeeStatusPaid,
+		ProfileSnapshot: `{}`, PolicySnapshot: `{"fee_percent":7}`, SubmittedAt: 2}
+	require.NoError(t, db.Create(&otherApplication).Error)
+	require.NoError(t, db.Create(&model.InvoiceFeeLedgerEntry{ApplicationID: otherApplication.ID, UserID: other.Id,
+		EntryType: model.InvoiceFeeEntryTypeCharge, Quota: 7, IdempotencyKey: "fee-other", Status: model.InvoiceFeeEntryStatusApplied}).Error)
+	adminToken := "invoice-fee-ledger-reviewer"
+	admin := model.User{Username: "fee-ledger-reviewer", Password: "test-password", AccessToken: &adminToken,
+		Role: common.RoleAdminUser, Status: common.UserStatusEnabled, Group: "default", AffCode: "fee-ledger-reviewer"}
+	require.NoError(t, db.Create(&admin).Error)
+	require.NoError(t, authz.SetUserPermissions(admin.Id, authz.PermissionsMap{
+		authz.ResourceInvoice: {authz.ActionInvoiceReview: true},
+	}))
 	engine := gin.New()
 	SetApiRouter(engine)
 
@@ -194,7 +234,17 @@ func TestInvoiceFeeLedgerRouteRequiresAuthentication(t *testing.T) {
 	engine.ServeHTTP(authenticated, request)
 	assert.Equal(t, http.StatusOK, authenticated.Code)
 	assert.Contains(t, authenticated.Body.String(), "INV-FEE-OWNER")
+	assert.NotContains(t, authenticated.Body.String(), "INV-FEE-OTHER")
+	assert.NotContains(t, authenticated.Body.String(), "user_id")
 	assertPrivateNoStore(t, authenticated)
+
+	adminResponse := performInvoiceRouteRequest(engine, admin.Id, adminToken, http.MethodGet, "/api/admin/invoice/fee-ledger", "")
+	assert.Equal(t, http.StatusOK, adminResponse.Code)
+	assert.Contains(t, adminResponse.Body.String(), "INV-FEE-OWNER")
+	assert.Contains(t, adminResponse.Body.String(), "INV-FEE-OTHER")
+	assert.Contains(t, adminResponse.Body.String(), `"user_id":`)
+	assert.Contains(t, adminResponse.Body.String(), "Other Owner")
+	assertPrivateNoStore(t, adminResponse)
 }
 
 func TestInvoiceDocumentProductionRouteMasksCrossOwnerLikeMissing(t *testing.T) {
@@ -392,6 +442,7 @@ func TestEveryProductionInvoiceRouteRejectsUnauthenticatedRequests(t *testing.T)
 		{http.MethodGet, "/api/user/invoices/1/document"},
 		{http.MethodPost, "/api/user/invoices/1/cancel"},
 		{http.MethodGet, "/api/admin/invoices"},
+		{http.MethodGet, "/api/admin/invoice/fee-ledger"},
 		{http.MethodGet, "/api/admin/invoices/1"},
 		{http.MethodPost, "/api/admin/invoices/1/review"},
 		{http.MethodPost, "/api/admin/invoices/1/reject"},
@@ -420,6 +471,7 @@ func TestProductionInvoicePermissionRoutesRejectAuthenticatedAdminWithoutInvoice
 		path   string
 	}{
 		{http.MethodGet, "/api/admin/invoices"},
+		{http.MethodGet, "/api/admin/invoice/fee-ledger"},
 		{http.MethodGet, "/api/admin/invoices/1"},
 		{http.MethodPost, "/api/admin/invoices/1/review"},
 		{http.MethodPost, "/api/admin/invoices/1/reject"},

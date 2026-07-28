@@ -37,6 +37,7 @@ var invoiceUserRoutes = []invoiceRoute{
 }
 
 var invoiceAdminRoutes = []invoiceRoute{
+	{http.MethodGet, "/invoice/fee-ledger", "AdminListInvoiceFeeHistory", controller.AdminListInvoiceFeeHistory, &authz.InvoiceReview, true},
 	{http.MethodGet, "/invoices", "AdminListInvoiceApplications", controller.AdminListInvoiceApplications, &authz.InvoiceReview, true},
 	{http.MethodGet, "/invoices/:id", "AdminGetInvoiceApplication", controller.AdminGetInvoiceApplication, &authz.InvoiceReview, true},
 	{http.MethodPost, "/invoices/:id/review", "AdminReviewInvoiceApplication", controller.AdminReviewInvoiceApplication, &authz.InvoiceReview, true},

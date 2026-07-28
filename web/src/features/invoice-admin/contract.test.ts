@@ -35,6 +35,7 @@ import {
   buildInvoiceDocumentFormData,
   getInvoiceReviewActions,
   getInvoiceAdminCapabilities,
+  getInvoiceOwnerLabel,
   maskInvoiceSensitiveDetail,
   validateInvoiceSetting,
 } from './contract'
@@ -107,6 +108,24 @@ function adminWithPermissions(actions: Record<string, boolean>): AuthUser {
 }
 
 describe('invoice admin contracts', () => {
+  test('uses display name then username while always preserving immutable user ID', () => {
+    assert.deepEqual(
+      getInvoiceOwnerLabel({
+        user_id: 42,
+        username: 'alice',
+        display_name: 'Alice A',
+      }),
+      { name: 'Alice A', userId: 42 }
+    )
+    assert.deepEqual(
+      getInvoiceOwnerLabel({
+        user_id: 42,
+        username: 'alice',
+        display_name: '',
+      }),
+      { name: 'alice', userId: 42 }
+    )
+  })
   test('enforces review, upload, sensitive-read, and settings independently', () => {
     assert.deepEqual(INVOICE_ADMIN_PERMISSIONS, {
       resource: 'invoice',

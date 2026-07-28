@@ -63,24 +63,43 @@ func invoiceApplicationSummaryAt(application *model.InvoiceApplication, document
 }
 
 // ListInvoiceApplicationPage returns a bounded owner-scoped or administrative page of invoice summaries.
-func ListInvoiceApplicationPage(ownerID *int, page, pageSize int) (dto.InvoiceApplicationPage, error) {
+func ListInvoiceApplicationPage(ownerID *int, page, pageSize int, includeIdentity bool) (dto.InvoiceApplicationPage, error) {
 	applications, total, err := model.ListInvoiceApplications(ownerID, (page-1)*pageSize, pageSize)
 	if err != nil {
 		return dto.InvoiceApplicationPage{}, err
 	}
 	items := make([]dto.InvoiceApplicationSummary, 0, len(applications))
+	identities := map[int]model.InvoiceUserIdentity{}
+	if includeIdentity {
+		userIDs := make([]int, 0, len(applications))
+		for i := range applications {
+			userIDs = append(userIDs, applications[i].UserID)
+		}
+		identities, err = model.ListInvoiceUserIdentities(userIDs)
+		if err != nil {
+			return dto.InvoiceApplicationPage{}, err
+		}
+	}
 	for i := range applications {
 		document, err := model.GetInvoiceDocument(applications[i].ActiveDocumentID)
 		if err != nil {
 			return dto.InvoiceApplicationPage{}, err
 		}
-		items = append(items, invoiceApplicationSummary(&applications[i], document))
+		summary := invoiceApplicationSummary(&applications[i], document)
+		if includeIdentity {
+			summary.UserID = &applications[i].UserID
+		}
+		if identity, ok := identities[applications[i].UserID]; ok {
+			summary.Username = &identity.Username
+			summary.DisplayName = &identity.DisplayName
+		}
+		items = append(items, summary)
 	}
 	return dto.InvoiceApplicationPage{Items: items, Page: page, PageSize: pageSize, Total: total}, nil
 }
 
 // GetInvoiceApplicationDetail returns immutable invoice facts while masking sensitive profile data unless authorized.
-func GetInvoiceApplicationDetail(applicationID int64, ownerID *int, includeSensitive bool) (*dto.InvoiceApplicationDetail, error) {
+func GetInvoiceApplicationDetail(applicationID int64, ownerID *int, includeSensitive, includeIdentity bool) (*dto.InvoiceApplicationDetail, error) {
 	application, err := model.GetInvoiceApplication(applicationID, ownerID)
 	if err != nil {
 		return nil, err
@@ -114,6 +133,17 @@ func GetInvoiceApplicationDetail(applicationID int64, ownerID *int, includeSensi
 		ProfileSnapshot:           profile, PolicySnapshot: policy,
 		Items: make([]dto.InvoiceApplicationItem, 0, len(items)),
 	}
+	if includeIdentity {
+		detail.UserID = &application.UserID
+		identities, err := model.ListInvoiceUserIdentities([]int{application.UserID})
+		if err != nil {
+			return nil, err
+		}
+		if identity, ok := identities[application.UserID]; ok {
+			detail.Username = &identity.Username
+			detail.DisplayName = &identity.DisplayName
+		}
+	}
 	for _, item := range items {
 		detail.Items = append(detail.Items, dto.InvoiceApplicationItem{
 			TopUpID: item.TopUpID, OrderNo: item.TradeNo, PaidAmountMinor: item.PaidAmountMinor,
@@ -138,7 +168,7 @@ func CreateInvoiceApplicationDetail(userID int, request dto.CreateInvoiceApplica
 	if err != nil {
 		return nil, err
 	}
-	return GetInvoiceApplicationDetail(application.ID, &userID, true)
+	return GetInvoiceApplicationDetail(application.ID, &userID, true, false)
 }
 
 // CancelInvoiceApplicationDetail cancels an application and returns its resulting owner-visible detail projection.
@@ -147,5 +177,5 @@ func CancelInvoiceApplicationDetail(userID int, applicationID int64) (*dto.Invoi
 	if err != nil {
 		return nil, err
 	}
-	return GetInvoiceApplicationDetail(application.ID, &userID, true)
+	return GetInvoiceApplicationDetail(application.ID, &userID, true, false)
 }

@@ -55,6 +55,7 @@ import {
   formatInvoiceAmount,
   getInvoiceErrorMessageKey,
 } from '../../invoices/contract'
+import { getInvoiceOwnerLabel } from '../contract'
 import { adminInvoiceQueryKeys } from '../queries'
 import type { AdminInvoiceApi } from '../types'
 
@@ -127,6 +128,7 @@ export function ApplicationList(props: ApplicationListProps) {
         <TableHeader>
           <TableRow>
             <TableHead>{t('Application number')}</TableHead>
+            <TableHead>{t('User')}</TableHead>
             <TableHead>{t('Submitted')}</TableHead>
             <TableHead>{t('Amount')}</TableHead>
             <TableHead>{t('Status')}</TableHead>
@@ -138,6 +140,22 @@ export function ApplicationList(props: ApplicationListProps) {
             <TableRow key={application.id}>
               <TableCell className='font-medium'>
                 {application.application_no}
+              </TableCell>
+              <TableCell>
+                {application.user_id !== undefined ? (
+                  <div>
+                    <div className='font-medium'>
+                      {getInvoiceOwnerLabel({
+                        user_id: application.user_id,
+                        username: application.username,
+                        display_name: application.display_name,
+                      }).name || t('Not available')}
+                    </div>
+                    <div className='text-muted-foreground font-mono text-xs'>
+                      {t('User ID')}: {application.user_id}
+                    </div>
+                  </div>
+                ) : null}
               </TableCell>
               <TableCell>
                 {dayjs
