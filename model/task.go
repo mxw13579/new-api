@@ -454,7 +454,10 @@ func (t *Task) UpdateQuota() error {
 	return DB.Model(t).Update("quota", t.Quota).Error
 }
 
+// ErrTaskRefundInvalidQuota reports a refund request without a positive quota.
 var ErrTaskRefundInvalidQuota = errors.New("task refund quota must be positive")
+
+// ErrTaskRefundInvalidState reports a refund request for a task that has not failed.
 var ErrTaskRefundInvalidState = errors.New("task refund requires failure status")
 
 // RefundTaskFunding atomically applies the primary wallet/subscription refund
@@ -490,6 +493,8 @@ func RefundTaskFunding(id int64, expectedQuota int) (*Task, error) {
 			if newUsed < 0 {
 				newUsed = 0
 			}
+			// Skip an unchanged clamp: after the row is locked and validated, MySQL
+			// may report zero changed rows for a no-op update even though it exists.
 			if newUsed != subscription.AmountUsed {
 				result := tx.Model(&UserSubscription{}).
 					Where("id = ?", subscription.Id).
