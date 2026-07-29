@@ -490,14 +490,16 @@ func RefundTaskFunding(id int64, expectedQuota int) (*Task, error) {
 			if newUsed < 0 {
 				newUsed = 0
 			}
-			result := tx.Model(&UserSubscription{}).
-				Where("id = ?", subscription.Id).
-				Update("amount_used", newUsed)
-			if result.Error != nil {
-				return result.Error
-			}
-			if result.RowsAffected != 1 {
-				return fmt.Errorf("subscription refund update affected %d rows", result.RowsAffected)
+			if newUsed != subscription.AmountUsed {
+				result := tx.Model(&UserSubscription{}).
+					Where("id = ?", subscription.Id).
+					Update("amount_used", newUsed)
+				if result.Error != nil {
+					return result.Error
+				}
+				if result.RowsAffected != 1 {
+					return fmt.Errorf("subscription refund update affected %d rows", result.RowsAffected)
+				}
 			}
 		} else {
 			var user User

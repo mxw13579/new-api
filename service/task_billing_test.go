@@ -495,6 +495,54 @@ func TestRefundTaskQuota_TransactionRollbackKeepsSubscriptionAndMarkerRetryable(
 	assert.Equal(t, int64(1), countLogs(t))
 }
 
+func TestRefundTaskQuota_ZeroSubscriptionClampCommitsMarkerAndFollowUpOnce(t *testing.T) {
+	truncate(t)
+	ctx := context.Background()
+
+	const userID, tokenID, subscriptionID, taskQuota = 62, 62, 62, 1_375
+	const initialTokenQuota = 2_500
+	seedUser(t, userID, 0)
+	seedToken(t, tokenID, userID, "sk-zero-clamp", initialTokenQuota)
+	seedSubscription(t, subscriptionID, userID, 20_000, 0)
+	task := makeTask(userID, 0, taskQuota, tokenID, BillingSourceSubscription, subscriptionID)
+	task.Status = model.TaskStatusFailure
+	require.NoError(t, model.DB.Create(task).Error)
+
+	const changedRowsCallback = "test:mysql_changed_rows_zero_subscription_refund"
+	require.NoError(t, model.DB.Callback().Update().After("gorm:update").Register(changedRowsCallback, func(tx *gorm.DB) {
+		if tx.Statement.Table == "user_subscriptions" {
+			tx.RowsAffected = 0
+		}
+	}))
+	t.Cleanup(func() { model.DB.Callback().Update().Remove(changedRowsCallback) })
+
+	const markerFailureCallback = "test:fail_zero_clamp_task_marker"
+	markerFailure := true
+	require.NoError(t, model.DB.Callback().Update().Before("gorm:update").Register(markerFailureCallback, func(tx *gorm.DB) {
+		if markerFailure && tx.Statement.Table == "tasks" {
+			tx.AddError(errors.New("injected zero-clamp task marker failure"))
+		}
+	}))
+	t.Cleanup(func() { model.DB.Callback().Update().Remove(markerFailureCallback) })
+
+	assert.False(t, RefundTaskQuota(ctx, task, "zero clamp marker failure"))
+	assert.Zero(t, getSubscriptionUsed(t, subscriptionID))
+	assert.Equal(t, taskQuota, getTaskQuota(t, task.ID))
+	assert.Equal(t, initialTokenQuota, getTokenRemainQuota(t, tokenID))
+	assert.Equal(t, int64(0), countLogs(t))
+
+	markerFailure = false
+	assert.True(t, RefundTaskQuota(ctx, task, "zero clamp retry"))
+	assert.Zero(t, getSubscriptionUsed(t, subscriptionID))
+	assert.Zero(t, getTaskQuota(t, task.ID))
+	assert.Equal(t, initialTokenQuota+taskQuota, getTokenRemainQuota(t, tokenID))
+	assert.Equal(t, int64(1), countLogs(t))
+
+	assert.True(t, RefundTaskQuota(ctx, task, "zero clamp duplicate"))
+	assert.Equal(t, initialTokenQuota+taskQuota, getTokenRemainQuota(t, tokenID))
+	assert.Equal(t, int64(1), countLogs(t))
+}
+
 func TestRefundTaskQuota_ConcurrentWalletExactlyOnce(t *testing.T) {
 	truncate(t)
 
