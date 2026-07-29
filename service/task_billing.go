@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -168,38 +169,45 @@ func RefundTaskQuota(ctx context.Context, task *model.Task, reason string) bool 
 	if quota == 0 {
 		return true
 	}
-
-	// 1. 退还资金来源（钱包或订阅）
-	if err := taskAdjustFunding(task, -quota); err != nil {
-		logger.LogWarn(ctx, fmt.Sprintf("退还资金来源失败 task %s: %s", task.TaskID, err.Error()))
+	if quota < 0 {
+		logger.LogError(ctx, fmt.Sprintf("拒绝负数任务退款 task %s: quota=%d", task.TaskID, quota))
 		return false
 	}
 
-	// 2. 退还令牌额度
-	taskAdjustTokenQuota(ctx, task, -quota)
+	refundedTask, err := model.RefundTaskFunding(task.ID, quota)
+	if err != nil {
+		if errors.Is(err, model.ErrTaskRefundInvalidQuota) || errors.Is(err, model.ErrTaskRefundInvalidState) {
+			logger.LogError(ctx, fmt.Sprintf("拒绝无效任务退款 task %s: %s", task.TaskID, err.Error()))
+		} else {
+			logger.LogWarn(ctx, fmt.Sprintf("退还资金来源失败 task %s: %s", task.TaskID, err.Error()))
+		}
+		return false
+	}
+	if refundedTask == nil {
+		return true
+	}
+	task.Quota = 0
+
+	// Primary funding and the durable task marker committed together. Only the
+	// transaction winner performs best-effort token and log follow-up.
+	taskAdjustTokenQuota(ctx, refundedTask, -quota)
 
 	// 3. 记录日志
-	other := taskBillingOther(task)
-	other["task_id"] = task.TaskID
+	other := taskBillingOther(refundedTask)
+	other["task_id"] = refundedTask.TaskID
 	other["reason"] = reason
 	model.RecordTaskBillingLog(model.RecordTaskBillingLogParams{
-		UserId:    task.UserId,
+		UserId:    refundedTask.UserId,
 		LogType:   model.LogTypeRefund,
 		Content:   "",
-		ChannelId: task.ChannelId,
-		ModelName: taskModelName(task),
+		ChannelId: refundedTask.ChannelId,
+		ModelName: taskModelName(refundedTask),
 		Quota:     quota,
-		TokenId:   task.PrivateData.TokenId,
-		Group:     task.Group,
+		TokenId:   refundedTask.PrivateData.TokenId,
+		Group:     refundedTask.Group,
 		Other:     other,
 	})
 
-	// 4. 资金退款完成后再清除持久化标记。
-	// 回写失败必须显式告警，避免漏掉潜在的重复退款风险。
-	task.Quota = 0
-	if err := task.UpdateQuota(); err != nil {
-		logger.LogError(ctx, fmt.Sprintf("退款成功但清除 task quota 失败 task %s: %s", task.TaskID, err.Error()))
-	}
 	return true
 }
 

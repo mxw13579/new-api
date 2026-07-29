@@ -108,27 +108,7 @@ func sweepUnrefundedFailedTasks(ctx context.Context) {
 			return
 		}
 
-		quota := task.Quota
-		claimed, err := model.ClaimQuotaForRefund(task.ID, quota)
-		if err != nil {
-			logger.LogError(ctx, fmt.Sprintf("sweepUnrefundedFailedTasks claim error for task %s: %v", task.TaskID, err))
-			continue
-		}
-		if !claimed {
-			logger.LogDebug(ctx, "sweepUnrefundedFailedTasks: task %s claim lost, skip refund", task.TaskID)
-			continue
-		}
-
-		if RefundTaskQuota(ctx, task, task.FailReason) {
-			continue
-		}
-
-		restored, restoreErr := model.RestoreQuotaAfterFailedRefund(task.ID, quota)
-		if restoreErr != nil {
-			logger.LogError(ctx, fmt.Sprintf("sweepUnrefundedFailedTasks restore quota error for task %s: %v", task.TaskID, restoreErr))
-		} else if !restored {
-			logger.LogError(ctx, fmt.Sprintf("sweepUnrefundedFailedTasks could not restore quota marker for task %s", task.TaskID))
-		}
+		RefundTaskQuota(ctx, task, task.FailReason)
 	}
 }
 

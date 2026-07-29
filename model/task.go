@@ -4,12 +4,15 @@ import (
 	"bytes"
 	"database/sql/driver"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	commonRelay "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"gorm.io/gorm"
 )
 
 type TaskStatus string
@@ -318,7 +321,7 @@ func GetUnrefundedFailedTasks(updatedBefore int64, limit int) []*Task {
 
 	var tasks []*Task
 	err := DB.Where("status = ?", TaskStatusFailure).
-		Where("quota != ?", 0).
+		Where("quota > ?", 0).
 		Where("updated_at <= ?", updatedBefore).
 		Where("(submit_time <= ? OR submit_time >= ?)", 0, TaskRefundLegacyCutoff).
 		Order("id").
@@ -367,7 +370,7 @@ func HasTaskPollingWork() bool {
 	var id int64
 	err := DB.Model(&Task{}).
 		Where("status = ?", TaskStatusFailure).
-		Where("quota != ?", 0).
+		Where("quota > ?", 0).
 		Where("(submit_time <= ? OR submit_time >= ?)", 0, TaskRefundLegacyCutoff).
 		Limit(1).
 		Pluck("id", &id).Error
@@ -451,37 +454,88 @@ func (t *Task) UpdateQuota() error {
 	return DB.Model(t).Update("quota", t.Quota).Error
 }
 
-// ClaimQuotaForRefund atomically clears an expected non-zero quota. A true
-// result grants the caller ownership of the corresponding refund attempt.
-func ClaimQuotaForRefund(id int64, expectedQuota int) (bool, error) {
-	if expectedQuota == 0 {
-		return false, nil
+var ErrTaskRefundInvalidQuota = errors.New("task refund quota must be positive")
+var ErrTaskRefundInvalidState = errors.New("task refund requires failure status")
+
+// RefundTaskFunding atomically applies the primary wallet/subscription refund
+// and clears the positive task quota marker. A nil task means another runner
+// already completed the refund or the caller's expected quota is stale.
+func RefundTaskFunding(id int64, expectedQuota int) (*Task, error) {
+	if expectedQuota <= 0 {
+		return nil, ErrTaskRefundInvalidQuota
 	}
 
-	result := DB.Model(&Task{}).
-		Where("id = ? AND quota = ?", id, expectedQuota).
-		Update("quota", 0)
-	if result.Error != nil {
-		return false, result.Error
-	}
-	return result.RowsAffected > 0, nil
-}
+	var refunded *Task
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		var task Task
+		if err := lockForUpdate(tx).Where("id = ?", id).First(&task).Error; err != nil {
+			return err
+		}
+		if task.Quota < 0 {
+			return ErrTaskRefundInvalidQuota
+		}
+		if task.Quota == 0 || task.Quota != expectedQuota {
+			return nil
+		}
+		if task.Status != TaskStatusFailure {
+			return ErrTaskRefundInvalidState
+		}
 
-// RestoreQuotaAfterFailedRefund restores a claimed quota marker only while it
-// is still zero. It is used when the observable funding adjustment fails, so a
-// later reconciliation pass can retry without overwriting another writer.
-func RestoreQuotaAfterFailedRefund(id int64, quota int) (bool, error) {
-	if quota == 0 {
-		return false, nil
-	}
+		if task.PrivateData.BillingSource == "subscription" && task.PrivateData.SubscriptionId > 0 {
+			var subscription UserSubscription
+			if err := lockForUpdate(tx).Where("id = ?", task.PrivateData.SubscriptionId).First(&subscription).Error; err != nil {
+				return err
+			}
+			newUsed := subscription.AmountUsed - int64(task.Quota)
+			if newUsed < 0 {
+				newUsed = 0
+			}
+			result := tx.Model(&UserSubscription{}).
+				Where("id = ?", subscription.Id).
+				Update("amount_used", newUsed)
+			if result.Error != nil {
+				return result.Error
+			}
+			if result.RowsAffected != 1 {
+				return fmt.Errorf("subscription refund update affected %d rows", result.RowsAffected)
+			}
+		} else {
+			var user User
+			if err := lockForUpdate(tx).Select("id").Where("id = ?", task.UserId).First(&user).Error; err != nil {
+				return err
+			}
+			result := tx.Model(&User{}).
+				Where("id = ?", task.UserId).
+				Update("quota", gorm.Expr("quota + ?", task.Quota))
+			if result.Error != nil {
+				return result.Error
+			}
+			if result.RowsAffected != 1 {
+				return fmt.Errorf("wallet refund update affected %d rows", result.RowsAffected)
+			}
+		}
 
-	result := DB.Model(&Task{}).
-		Where("id = ? AND quota = ?", id, 0).
-		Update("quota", quota)
-	if result.Error != nil {
-		return false, result.Error
+		result := tx.Model(&Task{}).
+			Where("id = ? AND quota = ?", task.ID, task.Quota).
+			Update("quota", 0)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return fmt.Errorf("task refund marker update affected %d rows", result.RowsAffected)
+		}
+		refunded = &task
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
-	return result.RowsAffected > 0, nil
+	if refunded != nil && (refunded.PrivateData.BillingSource != "subscription" || refunded.PrivateData.SubscriptionId <= 0) {
+		if err := cacheIncrUserQuota(refunded.UserId, int64(refunded.Quota)); err != nil {
+			common.SysLog("failed to increase user quota cache after task refund: " + err.Error())
+		}
+	}
+	return refunded, nil
 }
 
 // UpdateWithStatus performs a conditional UPDATE guarded by fromStatus (CAS).

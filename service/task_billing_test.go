@@ -3,9 +3,11 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"math"
 	"net/http"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -311,6 +313,7 @@ func TestRefundTaskQuota_Wallet(t *testing.T) {
 	seedChannel(t, channelID)
 
 	task := makeTask(userID, channelID, preConsumed, tokenID, BillingSourceWallet, 0)
+	task.Status = model.TaskStatusFailure
 	require.NoError(t, model.DB.Create(task).Error)
 
 	assert.True(t, RefundTaskQuota(ctx, task, "task failed: upstream error"))
@@ -347,6 +350,7 @@ func TestRefundTaskQuota_Subscription(t *testing.T) {
 	seedSubscription(t, subID, userID, subTotal, subUsed)
 
 	task := makeTask(userID, channelID, preConsumed, tokenID, BillingSourceSubscription, subID)
+	task.Status = model.TaskStatusFailure
 	require.NoError(t, model.DB.Create(task).Error)
 
 	assert.True(t, RefundTaskQuota(ctx, task, "subscription task failed"))
@@ -392,6 +396,7 @@ func TestRefundTaskQuota_NoToken(t *testing.T) {
 	seedChannel(t, channelID)
 
 	task := makeTask(userID, channelID, preConsumed, 0, BillingSourceWallet, 0) // TokenId=0
+	task.Status = model.TaskStatusFailure
 	require.NoError(t, model.DB.Create(task).Error)
 
 	assert.True(t, RefundTaskQuota(ctx, task, "no token task failed"))
@@ -419,6 +424,175 @@ func TestRefundTaskQuota_FundingFailureKeepsPendingMarker(t *testing.T) {
 	assert.False(t, RefundTaskQuota(ctx, task, "subscription missing"))
 	assert.Equal(t, preConsumed, task.Quota)
 	assert.Equal(t, preConsumed, getTaskQuota(t, task.ID))
+	assert.Equal(t, int64(0), countLogs(t))
+}
+
+func TestRefundTaskQuota_TransactionRollbackKeepsWalletAndMarkerRetryable(t *testing.T) {
+	truncate(t)
+	ctx := context.Background()
+
+	const userID, tokenID, taskQuota = 6, 6, 1_300
+	const initialUserQuota, initialTokenQuota = 5_000, 2_000
+	seedUser(t, userID, initialUserQuota)
+	seedToken(t, tokenID, userID, "sk-rollback", initialTokenQuota)
+	task := makeTask(userID, 0, taskQuota, tokenID, BillingSourceWallet, 0)
+	task.Status = model.TaskStatusFailure
+	require.NoError(t, model.DB.Create(task).Error)
+
+	const callbackName = "test:fail_task_refund_marker"
+	markerFailure := true
+	require.NoError(t, model.DB.Callback().Update().Before("gorm:update").Register(callbackName, func(tx *gorm.DB) {
+		if markerFailure && tx.Statement.Table == "tasks" {
+			tx.AddError(errors.New("injected task refund marker failure"))
+		}
+	}))
+	t.Cleanup(func() { model.DB.Callback().Update().Remove(callbackName) })
+
+	assert.False(t, RefundTaskQuota(ctx, task, "transient marker failure"))
+	assert.Equal(t, initialUserQuota, getUserQuota(t, userID))
+	assert.Equal(t, initialTokenQuota, getTokenRemainQuota(t, tokenID))
+	assert.Equal(t, taskQuota, getTaskQuota(t, task.ID))
+	assert.Equal(t, int64(0), countLogs(t))
+
+	markerFailure = false
+	assert.True(t, RefundTaskQuota(ctx, task, "retry after marker failure"))
+	assert.Equal(t, initialUserQuota+taskQuota, getUserQuota(t, userID))
+	assert.Equal(t, initialTokenQuota+taskQuota, getTokenRemainQuota(t, tokenID))
+	assert.Zero(t, getTaskQuota(t, task.ID))
+	assert.Equal(t, int64(1), countLogs(t))
+}
+
+func TestRefundTaskQuota_TransactionRollbackKeepsSubscriptionAndMarkerRetryable(t *testing.T) {
+	truncate(t)
+	ctx := context.Background()
+
+	const userID, subscriptionID, taskQuota = 61, 61, 1_350
+	const initialSubscriptionUsed int64 = 6_000
+	seedUser(t, userID, 0)
+	seedSubscription(t, subscriptionID, userID, 20_000, initialSubscriptionUsed)
+	task := makeTask(userID, 0, taskQuota, 0, BillingSourceSubscription, subscriptionID)
+	task.Status = model.TaskStatusFailure
+	require.NoError(t, model.DB.Create(task).Error)
+
+	const callbackName = "test:fail_subscription_refund_marker"
+	markerFailure := true
+	require.NoError(t, model.DB.Callback().Update().Before("gorm:update").Register(callbackName, func(tx *gorm.DB) {
+		if markerFailure && tx.Statement.Table == "tasks" {
+			tx.AddError(errors.New("injected subscription refund marker failure"))
+		}
+	}))
+	t.Cleanup(func() { model.DB.Callback().Update().Remove(callbackName) })
+
+	assert.False(t, RefundTaskQuota(ctx, task, "transient subscription marker failure"))
+	assert.Equal(t, initialSubscriptionUsed, getSubscriptionUsed(t, subscriptionID))
+	assert.Equal(t, taskQuota, getTaskQuota(t, task.ID))
+	assert.Equal(t, int64(0), countLogs(t))
+
+	markerFailure = false
+	assert.True(t, RefundTaskQuota(ctx, task, "retry subscription marker failure"))
+	assert.Equal(t, initialSubscriptionUsed-int64(taskQuota), getSubscriptionUsed(t, subscriptionID))
+	assert.Zero(t, getTaskQuota(t, task.ID))
+	assert.Equal(t, int64(1), countLogs(t))
+}
+
+func TestRefundTaskQuota_ConcurrentWalletExactlyOnce(t *testing.T) {
+	truncate(t)
+
+	const userID, tokenID, taskQuota = 7, 7, 1_400
+	const initialUserQuota, initialTokenQuota = 6_000, 3_000
+	seedUser(t, userID, initialUserQuota)
+	seedToken(t, tokenID, userID, "sk-wallet-concurrent", initialTokenQuota)
+	task := makeTask(userID, 0, taskQuota, tokenID, BillingSourceWallet, 0)
+	task.Status = model.TaskStatusFailure
+	require.NoError(t, model.DB.Create(task).Error)
+
+	const runners = 8
+	var wg sync.WaitGroup
+	wg.Add(runners)
+	for range runners {
+		go func() {
+			defer wg.Done()
+			candidate := *task
+			RefundTaskQuota(context.Background(), &candidate, "overlapping wallet refund")
+		}()
+	}
+	wg.Wait()
+
+	assert.Equal(t, initialUserQuota+taskQuota, getUserQuota(t, userID))
+	assert.Equal(t, initialTokenQuota+taskQuota, getTokenRemainQuota(t, tokenID))
+	assert.Zero(t, getTaskQuota(t, task.ID))
+	assert.Equal(t, int64(1), countLogs(t))
+}
+
+func TestRefundTaskQuota_ConcurrentSubscriptionExactlyOnce(t *testing.T) {
+	truncate(t)
+
+	const userID, tokenID, subscriptionID, taskQuota = 8, 8, 8, 1_500
+	const initialTokenQuota = 4_000
+	const initialSubscriptionUsed int64 = 9_000
+	seedUser(t, userID, 0)
+	seedToken(t, tokenID, userID, "sk-subscription-concurrent", initialTokenQuota)
+	seedSubscription(t, subscriptionID, userID, 20_000, initialSubscriptionUsed)
+	task := makeTask(userID, 0, taskQuota, tokenID, BillingSourceSubscription, subscriptionID)
+	task.Status = model.TaskStatusFailure
+	require.NoError(t, model.DB.Create(task).Error)
+
+	const runners = 8
+	var wg sync.WaitGroup
+	wg.Add(runners)
+	for range runners {
+		go func() {
+			defer wg.Done()
+			candidate := *task
+			RefundTaskQuota(context.Background(), &candidate, "overlapping subscription refund")
+		}()
+	}
+	wg.Wait()
+
+	assert.Equal(t, initialSubscriptionUsed-int64(taskQuota), getSubscriptionUsed(t, subscriptionID))
+	assert.Equal(t, initialTokenQuota+taskQuota, getTokenRemainQuota(t, tokenID))
+	assert.Zero(t, getTaskQuota(t, task.ID))
+	assert.Equal(t, int64(1), countLogs(t))
+}
+
+func TestRefundTaskQuota_NegativeQuotaFailsClosed(t *testing.T) {
+	truncate(t)
+	ctx := context.Background()
+
+	const userID, tokenID, subscriptionID = 9, 9, 9
+	const initialUserQuota, initialTokenQuota = 7_000, 5_000
+	const initialSubscriptionUsed int64 = 8_000
+	seedUser(t, userID, initialUserQuota)
+	seedToken(t, tokenID, userID, "sk-negative-refund", initialTokenQuota)
+	seedSubscription(t, subscriptionID, userID, 20_000, initialSubscriptionUsed)
+	task := makeTask(userID, 0, -1_600, tokenID, BillingSourceSubscription, subscriptionID)
+	task.Status = model.TaskStatusFailure
+	require.NoError(t, model.DB.Create(task).Error)
+
+	assert.False(t, RefundTaskQuota(ctx, task, "corrupt negative quota"))
+	assert.Equal(t, initialUserQuota, getUserQuota(t, userID))
+	assert.Equal(t, initialSubscriptionUsed, getSubscriptionUsed(t, subscriptionID))
+	assert.Equal(t, initialTokenQuota, getTokenRemainQuota(t, tokenID))
+	assert.Equal(t, -1_600, getTaskQuota(t, task.ID))
+	assert.Equal(t, int64(0), countLogs(t))
+}
+
+func TestRefundTaskQuota_NonFailureTaskFailsClosed(t *testing.T) {
+	truncate(t)
+	ctx := context.Background()
+
+	const userID, tokenID, taskQuota = 10, 10, 1_700
+	const initialUserQuota, initialTokenQuota = 7_500, 5_500
+	seedUser(t, userID, initialUserQuota)
+	seedToken(t, tokenID, userID, "sk-nonfailure-refund", initialTokenQuota)
+	task := makeTask(userID, 0, taskQuota, tokenID, BillingSourceWallet, 0)
+	task.Status = model.TaskStatusInProgress
+	require.NoError(t, model.DB.Create(task).Error)
+
+	assert.False(t, RefundTaskQuota(ctx, task, "invalid non-failure refund"))
+	assert.Equal(t, initialUserQuota, getUserQuota(t, userID))
+	assert.Equal(t, initialTokenQuota, getTokenRemainQuota(t, tokenID))
+	assert.Equal(t, taskQuota, getTaskQuota(t, task.ID))
 	assert.Equal(t, int64(0), countLogs(t))
 }
 
