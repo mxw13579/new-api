@@ -43,6 +43,11 @@ const mockModule = (
 ).mock.module
 
 mockModule('react-i18next', () => ({
+  I18nextProvider: (props: { children?: ReactNode }) => props.children,
+  initReactI18next: {
+    type: '3rdParty',
+    init: () => undefined,
+  },
   useTranslation: () => ({
     t: (key: string, options?: Record<string, string>) => {
       let text = key

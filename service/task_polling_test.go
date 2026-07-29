@@ -426,32 +426,68 @@ func TestUpdateSunoTasksStalePollsRefundExactlyOnce(t *testing.T) {
 	assert.Equal(t, int64(1), countLogs(t))
 }
 
-func TestRunTaskPollingOnceDoesNotRefundHistoricalFailedTask(t *testing.T) {
+func TestSweepUnrefundedFailedTasksRefundsAtCutoffAndSkipsLegacy(t *testing.T) {
 	truncate(t)
 
-	const userID, initialQuota, taskQuota = 402, 10_000, 1_200
+	const userID = 402
+	const initialQuota, modernTaskQuota, legacyTaskQuota = 10_000, 1_200, 1_800
 	seedUser(t, userID, initialQuota)
 
-	task := makeTask(userID, 0, taskQuota, 0, BillingSourceWallet, 0)
-	task.TaskID = "historical_failed_already_refunded"
+	modernTask := makeTask(userID, 0, modernTaskQuota, 0, BillingSourceWallet, 0)
+	modernTask.TaskID = "modern_failed_pending_refund"
+	modernTask.Status = model.TaskStatusFailure
+	modernTask.Progress = "100%"
+	modernTask.SubmitTime = 1740182400 // 2025-02-22 00:00:00 UTC
+	modernTask.UpdatedAt = time.Now().Add(-time.Minute).Unix()
+	require.NoError(t, model.DB.Create(modernTask).Error)
+
+	legacyTask := makeTask(userID, 0, legacyTaskQuota, 0, BillingSourceWallet, 0)
+	legacyTask.TaskID = "legacy_failed_without_refund"
+	legacyTask.Status = model.TaskStatusFailure
+	legacyTask.Progress = "100%"
+	legacyTask.SubmitTime = 1740182399 // 2025-02-21 23:59:59 UTC
+	legacyTask.UpdatedAt = time.Now().Add(-time.Minute).Unix()
+	require.NoError(t, model.DB.Create(legacyTask).Error)
+
+	sweepUnrefundedFailedTasks(context.Background())
+	sweepUnrefundedFailedTasks(context.Background())
+
+	assert.Zero(t, getTaskQuota(t, modernTask.ID))
+	assert.Equal(t, legacyTaskQuota, getTaskQuota(t, legacyTask.ID))
+	assert.Equal(t, initialQuota+modernTaskQuota, getUserQuota(t, userID))
+	assert.Equal(t, int64(1), countLogs(t))
+}
+
+func TestSweepUnrefundedFailedTasksRetriesAfterTransientFundingFailure(t *testing.T) {
+	truncate(t)
+
+	const userID, subscriptionID, taskQuota = 404, 404, 900
+	const subscriptionUsed int64 = 5_000
+	seedUser(t, userID, 0)
+
+	task := makeTask(userID, 0, taskQuota, 0, BillingSourceSubscription, subscriptionID)
+	task.TaskID = "subscription_failed_pending_refund"
 	task.Status = model.TaskStatusFailure
 	task.Progress = "100%"
-	task.SubmitTime = time.Now().Add(-90 * 24 * time.Hour).Unix()
+	task.SubmitTime = 1740182400
 	task.UpdatedAt = time.Now().Add(-time.Minute).Unix()
 	require.NoError(t, model.DB.Create(task).Error)
 
-	previousFactory := GetTaskAdaptorFunc
-	GetTaskAdaptorFunc = func(constant.TaskPlatform) TaskPollingAdaptor {
-		return &taskPollingFetchAdaptor{}
-	}
-	t.Cleanup(func() { GetTaskAdaptorFunc = previousFactory })
+	sweepUnrefundedFailedTasks(context.Background())
 
-	summary := RunTaskPollingOnce(context.Background(), nil)
-
-	assert.Zero(t, summary.UnfinishedTasks)
-	assert.Equal(t, initialQuota, getUserQuota(t, userID))
 	assert.Equal(t, taskQuota, getTaskQuota(t, task.ID))
 	assert.Equal(t, int64(0), countLogs(t))
+
+	seedSubscription(t, subscriptionID, userID, 10_000, subscriptionUsed)
+	require.NoError(t, model.DB.Model(&model.Task{}).
+		Where("id = ?", task.ID).
+		UpdateColumn("updated_at", time.Now().Add(-time.Minute).Unix()).Error)
+
+	sweepUnrefundedFailedTasks(context.Background())
+
+	assert.Zero(t, getTaskQuota(t, task.ID))
+	assert.Equal(t, subscriptionUsed-int64(taskQuota), getSubscriptionUsed(t, subscriptionID))
+	assert.Equal(t, int64(1), countLogs(t))
 }
 
 func TestSweepTimedOutTasksHonorsRefundRolloutBoundary(t *testing.T) {
@@ -468,13 +504,13 @@ func TestSweepTimedOutTasksHonorsRefundRolloutBoundary(t *testing.T) {
 	legacyTask := makeTask(userID, 0, legacyTaskQuota, 0, BillingSourceWallet, 0)
 	legacyTask.TaskID = "legacy_timeout_without_refund"
 	legacyTask.Progress = "50%"
-	legacyTask.SubmitTime = 1771718399 // 2026-02-21 23:59:59 UTC
+	legacyTask.SubmitTime = 1740182399 // 2025-02-21 23:59:59 UTC
 	require.NoError(t, model.DB.Create(legacyTask).Error)
 
 	modernTask := makeTask(userID, 0, modernTaskQuota, 0, BillingSourceWallet, 0)
 	modernTask.TaskID = "modern_timeout_with_refund"
 	modernTask.Progress = "50%"
-	modernTask.SubmitTime = 1771718400 // 2026-02-22 00:00:00 UTC
+	modernTask.SubmitTime = 1740182400 // 2025-02-22 00:00:00 UTC
 	require.NoError(t, model.DB.Create(modernTask).Error)
 
 	previousTimeout := constant.TaskTimeoutMinutes

@@ -225,3 +225,64 @@ func TestLoadOptionsMarksRetiredInvoiceFeeQuotaForExplicitMigration(t *testing.T
 	}))
 	require.False(t, operation_setting.GetInvoiceSetting().FeePercentMigrationRequired)
 }
+
+func TestUpdateOptionRejectsInvalidToolPricesWithoutChangingDatabaseOrOptionMap(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&Option{}))
+	const originalValue = `{"web_search":10}`
+	require.NoError(t, db.Create(&Option{Key: operation_setting.ToolPriceOptionKey, Value: originalValue}).Error)
+
+	previousDB := DB
+	previousOptionMap := common.OptionMap
+	DB = db
+	common.OptionMap = map[string]string{operation_setting.ToolPriceOptionKey: originalValue}
+	t.Cleanup(func() {
+		DB = previousDB
+		common.OptionMap = previousOptionMap
+	})
+
+	require.Error(t, UpdateOption(operation_setting.ToolPriceOptionKey, `{"web_search":-1}`))
+
+	var stored Option
+	require.NoError(t, db.First(&stored, "key = ?", operation_setting.ToolPriceOptionKey).Error)
+	require.Equal(t, originalValue, stored.Value)
+	require.Equal(t, map[string]string{operation_setting.ToolPriceOptionKey: originalValue}, common.OptionMap)
+}
+
+func TestUpdateOptionsBulkRejectsInvalidToolPricesWithoutChangingDatabaseOrOptionMap(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&Option{}))
+	const originalToolPrices = `{"web_search":10}`
+	require.NoError(t, db.Create(&Option{Key: operation_setting.ToolPriceOptionKey, Value: originalToolPrices}).Error)
+	require.NoError(t, db.Create(&Option{Key: "SystemName", Value: "before"}).Error)
+
+	previousDB := DB
+	previousOptionMap := common.OptionMap
+	DB = db
+	common.OptionMap = map[string]string{
+		operation_setting.ToolPriceOptionKey: originalToolPrices,
+		"SystemName":                         "before",
+	}
+	t.Cleanup(func() {
+		DB = previousDB
+		common.OptionMap = previousOptionMap
+	})
+
+	require.Error(t, UpdateOptionsBulk(map[string]string{
+		operation_setting.ToolPriceOptionKey: `{"web_search":"invalid"}`,
+		"SystemName":                         "after",
+	}))
+
+	var storedToolPrices Option
+	var storedSystemName Option
+	require.NoError(t, db.First(&storedToolPrices, "key = ?", operation_setting.ToolPriceOptionKey).Error)
+	require.NoError(t, db.First(&storedSystemName, "key = ?", "SystemName").Error)
+	require.Equal(t, originalToolPrices, storedToolPrices.Value)
+	require.Equal(t, "before", storedSystemName.Value)
+	require.Equal(t, map[string]string{
+		operation_setting.ToolPriceOptionKey: originalToolPrices,
+		"SystemName":                         "before",
+	}, common.OptionMap)
+}

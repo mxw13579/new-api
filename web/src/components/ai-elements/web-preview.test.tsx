@@ -19,7 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import * as bunTest from 'bun:test'
 import assert from 'node:assert/strict'
 
-import { createElement } from 'react'
+import { createElement, type ReactNode } from 'react'
 import { renderToReadableStream } from 'react-dom/server.browser'
 
 type MockModule = (
@@ -32,6 +32,11 @@ const mockModule = (bunTest as unknown as { mock: { module: MockModule } }).mock
   .module
 
 mockModule('react-i18next', () => ({
+  I18nextProvider: (props: { children?: ReactNode }) => props.children,
+  initReactI18next: {
+    type: '3rdParty',
+    init: () => undefined,
+  },
   useTranslation: () => ({ t: (key: string) => key }),
 }))
 

@@ -55,6 +55,11 @@ mockModule('@tanstack/react-router', () => ({
 }))
 
 mockModule('react-i18next', () => ({
+  I18nextProvider: (props: { children?: ReactNode }) => props.children,
+  initReactI18next: {
+    type: '3rdParty',
+    init: () => undefined,
+  },
   useTranslation: () => ({
     t: (key: string) => key,
   }),

@@ -256,3 +256,86 @@ func TestUpdateWithStatus_ConcurrentWinner(t *testing.T) {
 	}
 	assert.Equal(t, 1, winCount, "exactly one goroutine should win the CAS")
 }
+
+func TestClaimQuotaForRefund_ConcurrentExactlyOneClaimSucceeds(t *testing.T) {
+	truncateTables(t)
+
+	task := &Task{
+		TaskID: "task_refund_concurrent_claim",
+		Status: TaskStatusFailure,
+		Quota:  1000,
+		Data:   json.RawMessage(`{}`),
+	}
+	insertTask(t, task)
+
+	const goroutines = 8
+	claims := make([]bool, goroutines)
+	errs := make([]error, goroutines)
+	var wait sync.WaitGroup
+	wait.Add(goroutines)
+	for i := 0; i < goroutines; i++ {
+		go func(index int) {
+			defer wait.Done()
+			claims[index], errs[index] = ClaimQuotaForRefund(task.ID, task.Quota)
+		}(i)
+	}
+	wait.Wait()
+
+	claimCount := 0
+	for i := range claims {
+		require.NoError(t, errs[i])
+		if claims[i] {
+			claimCount++
+		}
+	}
+	assert.Equal(t, 1, claimCount)
+
+	var reloaded Task
+	require.NoError(t, DB.First(&reloaded, task.ID).Error)
+	assert.Zero(t, reloaded.Quota)
+}
+
+func TestGetUnrefundedFailedTasks_Uses2025CutoffBoundary(t *testing.T) {
+	truncateTables(t)
+
+	const refundCutoff = int64(1740182400) // 2025-02-22 00:00:00 UTC
+	tasks := []*Task{
+		{TaskID: "before_cutoff", Status: TaskStatusFailure, Quota: 100, SubmitTime: refundCutoff - 1, Data: json.RawMessage(`{}`)},
+		{TaskID: "at_cutoff", Status: TaskStatusFailure, Quota: 200, SubmitTime: refundCutoff, Data: json.RawMessage(`{}`)},
+		{TaskID: "after_cutoff", Status: TaskStatusFailure, Quota: 300, SubmitTime: refundCutoff + 1, Data: json.RawMessage(`{}`)},
+	}
+	for _, task := range tasks {
+		insertTask(t, task)
+	}
+
+	found := GetUnrefundedFailedTasks(time.Now().Unix()+1, 10)
+	require.Len(t, found, 2)
+	assert.Equal(t, []int64{tasks[1].ID, tasks[2].ID}, []int64{found[0].ID, found[1].ID})
+}
+
+func TestHasTaskPollingWork_KeepsSchedulerLiveForRefundAtCutoff(t *testing.T) {
+	truncateTables(t)
+	assert.False(t, HasTaskPollingWork())
+
+	legacy := &Task{
+		TaskID:     "legacy_failed_work",
+		Status:     TaskStatusFailure,
+		Progress:   "100%",
+		Quota:      500,
+		SubmitTime: 1740182399,
+		Data:       json.RawMessage(`{}`),
+	}
+	insertTask(t, legacy)
+	assert.False(t, HasTaskPollingWork())
+
+	refundable := &Task{
+		TaskID:     "refundable_failed_work",
+		Status:     TaskStatusFailure,
+		Progress:   "100%",
+		Quota:      500,
+		SubmitTime: 1740182400,
+		Data:       json.RawMessage(`{}`),
+	}
+	insertTask(t, refundable)
+	assert.True(t, HasTaskPollingWork())
+}
