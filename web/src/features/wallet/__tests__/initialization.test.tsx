@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { describe, expect, it } from 'bun:test'
-import { spawn } from 'node:child_process'
+import { spawnSync } from 'node:child_process'
 import { after } from 'node:test'
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -31,8 +31,8 @@ const isolatedRun = process.env.WALLET_INITIALIZATION_ISOLATED === '1'
 
 if (!isolatedRun) {
   describe('Wallet topup initialization isolation', () => {
-    it('verifies initialization in a disposable Bun process', async () => {
-      const child = spawn(
+    it('verifies initialization in a disposable Bun process', () => {
+      const child = spawnSync(
         process.execPath,
         ['test', 'src/features/wallet/__tests__/initialization.test.tsx'],
         {
@@ -41,21 +41,13 @@ if (!isolatedRun) {
             ...process.env,
             WALLET_INITIALIZATION_ISOLATED: '1',
           },
+          encoding: 'utf8',
+          timeout: 15_000,
         }
       )
-      let output = ''
-      child.stdout.on('data', (chunk) => {
-        output += String(chunk)
-      })
-      child.stderr.on('data', (chunk) => {
-        output += String(chunk)
-      })
-      const exitCode = await new Promise<number | null>((resolve, reject) => {
-        child.once('error', reject)
-        child.once('close', resolve)
-      })
+      const output = child.stdout + child.stderr
 
-      expect(exitCode).toBe(0)
+      expect(child.status).toBe(0)
       expect(
         output.includes(
           'Detected multiple renderers concurrently rendering the same context provider'
@@ -202,8 +194,9 @@ if (!isolatedRun) {
     '../components/dialogs/transfer-dialog',
   ]) {
     const moduleName = specifier.split('/').at(-1)
-    if (!moduleName)
+    if (!moduleName) {
       throw new Error(`Invalid component specifier: ${specifier}`)
+    }
     const exportName = moduleName
       .split('-')
       .map((part) => part[0].toUpperCase() + part.slice(1))
