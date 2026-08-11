@@ -36,11 +36,13 @@ import {
   SOURCE_TIME,
   normalizeTierLabel,
   parseTiersFromExpr,
+  requestRuleGroupsFromTrace,
   splitBillingExprAndRequestRules,
   tryParseRequestRuleExpr,
   type ParsedTier,
   type RequestCondition,
   type RequestRuleGroup,
+  type RequestRuleTrace,
   type TierCondition,
 } from '../lib/billing-expr'
 import {
@@ -57,6 +59,8 @@ type DynamicPricingBreakdownProps = {
    * the usage-log details dialog to show which tier the engine selected.
    */
   matchedTierLabel?: string | null
+  /** Request-rule traces emitted by the settlement run. */
+  requestRules?: RequestRuleTrace[] | null
   /**
    * Hide cache-pricing columns regardless of the per-tier values. The log
    * details dialog passes this when the actual request did not consume any
@@ -153,9 +157,10 @@ function describeGroup(
   group: RequestRuleGroup,
   t: (key: string) => string
 ): string {
-  return (group.conditions || [])
-    .map((c) => describeCondition(c, t))
+  const description = (group.conditions || [])
+    .map((condition) => describeCondition(condition, t))
     .join(' && ')
+  return description || group.conditionText || ''
 }
 
 type DynamicPricingBreakdownPlan = StablePricingPlan & {
@@ -166,11 +171,15 @@ type DynamicPricingBreakdownPlan = StablePricingPlan & {
 /** Parses and plans the shared pricing view model used by every rendered list. */
 function planDynamicPricingBreakdown(
   coordinator: StablePricingSequenceCoordinator,
-  expression: string
+  expression: string,
+  requestRules?: RequestRuleTrace[] | null
 ): DynamicPricingBreakdownPlan {
   const split = splitBillingExprAndRequestRules(expression)
   const tiers = parseTiersFromExpr(split.billingExpr)
-  const ruleGroups = tryParseRequestRuleExpr(split.requestRuleExpr || '') || []
+  const ruleGroups =
+    requestRules != null
+      ? requestRuleGroupsFromTrace(requestRules)
+      : tryParseRequestRuleExpr(split.requestRuleExpr || '') || []
   const plan = coordinator.plan({ tiers, ruleGroups })
   return { tiers, ruleGroups, ...plan }
 }
@@ -178,6 +187,7 @@ function planDynamicPricingBreakdown(
 export function DynamicPricingBreakdown({
   billingExpr,
   matchedTierLabel,
+  requestRules,
   hideCacheColumns = false,
   compact = false,
 }: DynamicPricingBreakdownProps) {
@@ -206,8 +216,8 @@ export function DynamicPricingBreakdown({
   }, [currency])
 
   const pricingPlan = useMemo(
-    () => planDynamicPricingBreakdown(pricingCoordinator, expr),
-    [expr, pricingCoordinator]
+    () => planDynamicPricingBreakdown(pricingCoordinator, expr, requestRules),
+    [expr, pricingCoordinator, requestRules]
   )
   useLayoutEffect(() => {
     pricingCoordinator.commit(pricingPlan.nextSnapshot)
@@ -257,7 +267,6 @@ export function DynamicPricingBreakdown({
       (tier) => Number(tier[v.field as string as keyof ParsedTier] || 0) > 0
     )
   })
-
   return (
     <section className={cn('min-w-0', !compact && 'py-3 sm:py-4')}>
       {!compact && (
@@ -454,27 +463,37 @@ export function DynamicPricingBreakdown({
             {t('Conditional multipliers')}
           </div>
           <ul className='space-y-1.5'>
-            {pricingViewModel.ruleGroups.map(({ item: group, key }) => (
-              <li
-                key={key}
-                className='bg-muted/50 flex items-center justify-between gap-3 rounded-md px-3 py-2'
-              >
-                <span
+            {pricingViewModel.ruleGroups.map(({ item: group, key }) => {
+              const isMatched = group.matched === true
+              return (
+                <li
+                  key={key}
                   className={cn(
-                    'text-foreground break-all',
-                    compact ? 'text-xs' : 'text-sm'
+                    'bg-muted/50 flex items-center justify-between gap-3 rounded-md border border-transparent px-3 py-2',
+                    isMatched && 'border-emerald-500/40 bg-emerald-500/10'
                   )}
                 >
-                  {describeGroup(group, t)}
-                </span>
-                <Badge
-                  variant='secondary'
-                  className='shrink-0 bg-orange-100 text-orange-700 dark:bg-orange-500/20 dark:text-orange-300'
-                >
-                  {group.multiplier}x
-                </Badge>
-              </li>
-            ))}
+                  <span
+                    className={cn(
+                      'text-foreground break-all',
+                      compact ? 'text-xs' : 'text-sm'
+                    )}
+                  >
+                    {describeGroup(group, t)}
+                  </span>
+                  <Badge
+                    variant='secondary'
+                    className={cn(
+                      'shrink-0 bg-orange-100 text-orange-700 dark:bg-orange-500/20 dark:text-orange-300',
+                      isMatched &&
+                        'bg-emerald-100 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-300'
+                    )}
+                  >
+                    {group.multiplier}x{isMatched && ` · ${t('Matched')}`}
+                  </Badge>
+                </li>
+              )
+            })}
           </ul>
         </div>
       )}
