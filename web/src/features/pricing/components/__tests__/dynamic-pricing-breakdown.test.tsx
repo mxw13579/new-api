@@ -19,15 +19,11 @@ For commercial licensing, please contact support@quantumnous.com
 import { describe, it } from 'bun:test'
 import assert from 'node:assert/strict'
 
+import { Window } from 'happy-dom'
 import type { ReactNode } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 
-import {
-  parseTiersFromExpr,
-  requestRuleGroupsFromTrace,
-  type RequestRuleTrace,
-} from '../../lib/billing-expr'
-import { StablePricingSequenceCoordinator } from '../../lib/stable-pricing-keys'
+import type { RequestRuleTrace } from '../../lib/billing-expr'
 
 type MockModule = (
   specifier: string,
@@ -99,34 +95,130 @@ describe('trace-driven dynamic pricing breakdown', () => {
     assert.match(html, />4x</)
   })
 
-  it('keeps duplicate trace-rule keys unique and stable after reparsing', () => {
-    const coordinator = new StablePricingSequenceCoordinator()
+  it('retains duplicate trace-rule DOM nodes after equivalent traces are reallocated', async () => {
+    const domWindow = new Window()
+    const domGlobals = [
+      'window',
+      'document',
+      'navigator',
+      'HTMLElement',
+      'SVGElement',
+      'Node',
+      'Element',
+      'Event',
+      'CustomEvent',
+      'MutationObserver',
+      'requestAnimationFrame',
+      'cancelAnimationFrame',
+      'getComputedStyle',
+    ] as const
+    const originalDomGlobals = domGlobals.map((key) => ({
+      key,
+      descriptor: Object.getOwnPropertyDescriptor(globalThis, key),
+    }))
+
+    for (const key of domGlobals) {
+      Object.defineProperty(globalThis, key, {
+        configurable: true,
+        value: domWindow[key],
+      })
+    }
+
+    const reactTestGlobals = globalThis as typeof globalThis & {
+      IS_REACT_ACT_ENVIRONMENT?: boolean
+    }
+    const originalActEnvironment = Object.getOwnPropertyDescriptor(
+      reactTestGlobals,
+      'IS_REACT_ACT_ENVIRONMENT'
+    )
+    Object.defineProperty(reactTestGlobals, 'IS_REACT_ACT_ENVIRONMENT', {
+      configurable: true,
+      value: true,
+    })
+
+    const consoleErrors: string[] = []
+    const runtimeConsole = globalThis.console
+    const originalConsoleError = Object.getOwnPropertyDescriptor(
+      runtimeConsole,
+      'error'
+    )
+    Object.defineProperty(runtimeConsole, 'error', {
+      configurable: true,
+      value: (...args: unknown[]) => {
+        consoleErrors.push(args.map(String).join(' '))
+      },
+    })
+
+    const { act } = await import('react')
+    const { createRoot } = await import('react-dom/client')
+    const container = document.createElement('div')
+    document.body.append(container)
+    const root = createRoot(container)
     const duplicateRule: RequestRuleTrace = {
       cond: 'header("x-plan") == "pro"',
       multiplier: 2,
       matched: false,
     }
-    const input = {
-      tiers: parseTiersFromExpr('tier("base", 1, 2)'),
-      ruleGroups: requestRuleGroupsFromTrace([
-        { ...duplicateRule },
-        { ...duplicateRule },
-      ]),
+
+    try {
+      await act(async () => {
+        root.render(
+          <DynamicPricingBreakdown
+            billingExpr='tier("base", 1, 2)'
+            requestRules={[{ ...duplicateRule }, { ...duplicateRule }]}
+            compact
+          />
+        )
+      })
+      const firstRows = [...container.querySelectorAll('ul > li')]
+      assert.equal(firstRows.length, 2)
+
+      await act(async () => {
+        root.render(
+          <DynamicPricingBreakdown
+            billingExpr='tier("base", 1, 2)'
+            requestRules={[{ ...duplicateRule }, { ...duplicateRule }]}
+            compact
+          />
+        )
+      })
+      const repeatedRows = [...container.querySelectorAll('ul > li')]
+
+      assert.equal(repeatedRows.length, 2)
+      assert.strictEqual(repeatedRows[0], firstRows[0])
+      assert.strictEqual(repeatedRows[1], firstRows[1])
+      assert.deepEqual(
+        consoleErrors.filter((message) =>
+          /same key|unique.*key|duplicate key/i.test(message)
+        ),
+        []
+      )
+    } finally {
+      await act(async () => root.unmount())
+      container.remove()
+      if (originalConsoleError) {
+        Object.defineProperty(runtimeConsole, 'error', originalConsoleError)
+      } else {
+        Reflect.deleteProperty(runtimeConsole, 'error')
+      }
+      domWindow.close()
+
+      for (const { key, descriptor } of originalDomGlobals) {
+        if (descriptor) {
+          Object.defineProperty(globalThis, key, descriptor)
+        } else {
+          Reflect.deleteProperty(globalThis, key)
+        }
+      }
+      if (originalActEnvironment) {
+        Object.defineProperty(
+          reactTestGlobals,
+          'IS_REACT_ACT_ENVIRONMENT',
+          originalActEnvironment
+        )
+      } else {
+        Reflect.deleteProperty(reactTestGlobals, 'IS_REACT_ACT_ENVIRONMENT')
+      }
     }
-
-    const firstPlan = coordinator.plan(input)
-    coordinator.commit(firstPlan.nextSnapshot)
-    const repeatedPlan = coordinator.plan({
-      tiers: parseTiersFromExpr('tier("base", 1, 2)'),
-      ruleGroups: requestRuleGroupsFromTrace([
-        { ...duplicateRule },
-        { ...duplicateRule },
-      ]),
-    })
-    const firstKeys = firstPlan.viewModel.ruleGroups.map(({ key }) => key)
-    const repeatedKeys = repeatedPlan.viewModel.ruleGroups.map(({ key }) => key)
-
-    assert.equal(new Set(firstKeys).size, 2)
-    assert.deepEqual(repeatedKeys, firstKeys)
   })
 })
