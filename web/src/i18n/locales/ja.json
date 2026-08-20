@@ -2837,7 +2837,9 @@
     "Minimum amount": "最低金額",
     "Minimum amount in minor units": "最低金額（最小通貨単位）",
     "Minimum check-in quota": "最小チェックインクォータ",
+    "Minimum invoice amount (CNY)": "最低請求金額（CNY）",
     "Minimum invoice amount cannot be negative": "最低請求額は負数にできません",
+    "Minimum invoice amount must be at least 100 CNY": "請求書の最低金額は100 CNY以上である必要があります",
     "Minimum LinuxDO trust level required": "必要な最小LinuxDOトラストレベル",
     "Minimum quota amount awarded for check-in": "チェックインで付与される最小クォータ量",
     "Minimum recharge amount in USD": "米ドルでの最小リチャージ額",
@@ -5573,7 +5575,6 @@
     "Zero retention": "データ保持なし",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V 4",
-    "Zoom": "ズーム",
-    "Minimum invoice amount must be at least 100 CNY": "請求書の最低金額は100 CNY以上である必要があります"
+    "Zoom": "ズーム"
   }
 }

@@ -2837,7 +2837,9 @@
     "Minimum amount": "Минимальная сумма",
     "Minimum amount in minor units": "Минимальная сумма в малых единицах",
     "Minimum check-in quota": "Минимальная квота регистрации",
+    "Minimum invoice amount (CNY)": "Минимальная сумма счета (CNY)",
     "Minimum invoice amount cannot be negative": "Минимальная сумма не может быть отрицательной",
+    "Minimum invoice amount must be at least 100 CNY": "Минимальная сумма счета должна быть не менее 100 CNY",
     "Minimum LinuxDO trust level required": "Требуемый минимальный уровень доверия LinuxDO",
     "Minimum quota amount awarded for check-in": "Минимальная сумма квоты, присуждаемая за регистрацию",
     "Minimum recharge amount in USD": "Минимальная сумма пополнения в USD",
@@ -5573,7 +5575,6 @@
     "Zero retention": "Без хранения данных",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom",
-    "Minimum invoice amount must be at least 100 CNY": "Минимальная сумма счета должна быть не менее 100 CNY"
+    "Zoom": "Zoom"
   }
 }

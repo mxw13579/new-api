@@ -2837,7 +2837,9 @@
     "Minimum amount": "最低金額",
     "Minimum amount in minor units": "最低金額（最小貨幣單位）",
     "Minimum check-in quota": "簽到最小額度",
+    "Minimum invoice amount (CNY)": "最低開票金額（人民幣元）",
     "Minimum invoice amount cannot be negative": "最低發票金額不能為負數",
+    "Minimum invoice amount must be at least 100 CNY": "最低開票金額必須至少為 100 元人民幣",
     "Minimum LinuxDO trust level required": "所需的最低 LinuxDO 信任級別",
     "Minimum quota amount awarded for check-in": "簽到獎勵的最小額度",
     "Minimum recharge amount in USD": "最低儲值金額（美元）",
@@ -5573,7 +5575,6 @@
     "Zero retention": "零數據保留",
     "Zhipu": "智譜",
     "Zhipu V4": "智譜 V4",
-    "Zoom": "縮放",
-    "Minimum invoice amount must be at least 100 CNY": "最低開票金額必須至少為 100 元人民幣"
+    "Zoom": "縮放"
   }
 }

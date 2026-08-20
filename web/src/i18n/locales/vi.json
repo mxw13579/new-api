@@ -2837,7 +2837,9 @@
     "Minimum amount": "Số tiền tối thiểu",
     "Minimum amount in minor units": "Số tiền tối thiểu theo đơn vị nhỏ nhất",
     "Minimum check-in quota": "Hạn ngạch điểm danh tối thiểu",
+    "Minimum invoice amount (CNY)": "Số tiền hóa đơn tối thiểu (CNY)",
     "Minimum invoice amount cannot be negative": "Số tiền tối thiểu không được âm",
+    "Minimum invoice amount must be at least 100 CNY": "Số tiền hóa đơn tối thiểu phải ít nhất là 100 CNY",
     "Minimum LinuxDO trust level required": "Yêu cầu mức độ tin cậy {{LinuxDO}} tối thiểu",
     "Minimum quota amount awarded for check-in": "Số lượng hạn ngạch tối thiểu được trao cho điểm danh",
     "Minimum recharge amount in USD": "Số tiền nạp tối thiểu bằng USD",
@@ -5573,7 +5575,6 @@
     "Zero retention": "Không lưu dữ liệu",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom",
-    "Minimum invoice amount must be at least 100 CNY": "Số tiền hóa đơn tối thiểu phải ít nhất là 100 CNY"
+    "Zoom": "Zoom"
   }
 }

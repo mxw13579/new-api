@@ -2837,7 +2837,9 @@
     "Minimum amount": "Minimum amount",
     "Minimum amount in minor units": "Minimum amount in minor units",
     "Minimum check-in quota": "Minimum check-in quota",
+    "Minimum invoice amount (CNY)": "Minimum invoice amount (CNY)",
     "Minimum invoice amount cannot be negative": "Minimum invoice amount cannot be negative",
+    "Minimum invoice amount must be at least 100 CNY": "Minimum invoice amount must be at least 100 CNY",
     "Minimum LinuxDO trust level required": "Minimum LinuxDO trust level required",
     "Minimum quota amount awarded for check-in": "Minimum quota amount awarded for check-in",
     "Minimum recharge amount in USD": "Minimum recharge amount in USD",
@@ -5573,7 +5575,6 @@
     "Zero retention": "Zero retention",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom",
-    "Minimum invoice amount must be at least 100 CNY": "Minimum invoice amount must be at least 100 CNY"
+    "Zoom": "Zoom"
   }
 }

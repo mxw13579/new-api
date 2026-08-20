@@ -516,12 +516,13 @@ test('invoice settings validates and saves percentage fees and R2 fields', async
   expect(backend.settingWrites).toEqual([])
 
   await page.getByLabel('Application window days').fill('30')
-  await page.getByLabel('Minimum amount in minor units').fill('9999')
+  const minimumAmountInput = page.getByLabel('Minimum invoice amount (CNY)')
+  await minimumAmountInput.fill('99.99')
   await page.getByRole('button', { name: 'Save invoice settings' }).click()
-  await expect(page.getByText('Minimum invoice amount must be at least 100 CNY')).toBeVisible()
+  await expect(minimumAmountInput).toHaveJSProperty('validity.valid', false)
   expect(backend.settingWrites).toEqual([])
 
-  await page.getByLabel('Minimum amount in minor units').fill('10000')
+  await minimumAmountInput.fill('100')
   await page.getByLabel('Invoice fee percentage').fill('5')
   await page.getByLabel('PDF retention days').fill('120')
   await page.getByRole('switch', { name: 'Enable company invoices' }).click()

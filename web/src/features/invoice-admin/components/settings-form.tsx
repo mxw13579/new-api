@@ -160,21 +160,26 @@ export function SettingsForm(props: SettingsFormProps) {
               data-disabled={props.pending || undefined}
             >
               <FieldLabel htmlFor='invoice-minimum-amount'>
-                {t('Minimum amount in minor units')}
+                {t('Minimum invoice amount (CNY)')}
               </FieldLabel>
               <Input
                 id='invoice-minimum-amount'
                 type='number'
-                min={0}
-                step={1}
-                value={setting.minimum_amount_minor}
+                min={100}
+                step={0.01}
+                value={setting.minimum_amount_minor / 100}
                 disabled={props.pending}
                 aria-invalid={errorKey ? true : undefined}
                 aria-describedby={
                   errorKey ? 'invoice-settings-error' : undefined
                 }
                 onChange={(event) =>
-                  numberField('minimum_amount_minor', event.target.value)
+                  setSetting((current) => ({
+                    ...current,
+                    minimum_amount_minor: Math.round(
+                      Number(event.target.value) * 100
+                    ),
+                  }))
                 }
               />
             </Field>
