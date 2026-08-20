@@ -2365,6 +2365,7 @@
     "Icon file must be 100 KB or smaller": "圖標檔案必須小於等於 100 KB",
     "Icon identifier (e.g. github, gitlab)": "圖標標識符（例如 github、gitlab）",
     "ID": "ID",
+    "Identity card number": "身分證號",
     "If an upstream error contains any of these keywords (case insensitive), the channel will be disabled automatically.": "如果上游錯誤包含以下任何關鍵詞（不區分大小寫），渠道將自動停用。",
     "If authorization succeeds, the generated JSON will be inserted into the key field. You still need to save the channel to persist it.": "授權成功後，生成的 JSON 將插入金鑰欄位。您仍需儲存渠道以持久化。",
     "If connecting to upstream One API or New API relay projects, use OpenAI type instead unless you know what you are doing": "如果連接上游 One API 或 New API 中繼項目，除非您知道自己在做什麼，否則請使用 OpenAI 類型",

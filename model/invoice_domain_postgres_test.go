@@ -37,22 +37,22 @@ func runPersonalInvoicePostgreSQLDomainContract(t *testing.T) {
 	setFee := func(fee int64) {
 		operation_setting.PublishInvoiceSetting(operation_setting.InvoiceSetting{
 			PersonalEnabled: true, CompanyEnabled: true, ApplicationWindowDays: 30,
-			MinimumAmountMinor: 1, FeePercent: int(fee), PDFRetentionDays: 30,
+			MinimumAmountMinor: operation_setting.MinimumInvoiceAmountMinor, FeePercent: int(fee), PDFRetentionDays: 30,
 		})
 	}
 
 	t.Run("profile_expected_version_and_default_convergence", func(t *testing.T) {
 		user := personalInvoicePostgreSQLUser(t, "profile", 1000)
 		first, err := CreateInvoiceProfile(user.Id, dto.CreateInvoiceProfileRequest{
-			Type: constant.InvoiceTypePersonal, Title: "First", IsDefault: true,
+			Type: constant.InvoiceTypePersonal, Title: "First", IdentityCardNumber: "11010519491231002X", IsDefault: true,
 		})
 		require.NoError(t, err)
 		second, err := CreateInvoiceProfile(user.Id, dto.CreateInvoiceProfileRequest{
-			Type: constant.InvoiceTypePersonal, Title: "Second",
+			Type: constant.InvoiceTypePersonal, Title: "Second", IdentityCardNumber: "11010519491231002X",
 		})
 		require.NoError(t, err)
 		third, err := CreateInvoiceProfile(user.Id, dto.CreateInvoiceProfileRequest{
-			Type: constant.InvoiceTypePersonal, Title: "Third",
+			Type: constant.InvoiceTypePersonal, Title: "Third", IdentityCardNumber: "11010519491231002X",
 		})
 		require.NoError(t, err)
 
@@ -260,7 +260,7 @@ func personalInvoicePostgreSQLUserAndProfile(t *testing.T, suffix string, quota 
 	t.Helper()
 	user := personalInvoicePostgreSQLUser(t, suffix, quota)
 	profile, err := CreateInvoiceProfile(user.Id, dto.CreateInvoiceProfileRequest{
-		Type: constant.InvoiceTypePersonal, Title: "Invoice " + suffix, IsDefault: true,
+		Type: constant.InvoiceTypePersonal, Title: "Invoice " + suffix, IdentityCardNumber: "11010519491231002X", IsDefault: true,
 	})
 	require.NoError(t, err)
 	return user, profile

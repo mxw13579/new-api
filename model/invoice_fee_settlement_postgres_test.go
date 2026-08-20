@@ -27,7 +27,7 @@ func TestInvoiceFeeSettlementPostgreSQLCoreRaceContract(t *testing.T) {
 	common.QuotaPerUnit = 100
 	operation_setting.PublishInvoiceSetting(operation_setting.InvoiceSetting{
 		PersonalEnabled: true, CompanyEnabled: true, ApplicationWindowDays: 30,
-		MinimumAmountMinor: 1, FeePercent: 20, PDFRetentionDays: 30,
+		MinimumAmountMinor: operation_setting.MinimumInvoiceAmountMinor, FeePercent: 20, PDFRetentionDays: 30,
 	})
 	t.Cleanup(func() {
 		operation_setting.PublishInvoiceSetting(previousSetting)

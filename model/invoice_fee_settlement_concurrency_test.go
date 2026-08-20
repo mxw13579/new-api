@@ -43,10 +43,10 @@ func setupInvoiceFeeSettlementConcurrentSQLite(t *testing.T, quota int, feePerce
 
 	previousSetting := operation_setting.GetInvoiceSetting()
 	previousQuotaPerUnit := common.QuotaPerUnit
-	common.QuotaPerUnit = 100
+	common.QuotaPerUnit = 1
 	operation_setting.PublishInvoiceSetting(operation_setting.InvoiceSetting{
 		PersonalEnabled: true, CompanyEnabled: true, ApplicationWindowDays: 30,
-		MinimumAmountMinor: 1, FeePercent: int(feePercent), PDFRetentionDays: 30,
+		MinimumAmountMinor: operation_setting.MinimumInvoiceAmountMinor, FeePercent: int(feePercent), PDFRetentionDays: 30,
 	})
 	t.Cleanup(func() {
 		operation_setting.PublishInvoiceSetting(previousSetting)
@@ -56,7 +56,7 @@ func setupInvoiceFeeSettlementConcurrentSQLite(t *testing.T, quota int, feePerce
 	user := User{Username: "invoice-fee-concurrent", Password: "password", Quota: quota}
 	require.NoError(t, DB.Create(&user).Error)
 	profile, err := CreateInvoiceProfile(user.Id, dto.CreateInvoiceProfileRequest{
-		Type: constant.InvoiceTypePersonal, Title: "Concurrent Buyer", IsDefault: true,
+		Type: constant.InvoiceTypePersonal, Title: "Concurrent Buyer", IdentityCardNumber: "11010519491231002X", IsDefault: true,
 	})
 	require.NoError(t, err)
 	return user.Id, profile
@@ -65,7 +65,7 @@ func setupInvoiceFeeSettlementConcurrentSQLite(t *testing.T, quota int, feePerce
 func createInvoiceFeeSettlementTopUp(t *testing.T, id, userID int) {
 	t.Helper()
 	topUp := trustedInvoiceTopUp(id, userID, "invoice-fee-concurrent-trade-"+string(rune('A'+id)))
-	topUp.PaidAmountMinor = ptr(int64(100))
+	topUp.PaidAmountMinor = ptr(operation_setting.MinimumInvoiceAmountMinor)
 	topUp.CompleteTime = time.Now().Unix()
 	require.NoError(t, DB.Create(&topUp).Error)
 }

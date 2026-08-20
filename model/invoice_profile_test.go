@@ -54,20 +54,20 @@ func TestInvoiceProfileValidationAndCreationVersion(t *testing.T) {
 func TestInvoiceProfileExpectedVersionAndDefaultConvergence(t *testing.T) {
 	userID := setupInvoiceProfileTest(t)
 	first, err := CreateInvoiceProfile(userID, dto.CreateInvoiceProfileRequest{
-		Type: constant.InvoiceTypePersonal, Title: "First", IsDefault: true,
+		Type: constant.InvoiceTypePersonal, Title: "First", IdentityCardNumber: "11010519491231002X", IsDefault: true,
 	})
 	require.NoError(t, err)
 	second, err := CreateInvoiceProfile(userID, dto.CreateInvoiceProfileRequest{
-		Type: constant.InvoiceTypePersonal, Title: "Second",
+		Type: constant.InvoiceTypePersonal, Title: "Second", IdentityCardNumber: "11010519491231002X",
 	})
 	require.NoError(t, err)
 	third, err := CreateInvoiceProfile(userID, dto.CreateInvoiceProfileRequest{
-		Type: constant.InvoiceTypePersonal, Title: "Third",
+		Type: constant.InvoiceTypePersonal, Title: "Third", IdentityCardNumber: "11010519491231002X",
 	})
 	require.NoError(t, err)
 
 	_, err = UpdateInvoiceProfile(userID, dto.UpdateInvoiceProfileRequest{
-		ID: first.ID, ExpectedVersion: first.Version + 1, Title: "stale", IsDefault: true,
+		ID: first.ID, ExpectedVersion: first.Version + 1, Title: "stale", IdentityCardNumber: "11010519491231002X", IsDefault: true,
 	})
 	assert.ErrorIs(t, err, ErrInvoiceProfileVersionConflict)
 
@@ -79,7 +79,7 @@ func TestInvoiceProfileExpectedVersionAndDefaultConvergence(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			_, updateErr := UpdateInvoiceProfile(userID, dto.UpdateInvoiceProfileRequest{
-				ID: profile.ID, ExpectedVersion: profile.Version, Title: profile.Title, IsDefault: true,
+				ID: profile.ID, ExpectedVersion: profile.Version, Title: profile.Title, IdentityCardNumber: "11010519491231002X", IsDefault: true,
 			})
 			errs <- updateErr
 		}()

@@ -52,7 +52,7 @@ func runInvoiceIntegrationHardeningScenario(t *testing.T, harness invoiceRestore
 	common.QuotaPerUnit = 8
 	operation_setting.PublishInvoiceSetting(operation_setting.InvoiceSetting{
 		PersonalEnabled: true, CompanyEnabled: true, ApplicationWindowDays: 30,
-		MinimumAmountMinor: 1, FeePercent: 10, PDFRetentionDays: 30,
+		MinimumAmountMinor: operation_setting.MinimumInvoiceAmountMinor, FeePercent: 10, PDFRetentionDays: 30,
 	})
 	t.Cleanup(func() {
 		operation_setting.PublishInvoiceSetting(previousSetting)
@@ -73,7 +73,7 @@ func seedInvoiceIntegrationScenario(t *testing.T, db *gorm.DB, store *invoiceInt
 	t.Helper()
 	happyUser := seedInvoiceIntegrationUser(t, db, "happy", 100)
 	happyProfile := seedInvoiceIntegrationProfile(t, happyUser.Id, "Happy Buyer")
-	seedInvoiceIntegrationTopUp(t, db, 71001, happyUser.Id, "happy", 1250)
+	seedInvoiceIntegrationTopUp(t, db, 71001, happyUser.Id, "happy", 12500)
 	happyApplication, err := CreateInvoiceApplication(happyUser.Id, dto.CreateInvoiceApplicationRequest{
 		RequestID: "ihc-happy", ProfileID: happyProfile.ID,
 		ProfileVersion: happyProfile.Version, TopUpIDs: []int{71001},
@@ -104,7 +104,7 @@ func seedInvoiceIntegrationScenario(t *testing.T, db *gorm.DB, store *invoiceInt
 		ExpectedStatus:              constant.InvoiceApplicationStatusApproved,
 		ExpectedPaymentReviewStatus: constant.InvoicePaymentReviewStatusNone,
 		Issuance: model.InvoiceIssuanceFacts{
-			InvoiceNumber: "IH-C-HAPPY", InvoiceDate: 120, FaceAmountMinor: 1250,
+			InvoiceNumber: "IH-C-HAPPY", InvoiceDate: 120, FaceAmountMinor: 12500,
 			Currency: constant.InvoiceCurrencyCNY,
 		},
 		PDFFactsAttested: true, AttestedBy: 9001, Now: 120,
@@ -116,7 +116,7 @@ func seedInvoiceIntegrationScenario(t *testing.T, db *gorm.DB, store *invoiceInt
 
 	pendingUser := seedInvoiceIntegrationUser(t, db, "pending", 100)
 	pendingProfile := seedInvoiceIntegrationProfile(t, pendingUser.Id, "Pending Buyer")
-	seedInvoiceIntegrationTopUp(t, db, 71002, pendingUser.Id, "pending", 500)
+	seedInvoiceIntegrationTopUp(t, db, 71002, pendingUser.Id, "pending", 10000)
 	pendingApplication, err := CreateInvoiceApplication(pendingUser.Id, dto.CreateInvoiceApplicationRequest{
 		RequestID: "ihc-pending", ProfileID: pendingProfile.ID,
 		ProfileVersion: pendingProfile.Version, TopUpIDs: []int{71002},
@@ -221,7 +221,7 @@ func seedInvoiceIntegrationUser(t *testing.T, db *gorm.DB, suffix string, quota 
 func seedInvoiceIntegrationProfile(t *testing.T, userID int, title string) *dto.InvoiceProfile {
 	t.Helper()
 	profile, err := CreateInvoiceProfile(userID, dto.CreateInvoiceProfileRequest{
-		Type: constant.InvoiceTypePersonal, Title: title, IsDefault: true,
+		Type: constant.InvoiceTypePersonal, Title: title, IdentityCardNumber: "11010519491231002X", IsDefault: true,
 	})
 	require.NoError(t, err)
 	return profile

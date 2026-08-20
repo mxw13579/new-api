@@ -28,10 +28,10 @@ func setupInvoiceApplicationTest(t *testing.T, quota int, feePercent int64) (int
 
 	previous := operation_setting.GetInvoiceSetting()
 	previousQuotaPerUnit := common.QuotaPerUnit
-	common.QuotaPerUnit = 100
+	common.QuotaPerUnit = 1
 	operation_setting.PublishInvoiceSetting(operation_setting.InvoiceSetting{
 		PersonalEnabled: true, CompanyEnabled: true, ApplicationWindowDays: 30,
-		MinimumAmountMinor: 1, FeePercent: int(feePercent), PDFRetentionDays: 30,
+		MinimumAmountMinor: operation_setting.MinimumInvoiceAmountMinor, FeePercent: int(feePercent), PDFRetentionDays: 30,
 	})
 	t.Cleanup(func() {
 		operation_setting.PublishInvoiceSetting(previous)
@@ -41,7 +41,7 @@ func setupInvoiceApplicationTest(t *testing.T, quota int, feePercent int64) (int
 	user := User{Username: "invoice-app-user", Password: "password", Quota: quota}
 	require.NoError(t, DB.Create(&user).Error)
 	profile, err := CreateInvoiceProfile(user.Id, dto.CreateInvoiceProfileRequest{
-		Type: constant.InvoiceTypePersonal, Title: "Alice", IsDefault: true,
+		Type: constant.InvoiceTypePersonal, Title: "Alice", IdentityCardNumber: "11010519491231002X", IsDefault: true,
 	})
 	require.NoError(t, err)
 	return user.Id, profile
@@ -50,7 +50,7 @@ func setupInvoiceApplicationTest(t *testing.T, quota int, feePercent int64) (int
 func createInvoiceTopUp(t *testing.T, id, userID int, amount int64) {
 	t.Helper()
 	topUp := trustedInvoiceTopUp(id, userID, "invoice-trade-"+string(rune('A'+id)))
-	topUp.PaidAmountMinor = ptr(amount)
+	topUp.PaidAmountMinor = ptr(amount * 100)
 	topUp.CompleteTime = time.Now().Unix()
 	require.NoError(t, DB.Create(&topUp).Error)
 }
@@ -69,7 +69,7 @@ func TestCreateInvoiceApplicationClaimsSortedWholeTopUpsAndChargesAtomically(t *
 	application, err := CreateInvoiceApplication(userID,
 		createInvoiceApplicationRequest("request-charge", profile, 31, 12, 31), NewTopUpInvoicePaymentSource())
 	require.NoError(t, err)
-	assert.Equal(t, int64(100), application.AmountMinor)
+	assert.Equal(t, int64(10000), application.AmountMinor)
 	assert.Equal(t, constant.InvoiceFeeStatusPaid, application.FeeStatus)
 	require.NotNil(t, application.FeeChargeEntryID)
 	assert.Nil(t, application.FeeRefundEntryID)
@@ -82,7 +82,7 @@ func TestCreateInvoiceApplicationClaimsSortedWholeTopUpsAndChargesAtomically(t *
 	require.NoError(t, DB.Where("application_id = ?", application.ID).Order("topup_id").Find(&items).Error)
 	require.Len(t, items, 2)
 	assert.Equal(t, []int{12, 31}, []int{items[0].TopUpID, items[1].TopUpID})
-	assert.Equal(t, int64(100), items[0].PaidAmountMinor+items[1].PaidAmountMinor)
+	assert.Equal(t, int64(10000), items[0].PaidAmountMinor+items[1].PaidAmountMinor)
 
 	var ledger []InvoiceFeeLedgerEntry
 	require.NoError(t, DB.Where("application_id = ?", application.ID).Find(&ledger).Error)
@@ -99,7 +99,7 @@ func TestCreateInvoiceApplicationChargesConfiguredPercentageOfInvoiceAmount(t *t
 	application, err := CreateInvoiceApplication(userID,
 		createInvoiceApplicationRequest("request-percentage-charge", profile, 32), nil)
 	require.NoError(t, err)
-	assert.Equal(t, int64(7300), application.AmountMinor)
+	assert.Equal(t, int64(730000), application.AmountMinor)
 	assert.Equal(t, 365, application.FeeQuota)
 
 	var user User

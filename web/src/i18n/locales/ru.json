@@ -2365,6 +2365,7 @@
     "Icon file must be 100 KB or smaller": "Файл иконки должен быть не более 100 КБ",
     "Icon identifier (e.g. github, gitlab)": "Идентификатор иконки (например, github, gitlab)",
     "ID": "ID",
+    "Identity card number": "Номер удостоверения личности",
     "If an upstream error contains any of these keywords (case insensitive), the channel will be disabled automatically.": "Если ошибка вышестоящего уровня содержит любое из этих ключевых слов (без учета регистра), канал будет автоматически отключен.",
     "If authorization succeeds, the generated JSON will be inserted into the key field. You still need to save the channel to persist it.": "При успешной авторизации сгенерированный JSON будет вставлен в поле ключа. Сохраните канал, чтобы применить изменения.",
     "If connecting to upstream One API or New API relay projects, use OpenAI type instead unless you know what you are doing": "При подключении к upstream One API или проектам-ретрансляторам New API используйте тип OpenAI, если только вы точно знаете, что делаете",
