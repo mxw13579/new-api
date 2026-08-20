@@ -1,6 +1,7 @@
 package model
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -23,6 +24,23 @@ type Option struct {
 }
 
 var invoiceSettingUpdateMutex sync.Mutex
+
+func migrateInvoiceMinimumAmountOption(db *gorm.DB) error {
+	var option Option
+	err := db.Where("key = ?", "invoice_setting.minimum_amount_minor").First(&option).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	amount, err := strconv.ParseInt(option.Value, 10, 64)
+	if err != nil || amount >= operation_setting.MinimumInvoiceAmountMinor {
+		return nil
+	}
+	return db.Model(&Option{}).Where("key = ? AND value = ?", option.Key, option.Value).
+		Update("value", strconv.FormatInt(operation_setting.MinimumInvoiceAmountMinor, 10)).Error
+}
 
 func AllOption() ([]*Option, error) {
 	var options []*Option

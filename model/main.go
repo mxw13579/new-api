@@ -303,6 +303,9 @@ func migrateDB() error {
 	if err := MigratePersonalInvoiceStructures(DB); err != nil {
 		return err
 	}
+	if err := migrateInvoiceMinimumAmountOption(DB); err != nil {
+		return err
+	}
 	if err := InitializeUserAuthVersions(); err != nil {
 		return err
 	}
@@ -389,6 +392,9 @@ func migrateDBFast() error {
 		return err
 	}
 	if err := MigratePersonalInvoiceStructures(DB); err != nil {
+		return err
+	}
+	if err := migrateInvoiceMinimumAmountOption(DB); err != nil {
 		return err
 	}
 	if err := InitializeUserAuthVersions(); err != nil {

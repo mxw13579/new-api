@@ -42,6 +42,7 @@ export function redactInvoiceProfilesForCache(
     ...profile,
     title: '',
     tax_number: '',
+    identity_card_number: '',
   }))
 }
 
@@ -55,6 +56,7 @@ export function redactInvoiceApplicationDetailForCache(
       ...detail.profile_snapshot,
       title: '',
       tax_number: '',
+      identity_card_number: '',
     },
   }
 }

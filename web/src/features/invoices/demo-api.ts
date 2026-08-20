@@ -75,7 +75,7 @@ function detailFromSummary(
     },
     policy_snapshot: {
       application_window_days: 90,
-      minimum_amount_minor: 1000,
+      minimum_amount_minor: 10000,
       fee_percent: demoFeePercent,
       fee_quota: summary.fee_quota,
       pdf_retention_days: 365,
@@ -165,7 +165,7 @@ export function createInvoiceDemoApi(): InvoiceApi {
         personal_enabled: true,
         company_enabled: true,
         application_window_days: 90,
-        minimum_amount_minor: 1000,
+        minimum_amount_minor: 10000,
         fee_percent: demoFeePercent,
         quota_per_unit: demoQuotaPerUnit,
         pdf_retention_days: 365,

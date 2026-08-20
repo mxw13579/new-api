@@ -394,7 +394,7 @@ describe('invoice admin contracts', () => {
       personal_enabled: true,
       company_enabled: false,
       application_window_days: 30,
-      minimum_amount_minor: 0,
+      minimum_amount_minor: 10000,
       fee_percent: 5,
       pdf_retention_days: 90,
       r2_endpoint:
@@ -410,7 +410,7 @@ describe('invoice admin contracts', () => {
 
     for (const invalid of [
       { ...valid, application_window_days: 0 },
-      { ...valid, minimum_amount_minor: -1 },
+      { ...valid, minimum_amount_minor: 9999 },
       { ...valid, fee_percent: 101 },
       { ...valid, pdf_retention_days: 0 },
       { ...valid, r2_bucket: '' },

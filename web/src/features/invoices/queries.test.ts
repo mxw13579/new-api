@@ -32,6 +32,7 @@ describe('invoice query-cache redaction', () => {
     const cached = redactInvoiceProfilesForCache([profile])[0]
     assert.equal(cached?.title, '')
     assert.equal(cached?.tax_number, '')
+    assert.equal(cached?.identity_card_number, '')
     assert.equal(profile.title, 'Buyer')
     assert.equal(profile.tax_number, '91310000PRIVATE')
   })
@@ -49,6 +50,7 @@ describe('invoice query-cache redaction', () => {
     const cached = redactInvoiceApplicationDetailForCache(detail)
     assert.equal(cached.profile_snapshot.title, '')
     assert.equal(cached.profile_snapshot.tax_number, '')
+    assert.equal(cached.profile_snapshot.identity_card_number, '')
     assert.equal(detail.profile_snapshot.title, 'Live Fixture Co')
     assert.equal(detail.profile_snapshot.tax_number, '91310000PRIVATE')
   })

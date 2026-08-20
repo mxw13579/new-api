@@ -95,6 +95,7 @@ export function maskInvoiceSensitiveDetail(
       ...detail.profile_snapshot,
       title: PROTECTED_INVOICE_VALUE_KEY,
       tax_number: PROTECTED_INVOICE_VALUE_KEY,
+      identity_card_number: PROTECTED_INVOICE_VALUE_KEY,
     },
   }
 }
