@@ -130,7 +130,7 @@ async function installInvoiceBackend(
             display_name: 'Invoice E2E',
             role: 1,
             group: 'default',
-            quota: 100_000,
+            quota: 1_000_000,
             language: options.language || 'en',
             permissions: { sidebar_settings: false },
           },
@@ -196,7 +196,7 @@ async function installInvoiceBackend(
     }
 
     if (path === '/api/user/self/quota') {
-      await fulfill(route, success({ quota: 100_000 }))
+      await fulfill(route, success({ quota: 1_000_000 }))
       return
     }
 
