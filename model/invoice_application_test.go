@@ -109,6 +109,18 @@ func TestCreateInvoiceApplicationChargesConfiguredPercentageOfInvoiceAmount(t *t
 	assert.Contains(t, application.PolicySnapshot, `"fee_quota":365`)
 }
 
+func TestCreateInvoiceApplicationRejectsAmountBelowCNY100Floor(t *testing.T) {
+	userID, profile := setupInvoiceApplicationTest(t, 1000, 5)
+	createInvoiceTopUp(t, 34, userID, 99)
+
+	_, err := CreateInvoiceApplication(userID,
+		createInvoiceApplicationRequest("request-below-floor", profile, 34), nil)
+	assert.ErrorIs(t, err, ErrInvoiceTopUpIneligible)
+	var topUp TopUp
+	require.NoError(t, DB.First(&topUp, 34).Error)
+	assert.Nil(t, topUp.InvoiceApplicationID)
+}
+
 func TestCreateInvoiceApplicationBlocksLegacyQuotaUntilPercentageSaved(t *testing.T) {
 	userID, profile := setupInvoiceApplicationTest(t, 1000, 0)
 	createInvoiceTopUp(t, 33, userID, 100)

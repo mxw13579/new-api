@@ -31,6 +31,10 @@ func TestInvoiceProfileValidationAndCreationVersion(t *testing.T) {
 	assert.Empty(t, personal.TaxNumber)
 	assert.Equal(t, "11010519491231002X", personal.IdentityCardNumber)
 	assert.Equal(t, int64(1), personal.Version)
+	_, err = CreateInvoiceProfile(userID, dto.CreateInvoiceProfileRequest{
+		Type: constant.InvoiceTypePersonal, Title: "Missing ID",
+	})
+	assert.ErrorIs(t, err, ErrInvoiceInvalidProfile)
 
 	_, err = CreateInvoiceProfile(userID, dto.CreateInvoiceProfileRequest{
 		Type: constant.InvoiceTypePersonal, Title: "Alice", TaxNumber: "must-not-exist", IdentityCardNumber: "11010519491231002X",
