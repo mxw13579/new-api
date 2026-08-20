@@ -22,6 +22,7 @@ describe('invoice query-cache redaction', () => {
       type: 'company',
       title: 'Buyer',
       tax_number: '91310000PRIVATE',
+      identity_card_number: '',
       is_default: true,
       version: 1,
       created_at: 1,
@@ -41,6 +42,7 @@ describe('invoice query-cache redaction', () => {
       profile_snapshot: {
         title: 'Live Fixture Co',
         tax_number: '91310000PRIVATE',
+        identity_card_number: '',
       },
     } as InvoiceApplicationDetail
 

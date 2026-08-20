@@ -70,6 +70,7 @@ function detailFromSummary(
       type: summary.type,
       title: summary.type === 'personal' ? 'Demo User' : 'Demo Company',
       tax_number: summary.type === 'company' ? '91310000DEMO' : '',
+      identity_card_number: summary.type === 'personal' ? '11010519491231002X' : '',
       version: 1,
     },
     policy_snapshot: {
@@ -97,6 +98,7 @@ export function createInvoiceDemoApi(): InvoiceApi {
       type: 'personal',
       title: 'Demo User',
       tax_number: '',
+      identity_card_number: '11010519491231002X',
       is_default: true,
       version: 3,
       created_at: now - 80_000,
@@ -107,6 +109,7 @@ export function createInvoiceDemoApi(): InvoiceApi {
       type: 'company',
       title: 'Demo Company',
       tax_number: '91310000DEMO',
+      identity_card_number: '',
       is_default: true,
       version: 2,
       created_at: now - 70_000,

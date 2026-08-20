@@ -53,6 +53,7 @@ describe('invoice application profile selection', () => {
             type: 'company',
             title: 'Acme',
             tax_number: '91310000TEST',
+            identity_card_number: '',
             is_default: true,
             version: 12,
             created_at: 1,

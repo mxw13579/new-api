@@ -75,6 +75,7 @@ const application: InvoiceApplicationDetail = {
     type: 'company',
     title: 'Company',
     tax_number: 'Tax',
+    identity_card_number: '',
     version: 1,
   },
   policy_snapshot: {

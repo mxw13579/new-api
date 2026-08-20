@@ -65,6 +65,7 @@ const baseDetail: InvoiceApplicationDetail = {
     type: 'company',
     title: 'Secret Company',
     tax_number: '91310000SECRET',
+    identity_card_number: '',
     version: 3,
   },
   policy_snapshot: {

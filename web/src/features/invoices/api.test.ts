@@ -69,6 +69,7 @@ describe('HTTP InvoiceApi adapter', () => {
       type: 'personal',
       title: 'Alice',
       tax_number: '',
+      identity_card_number: '11010519491231002X',
       is_default: true,
     })
     await invoiceApi.updateProfile({
@@ -76,6 +77,7 @@ describe('HTTP InvoiceApi adapter', () => {
       expected_version: 9,
       title: 'Acme',
       tax_number: '91310000',
+      identity_card_number: '',
       is_default: true,
     })
     await invoiceApi.deleteProfile({ id: 4, expected_version: 10 })
@@ -293,6 +295,7 @@ describe('HTTP InvoiceApi adapter', () => {
         expected_version: 2,
         title: 'Updated',
         tax_number: '',
+        identity_card_number: '11010519491231002X',
         is_default: false,
       }),
       (error: unknown) =>
