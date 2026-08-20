@@ -61,6 +61,8 @@ var (
 	ErrTopUpRebateConflict            = errors.New("topup rebate idempotency conflict")
 	ErrVerifiedEpayCompletionInvalid  = errors.New("verified epay completion invalid")
 	ErrVerifiedEpayCompletionConflict = errors.New("verified epay completion conflict")
+	ErrInvalidTopUpQuota              = errors.New("invalid top-up quota")
+	ErrTopUpQuotaLimitExceeded        = errors.New("top-up quota limit exceeded")
 )
 
 type WalletTopUpCreditResult struct {
@@ -186,7 +188,7 @@ func creditWalletTopUpTx(tx *gorm.DB, topUp *TopUp, quotaToAdd int, expectedProv
 		return nil, ErrTopUpStatusInvalid
 	}
 	if quotaToAdd <= 0 {
-		return nil, errors.New("invalid topup quota")
+		return nil, ErrInvalidTopUpQuota
 	}
 
 	result := &WalletTopUpCreditResult{
@@ -241,7 +243,7 @@ func creditWalletTopUpTx(tx *gorm.DB, topUp *TopUp, quotaToAdd int, expectedProv
 		return nil, err
 	}
 
-	if err := tx.Model(&User{}).Where("id = ?", topUp.UserId).Update("quota", gorm.Expr("quota + ?", quotaToAdd)).Error; err != nil {
+	if err := creditTopUpQuota(tx, topUp.UserId, quotaToAdd, nil); err != nil {
 		return nil, err
 	}
 
@@ -272,9 +274,7 @@ func invalidateWalletTopUpQuotaCache(result *WalletTopUpCreditResult) {
 		return
 	}
 	if result.UserId != 0 && result.QuotaToAdd > 0 {
-		if err := invalidateUserCache(result.UserId); err != nil {
-			common.SysLog("failed to invalidate user quota cache after wallet topup: " + err.Error())
-		}
+		syncCreditUserQuotaCache(result.UserId, result.QuotaToAdd, "wallet topup")
 	}
 	if result.InviterId != 0 && result.RebateQuota > 0 {
 		if err := invalidateUserCache(result.InviterId); err != nil {
@@ -287,6 +287,67 @@ func (topUp *TopUp) Insert() error {
 	var err error
 	err = DB.Create(topUp).Error
 	return err
+}
+
+func topUpQuotaMaxCurrent(creditedQuota int) (int, error) {
+	if creditedQuota <= 0 || creditedQuota >= common.MaxQuota {
+		return 0, ErrInvalidTopUpQuota
+	}
+	return common.MaxQuota - 1 - creditedQuota, nil
+}
+
+// ValidateTopUpQuotaCapacity performs the user-facing pre-payment check. The
+// settlement path repeats the same invariant with an atomic conditional
+// update, because the wallet balance can change after checkout creation.
+func ValidateTopUpQuotaCapacity(userId int, creditedQuota int) error {
+	maxCurrentQuota, err := topUpQuotaMaxCurrent(creditedQuota)
+	if err != nil {
+		return err
+	}
+
+	var user User
+	if err := DB.Select("quota").Where("id = ?", userId).First(&user).Error; err != nil {
+		return err
+	}
+	if user.Quota > maxCurrentQuota {
+		return ErrTopUpQuotaLimitExceeded
+	}
+	return nil
+}
+
+// creditTopUpQuota atomically enforces the int32 wallet ceiling while adding
+// quota. Keeping the predicate and increment in one UPDATE prevents two
+// concurrent callbacks from both passing a separate read/check.
+func creditTopUpQuota(tx *gorm.DB, userId int, creditedQuota int, updates map[string]interface{}) error {
+	maxCurrentQuota, err := topUpQuotaMaxCurrent(creditedQuota)
+	if err != nil {
+		return err
+	}
+
+	updateFields := make(map[string]interface{}, len(updates)+1)
+	for key, value := range updates {
+		updateFields[key] = value
+	}
+	updateFields["quota"] = gorm.Expr("quota + ?", creditedQuota)
+
+	result := tx.Model(&User{}).
+		Where("id = ? AND quota <= ?", userId, maxCurrentQuota).
+		Updates(updateFields)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 1 {
+		return nil
+	}
+
+	var count int64
+	if err := tx.Model(&User{}).Where("id = ?", userId).Count(&count).Error; err != nil {
+		return err
+	}
+	if count == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	return ErrTopUpQuotaLimitExceeded
 }
 
 func (topUp *TopUp) Update() error {
@@ -342,9 +403,11 @@ func UpdatePendingTopUpStatus(tradeNo string, expectedPaymentProvider string, ta
 	})
 }
 
-func CompleteEpayWalletTopUp(tradeNo string, actualPaymentMethod string, callerIp string) error {
+// RechargeEpay atomically completes an Epay wallet top-up. alreadyDone is
+// true when another callback completed the same order first.
+func RechargeEpay(tradeNo string, actualPaymentMethod string, callerIp string) (alreadyDone bool, err error) {
 	if tradeNo == "" {
-		return errors.New("payment trade number is required")
+		return false, errors.New("payment trade number is required")
 	}
 
 	refCol := "`trade_no`"
@@ -353,7 +416,7 @@ func CompleteEpayWalletTopUp(tradeNo string, actualPaymentMethod string, callerI
 	}
 
 	var result *WalletTopUpCreditResult
-	err := DB.Transaction(func(tx *gorm.DB) error {
+	err = DB.Transaction(func(tx *gorm.DB) error {
 		topUp := &TopUp{}
 		if err := lockForUpdate(tx).Where(refCol+" = ?", tradeNo).First(topUp).Error; err != nil {
 			return normalizeTopUpLookupError(err)
@@ -363,6 +426,7 @@ func CompleteEpayWalletTopUp(tradeNo string, actualPaymentMethod string, callerI
 			return ErrPaymentMethodMismatch
 		}
 		if topUp.Status == common.TopUpStatusSuccess {
+			alreadyDone = true
 			return nil
 		}
 		if topUp.Status != common.TopUpStatusPending {
@@ -380,13 +444,21 @@ func CompleteEpayWalletTopUp(tradeNo string, actualPaymentMethod string, callerI
 		return err
 	})
 	if err != nil {
-		return err
+		return false, err
+	}
+	if alreadyDone {
+		return true, nil
 	}
 	invalidateWalletTopUpQuotaCache(result)
 	if result != nil && result.QuotaToAdd > 0 {
 		RecordTopupLog(result.UserId, fmt.Sprintf("Epay wallet topup succeeded, quota: %v, paid amount: %f", logger.LogQuota(result.QuotaToAdd), result.Money), callerIp, result.PaymentMethod, PaymentProviderEpay)
 	}
-	return nil
+	return false, nil
+}
+
+func CompleteEpayWalletTopUp(tradeNo string, actualPaymentMethod string, callerIp string) error {
+	_, err := RechargeEpay(tradeNo, actualPaymentMethod, callerIp)
+	return err
 }
 
 func Recharge(referenceId string, customerId string, callerIp string) (err error) {

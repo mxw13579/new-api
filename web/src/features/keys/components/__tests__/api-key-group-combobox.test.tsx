@@ -16,316 +16,199 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { describe, it as test } from 'bun:test'
-import assert from 'node:assert/strict'
-import { spawnSync } from 'node:child_process'
+import { fireEvent, render, screen, within } from '@testing-library/react'
+import { describe, expect, test } from 'vitest'
 
-const { afterAll } = (await import('bun:test')) as unknown as {
-  afterAll(callback: () => void | Promise<void>): void
+let shouldReduceMotion = false
+const reducedMotionMediaQuery = window.matchMedia('(prefers-reduced-motion)')
+Object.defineProperty(reducedMotionMediaQuery, 'matches', {
+  configurable: true,
+  get: () => shouldReduceMotion,
+})
+Object.defineProperty(window, 'matchMedia', {
+  configurable: true,
+  value: () => reducedMotionMediaQuery,
+})
+
+function setReducedMotion(value: boolean) {
+  shouldReduceMotion = value
+  reducedMotionMediaQuery.dispatchEvent(new Event('change'))
 }
-const isolatedRun = process.env.AUTO_GROUP_DOM_TEST_ISOLATED === '1'
 
-if (!isolatedRun) {
-  describe('API key group combobox isolation', () => {
-    test('verifies the combobox contracts in a disposable Bun process', () => {
-      const child = spawnSync(
-        process.execPath,
-        [
-          'test',
-          'src/features/keys/components/__tests__/api-key-group-combobox.test.tsx',
-        ],
-        {
-          cwd: process.cwd(),
-          env: { ...process.env, AUTO_GROUP_DOM_TEST_ISOLATED: '1' },
-          encoding: 'utf8',
-          timeout: 15_000,
-        }
-      )
-      const output = child.stdout + child.stderr
+const { useState } = await import('react')
+const { createInstance } = await import('i18next')
+const { I18nextProvider, initReactI18next } = await import('react-i18next')
+const { ApiKeyGroupCombobox } = await import('../api-key-group-combobox')
 
-      assert.equal(child.status, 0, output)
-      assert.equal(
-        output.includes(
-          'Detected multiple renderers concurrently rendering the same context provider'
-        ),
-        false,
-        output
-      )
-    })
-  })
-} else {
-  const { Window } = await import('happy-dom')
-  const domWindow = new Window()
-  const domGlobals = [
-    'window',
-    'document',
-    'navigator',
-    'HTMLElement',
-    'HTMLButtonElement',
-    'HTMLInputElement',
-    'SVGElement',
-    'Node',
-    'Element',
-    'Event',
-    'KeyboardEvent',
-    'PointerEvent',
-    'CustomEvent',
-    'MutationObserver',
-    'ResizeObserver',
-    'requestAnimationFrame',
-    'cancelAnimationFrame',
-    'getComputedStyle',
-  ] as const
-
-  for (const key of domGlobals) {
-    Object.defineProperty(globalThis, key, {
-      configurable: true,
-      value: domWindow[key],
-    })
-  }
-
-  let shouldReduceMotion = false
-  const reducedMotionMediaQuery = domWindow.matchMedia(
-    '(prefers-reduced-motion)'
-  )
-  Object.defineProperty(reducedMotionMediaQuery, 'matches', {
-    configurable: true,
-    get: () => shouldReduceMotion,
-  })
-  Object.defineProperty(domWindow, 'matchMedia', {
-    configurable: true,
-    value: () => reducedMotionMediaQuery,
-  })
-
-  function setReducedMotion(value: boolean) {
-    shouldReduceMotion = value
-    reducedMotionMediaQuery.dispatchEvent(new domWindow.Event('change'))
-  }
-
-  const { act, useState } = await import('react')
-  const { createRoot } = await import('react-dom/client')
-  const { createInstance } = await import('i18next')
-  const { I18nextProvider, initReactI18next } = await import('react-i18next')
-  const { ApiKeyGroupCombobox } = await import('../api-key-group-combobox')
-
-  const i18n = createInstance()
-  await i18n.use(initReactI18next).init({
-    lng: 'en',
-    resources: {
-      en: {
-        translation: {
-          Auto: 'Auto',
-          Ratio: 'Ratio',
-          'Search...': 'Search...',
-          'No group found.': 'No group found.',
-          'Select a group': 'Select a group',
-        },
+const i18n = createInstance()
+await i18n.use(initReactI18next).init({
+  lng: 'en',
+  resources: {
+    en: {
+      translation: {
+        Auto: 'Auto',
+        Ratio: 'Ratio',
+        'Search...': 'Search...',
+        'No group found.': 'No group found.',
+        'Select a group': 'Select a group',
       },
     },
-  })
+  },
+})
 
-  const reactTestGlobals = globalThis as typeof globalThis & {
-    IS_REACT_ACT_ENVIRONMENT?: boolean
-  }
-  reactTestGlobals.IS_REACT_ACT_ENVIRONMENT = true
+const options = [
+  {
+    value: 'auto',
+    label: 'auto',
+    desc: 'Global automatic routing',
+    ratio: '自动',
+  },
+  { value: 'default', label: 'default', desc: 'User group', ratio: 1 },
+  { value: 'vip', label: 'vip', desc: 'Priority group', ratio: 3 },
+]
 
-  const options = [
-    {
-      value: 'auto',
-      label: 'auto',
-      desc: 'Global automatic routing',
-      ratio: '自动',
-    },
-    { value: 'default', label: 'default', desc: 'User group', ratio: 1 },
-    { value: 'vip', label: 'vip', desc: 'Priority group', ratio: 3 },
-  ]
+function Harness(props: { initialValue: string }) {
+  const [value, setValue] = useState(props.initialValue)
 
-  function Harness(props: { initialValue: string }) {
-    const [value, setValue] = useState(props.initialValue)
-
-    return (
-      <I18nextProvider i18n={i18n}>
-        <ApiKeyGroupCombobox
-          options={options}
-          value={value}
-          onValueChange={setValue}
-        />
-        <output data-testid='selected-group'>{value}</output>
-      </I18nextProvider>
-    )
-  }
-
-  function getTrigger(container: ParentNode): HTMLButtonElement {
-    const trigger = container.querySelector<HTMLButtonElement>(
-      'button[role="combobox"]'
-    )
-    assert.ok(trigger)
-    return trigger
-  }
-
-  function getCommandItem(label: string): HTMLElement {
-    const item = [
-      ...document.querySelectorAll<HTMLElement>('[data-slot="command-item"]'),
-    ].find((candidate) => candidate.textContent?.includes(label))
-    assert.ok(item)
-    return item
-  }
-
-  describe('API key group combobox Auto effect', () => {
-    afterAll(() => {
-      domWindow.close()
-    })
-
-    test('rings the selected Auto trigger and its localized ratio without rendering the API ratio text', async () => {
-      setReducedMotion(false)
-      const container = document.createElement('div')
-      document.body.append(container)
-      const root = createRoot(container)
-
-      await act(async () => root.render(<Harness initialValue='auto' />))
-
-      const trigger = getTrigger(container)
-      assert.equal(trigger.getAttribute('aria-expanded'), 'false')
-      assert.equal(trigger.dataset.autoGroupEffect, 'trigger')
-      assert.equal(trigger.classList.contains('bg-linear-to-r'), false)
-      assert.equal(trigger.classList.contains('overflow-hidden'), false)
-      assert.equal(trigger.classList.contains('overflow-visible'), true)
-
-      const triggerFlowBorder = trigger.querySelector<HTMLElement>(
-        '[data-auto-group-flow-border]'
-      )
-      assert.ok(triggerFlowBorder)
-      assert.equal(triggerFlowBorder.getAttribute('aria-hidden'), 'true')
-      assert.equal(
-        triggerFlowBorder.classList.contains('pointer-events-none'),
-        true
-      )
-      assert.equal(
-        triggerFlowBorder.classList.contains('auto-group-flow-border'),
-        true
-      )
-
-      const triggerRatio = trigger.querySelector<HTMLElement>(
-        '[data-auto-group-effect="ratio"]'
-      )
-      assert.ok(triggerRatio)
-      assert.equal(triggerRatio.textContent, 'Auto Ratio')
-      assert.equal(triggerRatio.textContent?.includes('Auto'), true)
-      assert.equal(triggerRatio.textContent?.includes('x'), false)
-      assert.equal(trigger.textContent?.includes('自动'), false)
-      assert.equal(triggerRatio.classList.contains('relative'), true)
-      assert.equal(triggerRatio.classList.contains('overflow-visible'), true)
-      assert.equal(triggerRatio.classList.contains('rounded-4xl'), true)
-      assert.ok(triggerRatio.querySelector('[data-auto-group-flow-border]'))
-
-      await act(async () => trigger.click())
-      assert.equal(trigger.getAttribute('aria-expanded'), 'true')
-
-      const autoOption = getCommandItem('Global automatic routing')
-      assert.equal(autoOption.dataset.autoGroupEffect, 'option')
-      assert.equal(autoOption.getAttribute('aria-selected'), 'true')
-      assert.equal(autoOption.classList.contains('bg-linear-to-r'), false)
-      assert.equal(autoOption.classList.contains('overflow-visible'), true)
-      assert.ok(autoOption.querySelector('[data-auto-group-flow-border]'))
-      const optionRatio = autoOption.querySelector<HTMLElement>(
-        '[data-auto-group-effect="ratio"]'
-      )
-      assert.ok(optionRatio)
-      assert.equal(optionRatio.textContent, 'Auto Ratio')
-      assert.ok(optionRatio.querySelector('[data-auto-group-flow-border]'))
-
-      const defaultOption = getCommandItem('User group')
-      assert.equal(defaultOption.hasAttribute('data-auto-group-effect'), false)
-      assert.equal(
-        defaultOption.querySelector('[data-auto-group-flow-border]'),
-        null
-      )
-      assert.equal(defaultOption.textContent?.includes('1x Ratio'), true)
-      assert.equal(
-        defaultOption.querySelector('[data-auto-group-effect="ratio"]'),
-        null
-      )
-
-      await act(async () => root.unmount())
-      container.remove()
-    })
-
-    test('keeps search and selection behavior while leaving normal groups unstyled', async () => {
-      setReducedMotion(false)
-      const container = document.createElement('div')
-      document.body.append(container)
-      const root = createRoot(container)
-
-      await act(async () => root.render(<Harness initialValue='auto' />))
-
-      const trigger = getTrigger(container)
-      await act(async () => trigger.click())
-
-      const searchInput = document.querySelector<HTMLInputElement>(
-        'input[placeholder="Search..."]'
-      )
-      assert.ok(searchInput)
-      await act(async () => {
-        const valueSetter = Object.getOwnPropertyDescriptor(
-          domWindow.HTMLInputElement.prototype,
-          'value'
-        )?.set
-        assert.ok(valueSetter)
-        valueSetter.call(searchInput, 'vip')
-        searchInput.dispatchEvent(
-          new domWindow.Event('input', { bubbles: true }) as unknown as Event
-        )
-      })
-
-      const visibleOptions = [
-        ...document.querySelectorAll<HTMLElement>('[data-slot="command-item"]'),
-      ]
-      assert.equal(
-        visibleOptions.some((option) =>
-          option.textContent?.includes('Global automatic routing')
-        ),
-        false
-      )
-      const vipOption = getCommandItem('Priority group')
-      await act(async () => vipOption.click())
-
-      assert.equal(
-        container.querySelector('[data-testid="selected-group"]')?.textContent,
-        'vip'
-      )
-      assert.equal(trigger.getAttribute('aria-expanded'), 'false')
-      assert.equal(trigger.hasAttribute('data-auto-group-effect'), false)
-      assert.equal(trigger.querySelector('[data-auto-group-flow-border]'), null)
-
-      await act(async () => root.unmount())
-      container.remove()
-    })
-
-    test('preserves the static Auto treatment but omits moving layers for reduced motion', async () => {
-      setReducedMotion(true)
-      const container = document.createElement('div')
-      document.body.append(container)
-      const root = createRoot(container)
-
-      await act(async () => root.render(<Harness initialValue='auto' />))
-
-      const trigger = getTrigger(container)
-      assert.equal(trigger.dataset.autoGroupEffect, 'trigger')
-      assert.equal(trigger.querySelector('[data-auto-group-flow-border]'), null)
-      assert.ok(trigger.querySelector('[data-auto-group-effect="ratio"]'))
-
-      await act(async () => trigger.click())
-      const autoOption = getCommandItem('Global automatic routing')
-      assert.equal(autoOption.dataset.autoGroupEffect, 'option')
-      assert.equal(
-        autoOption.querySelector('[data-auto-group-flow-border]'),
-        null
-      )
-      assert.ok(autoOption.querySelector('[data-auto-group-effect="ratio"]'))
-
-      await act(async () => root.unmount())
-      container.remove()
-      setReducedMotion(false)
-    })
-  })
+  return (
+    <I18nextProvider i18n={i18n}>
+      <ApiKeyGroupCombobox
+        options={options}
+        value={value}
+        onValueChange={setValue}
+      />
+      <output data-testid='selected-group'>{value}</output>
+    </I18nextProvider>
+  )
 }
+
+function getTrigger(): HTMLButtonElement {
+  return screen.getByRole('combobox')
+}
+
+function getCommandItem(label: string): HTMLElement {
+  const item = [
+    ...document.querySelectorAll<HTMLElement>('[data-slot="command-item"]'),
+  ].find((candidate) => candidate.textContent?.includes(label))
+  if (!item) {
+    throw new Error(`Expected command item containing "${label}"`)
+  }
+  return item
+}
+
+describe('API key group combobox Auto effect', () => {
+  test('rings the selected Auto trigger and its localized ratio without rendering the API ratio text', () => {
+    setReducedMotion(false)
+    render(<Harness initialValue='auto' />)
+
+    const trigger = getTrigger()
+    expect(trigger).toHaveAttribute('aria-expanded', 'false')
+    expect(trigger).toHaveAttribute('data-auto-group-effect', 'trigger')
+    expect(trigger).not.toHaveClass('bg-linear-to-r', 'overflow-hidden')
+    expect(trigger).toHaveClass('overflow-visible')
+
+    const triggerFlowBorder = trigger.querySelector<HTMLElement>(
+      '[data-auto-group-flow-border]'
+    )
+    expect(triggerFlowBorder).toHaveAttribute('aria-hidden', 'true')
+    expect(triggerFlowBorder).toHaveClass(
+      'pointer-events-none',
+      'auto-group-flow-border'
+    )
+
+    const triggerRatio = trigger.querySelector<HTMLElement>(
+      '[data-auto-group-effect="ratio"]'
+    )
+    expect(triggerRatio).toHaveTextContent('Auto Ratio')
+    expect(triggerRatio).not.toHaveTextContent('x')
+    expect(trigger).not.toHaveTextContent('自动')
+    expect(triggerRatio).toHaveClass(
+      'relative',
+      'overflow-visible',
+      'rounded-4xl'
+    )
+    expect(
+      triggerRatio?.querySelector('[data-auto-group-flow-border]')
+    ).toBeInTheDocument()
+
+    fireEvent.click(trigger)
+    expect(trigger).toHaveAttribute('aria-expanded', 'true')
+
+    const autoOption = getCommandItem('Global automatic routing')
+    expect(autoOption).toHaveAttribute('data-auto-group-effect', 'option')
+    expect(autoOption).toHaveAttribute('aria-selected', 'true')
+    expect(autoOption).not.toHaveClass('bg-linear-to-r')
+    expect(autoOption).toHaveClass('overflow-visible')
+    expect(
+      autoOption.querySelector('[data-auto-group-flow-border]')
+    ).toBeInTheDocument()
+    const optionRatio = autoOption.querySelector<HTMLElement>(
+      '[data-auto-group-effect="ratio"]'
+    )
+    expect(optionRatio).toHaveTextContent('Auto Ratio')
+    expect(
+      optionRatio?.querySelector('[data-auto-group-flow-border]')
+    ).toBeInTheDocument()
+
+    const defaultOption = getCommandItem('User group')
+    expect(defaultOption).not.toHaveAttribute('data-auto-group-effect')
+    expect(defaultOption.querySelector('[data-auto-group-flow-border]')).toBe(
+      null
+    )
+    expect(defaultOption).toHaveTextContent('1x Ratio')
+    expect(
+      defaultOption.querySelector('[data-auto-group-effect="ratio"]')
+    ).toBe(null)
+  })
+
+  test('keeps search and selection behavior while leaving normal groups unstyled', async () => {
+    setReducedMotion(false)
+    const { container } = render(<Harness initialValue='auto' />)
+
+    const trigger = getTrigger()
+    fireEvent.click(trigger)
+
+    fireEvent.input(screen.getByPlaceholderText('Search...'), {
+      target: { value: 'vip' },
+    })
+
+    const visibleOptions = [
+      ...document.querySelectorAll<HTMLElement>('[data-slot="command-item"]'),
+    ]
+    expect(
+      visibleOptions.some((option) =>
+        option.textContent?.includes('Global automatic routing')
+      )
+    ).toBe(false)
+    const vipOption = getCommandItem('Priority group')
+    fireEvent.click(vipOption)
+
+    expect(within(container).getByTestId('selected-group')).toHaveTextContent(
+      'vip'
+    )
+    expect(trigger).toHaveAttribute('aria-expanded', 'false')
+    expect(trigger).not.toHaveAttribute('data-auto-group-effect')
+    expect(trigger.querySelector('[data-auto-group-flow-border]')).toBe(null)
+  })
+
+  test('preserves the static Auto treatment but omits moving layers for reduced motion', async () => {
+    setReducedMotion(true)
+    render(<Harness initialValue='auto' />)
+
+    const trigger = getTrigger()
+    expect(trigger).toHaveAttribute('data-auto-group-effect', 'trigger')
+    expect(trigger.querySelector('[data-auto-group-flow-border]')).toBe(null)
+    expect(
+      trigger.querySelector('[data-auto-group-effect="ratio"]')
+    ).toBeInTheDocument()
+
+    fireEvent.click(trigger)
+    const autoOption = getCommandItem('Global automatic routing')
+    expect(autoOption).toHaveAttribute('data-auto-group-effect', 'option')
+    expect(autoOption.querySelector('[data-auto-group-flow-border]')).toBe(null)
+    expect(
+      autoOption.querySelector('[data-auto-group-effect="ratio"]')
+    ).toBeInTheDocument()
+    setReducedMotion(false)
+  })
+})
