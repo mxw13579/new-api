@@ -82,7 +82,7 @@ function detail(
     },
     policy_snapshot: {
       application_window_days: 90,
-      minimum_amount_minor: 1_000,
+      minimum_amount_minor: 10_000,
       fee_percent: 5,
       fee_quota: 500,
       pdf_retention_days: 365,
@@ -163,7 +163,7 @@ async function installAdminBackend(
     personal_enabled: true,
     company_enabled: false,
     application_window_days: 90,
-    minimum_amount_minor: 1_000,
+    minimum_amount_minor: 10_000,
     fee_percent: 5,
     pdf_retention_days: 365,
     r2_endpoint: options.initialR2?.endpoint ?? '',
@@ -516,7 +516,12 @@ test('invoice settings validates and saves percentage fees and R2 fields', async
   expect(backend.settingWrites).toEqual([])
 
   await page.getByLabel('Application window days').fill('30')
-  await page.getByLabel('Minimum amount in minor units').fill('2500')
+  await page.getByLabel('Minimum amount in minor units').fill('9999')
+  await page.getByRole('button', { name: 'Save invoice settings' }).click()
+  await expect(page.getByText('Minimum invoice amount must be at least 100 CNY')).toBeVisible()
+  expect(backend.settingWrites).toEqual([])
+
+  await page.getByLabel('Minimum amount in minor units').fill('10000')
   await page.getByLabel('Invoice fee percentage').fill('5')
   await page.getByLabel('PDF retention days').fill('120')
   await page.getByRole('switch', { name: 'Enable company invoices' }).click()
@@ -527,7 +532,7 @@ test('invoice settings validates and saves percentage fees and R2 fields', async
       personal_enabled: true,
       company_enabled: true,
       application_window_days: 30,
-      minimum_amount_minor: 2500,
+      minimum_amount_minor: 10000,
       fee_percent: 5,
       pdf_retention_days: 120,
       r2_endpoint: '',

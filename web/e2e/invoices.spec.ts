@@ -183,7 +183,7 @@ async function installInvoiceBackend(
           personal_enabled: true,
           company_enabled: true,
           application_window_days: 90,
-          minimum_amount_minor: 1_000,
+          minimum_amount_minor: 10_000,
           fee_percent: 5,
           quota_per_unit: 500_000,
           pdf_retention_days: 365,
@@ -224,7 +224,7 @@ async function installInvoiceBackend(
         profile_snapshot: { ...profile },
         policy_snapshot: {
           application_window_days: 90,
-          minimum_amount_minor: 1_000,
+          minimum_amount_minor: 10_000,
           fee_percent: 5,
           fee_quota: 500,
           pdf_retention_days: 365,
@@ -285,7 +285,7 @@ async function installInvoiceBackend(
           profile_snapshot: { ...profile },
           policy_snapshot: {
             application_window_days: 90,
-            minimum_amount_minor: 1_000,
+            minimum_amount_minor: 10_000,
             fee_percent: 5,
             fee_quota: 500,
             pdf_retention_days: 365,
@@ -551,7 +551,7 @@ test.describe('mobile invoice route', () => {
     await expect(
       page.getByRole('heading', { name: 'Hóa đơn', exact: true })
     ).toBeVisible()
-    await page.getByLabel('Hồ sơ hóa đơn').selectOption('1')
+    await page.getByLabel('H�?sơ hóa đơn').selectOption('1')
     await page.getByRole('checkbox', { name: 'TOPUP-101' }).check()
     const reviewButton = page.getByRole('button', {
       name: 'Kiểm tra yêu cầu',
