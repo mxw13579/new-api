@@ -79,7 +79,7 @@ func TestInvoiceSettingsUseExistingOptionSurfaceWithNarrowAuthorization(t *testi
 	assert.NotContains(t, routes, http.MethodGet+" /api/admin/invoice/settings")
 	assert.NotContains(t, routes, http.MethodPut+" /api/admin/invoice/settings")
 
-	settingBody := `{"personal_enabled":true,"company_enabled":true,"application_window_days":45,"minimum_amount_minor":100,"fee_percent":5,"pdf_retention_days":60,"r2_endpoint":"","r2_bucket":"","r2_access_key_id":"","r2_secret_access_key":""}`
+	settingBody := `{"personal_enabled":true,"company_enabled":true,"application_window_days":45,"minimum_amount_minor":10000,"fee_percent":5,"pdf_retention_days":60,"r2_endpoint":"","r2_bucket":"","r2_access_key_id":"","r2_secret_access_key":""}`
 	for _, method := range []string{http.MethodGet, http.MethodPut} {
 		body := ""
 		if method == http.MethodPut {
