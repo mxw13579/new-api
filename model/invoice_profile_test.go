@@ -24,20 +24,21 @@ func TestInvoiceProfileValidationAndCreationVersion(t *testing.T) {
 	userID := setupInvoiceProfileTest(t)
 
 	personal, err := CreateInvoiceProfile(userID, dto.CreateInvoiceProfileRequest{
-		Type: constant.InvoiceTypePersonal, Title: " Alice ", IsDefault: true,
+		Type: constant.InvoiceTypePersonal, Title: " Alice ", IdentityCardNumber: " 11010519491231002X ", IsDefault: true,
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "Alice", personal.Title)
 	assert.Empty(t, personal.TaxNumber)
+	assert.Equal(t, "11010519491231002X", personal.IdentityCardNumber)
 	assert.Equal(t, int64(1), personal.Version)
 
 	_, err = CreateInvoiceProfile(userID, dto.CreateInvoiceProfileRequest{
-		Type: constant.InvoiceTypePersonal, Title: "Alice", TaxNumber: "must-not-exist",
+		Type: constant.InvoiceTypePersonal, Title: "Alice", TaxNumber: "must-not-exist", IdentityCardNumber: "11010519491231002X",
 	})
 	assert.ErrorIs(t, err, ErrInvoiceInvalidProfile)
 
 	_, err = CreateInvoiceProfile(userID, dto.CreateInvoiceProfileRequest{
-		Type: constant.InvoiceTypeCompany, Title: "Example Ltd",
+		Type: constant.InvoiceTypeCompany, Title: "Example Ltd", IdentityCardNumber: "11010519491231002X",
 	})
 	assert.ErrorIs(t, err, ErrInvoiceInvalidProfile)
 

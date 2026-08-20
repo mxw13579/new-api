@@ -23,13 +23,15 @@ type InvoiceSetting struct {
 	FeePercentMigrationRequired bool   `json:"-"`
 }
 
+const MinimumInvoiceAmountMinor int64 = 10_000
+
 // DefaultInvoiceSetting returns the disabled-by-default invoice policy used before persisted options load.
 func DefaultInvoiceSetting() InvoiceSetting {
 	return InvoiceSetting{
 		PersonalEnabled:       false,
 		CompanyEnabled:        false,
 		ApplicationWindowDays: 30,
-		MinimumAmountMinor:    0,
+		MinimumAmountMinor:    MinimumInvoiceAmountMinor,
 		FeePercent:            0,
 		PDFRetentionDays:      30,
 	}
@@ -67,8 +69,8 @@ func (setting InvoiceSetting) Validate() error {
 	if setting.ApplicationWindowDays <= 0 {
 		return errors.New("invoice application window must be positive")
 	}
-	if setting.MinimumAmountMinor < 0 {
-		return errors.New("invoice minimum amount cannot be negative")
+	if setting.MinimumAmountMinor < MinimumInvoiceAmountMinor {
+		return errors.New("invoice minimum amount must be at least 100 CNY")
 	}
 	if setting.FeePercent < 0 || setting.FeePercent > 100 {
 		return errors.New("invoice fee percentage is out of range")

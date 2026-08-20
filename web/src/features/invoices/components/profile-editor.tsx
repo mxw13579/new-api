@@ -47,6 +47,7 @@ export interface ProfileDraft {
   type: InvoiceType
   title: string
   taxNumber: string
+  identityCardNumber: string
   isDefault: boolean
   version: number
 }
@@ -96,6 +97,8 @@ export function ProfileEditor(props: ProfileEditorProps) {
                   type: event.target.value as InvoiceType,
                   taxNumber:
                     event.target.value === 'personal' ? '' : current.taxNumber,
+                  identityCardNumber:
+                    event.target.value === 'company' ? '' : current.identityCardNumber,
                 }))
               }
             >
@@ -154,7 +157,23 @@ export function ProfileEditor(props: ProfileEditorProps) {
                 }
               />
             </Field>
-          ) : null}
+          ) : (
+            <Field>
+              <FieldLabel htmlFor='invoice-profile-identity-card-number'>
+                {t('Identity card number')}
+              </FieldLabel>
+              <Input
+                id='invoice-profile-identity-card-number'
+                value={props.draft.identityCardNumber}
+                onChange={(event) =>
+                  props.setDraft((current) => ({
+                    ...current,
+                    identityCardNumber: event.target.value,
+                  }))
+                }
+              />
+            </Field>
+          )}
           <Field orientation='horizontal'>
             <Checkbox
               id='invoice-profile-default'
@@ -185,6 +204,7 @@ export function ProfileEditor(props: ProfileEditorProps) {
               props.saving ||
               !props.draft.title.trim() ||
               (props.draft.type === 'company' && !props.draft.taxNumber.trim())
+              || (props.draft.type === 'personal' && !props.draft.identityCardNumber.trim())
             }
             onClick={props.onSave}
           >

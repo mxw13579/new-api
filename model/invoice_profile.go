@@ -25,36 +25,48 @@ var (
 
 // InvoiceProfile stores versioned buyer identity facts and per-type default selection for one user.
 type InvoiceProfile struct {
-	ID        int64  `json:"id"`
-	UserID    int    `json:"user_id" gorm:"not null;index:idx_invoice_profiles_user_type,priority:1"`
-	Type      string `json:"type" gorm:"type:varchar(16);not null;index:idx_invoice_profiles_user_type,priority:2"`
-	Title     string `json:"title" gorm:"type:varchar(200);not null"`
-	TaxNumber string `json:"tax_number" gorm:"type:varchar(64);not null"`
-	IsDefault bool   `json:"is_default" gorm:"not null"`
-	Version   int64  `json:"version" gorm:"not null"`
-	CreatedAt int64  `json:"created_at" gorm:"autoCreateTime"`
-	UpdatedAt int64  `json:"updated_at" gorm:"autoUpdateTime"`
+	ID                 int64  `json:"id"`
+	UserID             int    `json:"user_id" gorm:"not null;index:idx_invoice_profiles_user_type,priority:1"`
+	Type               string `json:"type" gorm:"type:varchar(16);not null;index:idx_invoice_profiles_user_type,priority:2"`
+	Title              string `json:"title" gorm:"type:varchar(200);not null"`
+	TaxNumber          string `json:"tax_number" gorm:"type:varchar(64);not null"`
+	IdentityCardNumber string `json:"identity_card_number" gorm:"type:varchar(64);not null;default:''"`
+	IsDefault          bool   `json:"is_default" gorm:"not null"`
+	Version            int64  `json:"version" gorm:"not null"`
+	CreatedAt          int64  `json:"created_at" gorm:"autoCreateTime"`
+	UpdatedAt          int64  `json:"updated_at" gorm:"autoUpdateTime"`
 }
 
-func normalizeInvoiceProfile(profileType, title, taxNumber string) (string, string, error) {
+func normalizeInvoiceProfile(profileType, title, taxNumber, identityCardNumber string) (string, string, string, error) {
 	title = strings.TrimSpace(title)
 	taxNumber = strings.TrimSpace(taxNumber)
-	if title == "" || len([]rune(title)) > 200 || len(taxNumber) > 64 {
-		return "", "", ErrInvoiceInvalidProfile
+	identityCardNumber = strings.TrimSpace(identityCardNumber)
+	if title == "" || len([]rune(title)) > 200 || len(taxNumber) > 64 || len(identityCardNumber) > 64 {
+		return "", "", "", ErrInvoiceInvalidProfile
 	}
 	switch profileType {
 	case constant.InvoiceTypePersonal:
+		if identityCardNumber == "" {
+			return "", "", "", ErrInvoiceInvalidProfile
+		}
 		if taxNumber != "" {
-			return "", "", ErrInvoiceInvalidProfile
+			return "", "", "", ErrInvoiceInvalidProfile
 		}
 	case constant.InvoiceTypeCompany:
 		if taxNumber == "" {
-			return "", "", ErrInvoiceInvalidProfile
+			if identityCardNumber != "" {
+				return "", "", "", ErrInvoiceInvalidProfile
+			}
+			return "", "", "", ErrInvoiceInvalidProfile
 		}
+		if identityCardNumber != "" {
+			return "", "", "", ErrInvoiceInvalidProfile
+		}
+		identityCardNumber = ""
 	default:
-		return "", "", ErrInvoiceInvalidProfile
+		return "", "", "", ErrInvoiceInvalidProfile
 	}
-	return title, taxNumber, nil
+	return title, taxNumber, identityCardNumber, nil
 }
 
 func isRetryableInvoiceTransactionError(err error) bool {
@@ -96,12 +108,12 @@ func lockInvoiceProfileOwner(tx *gorm.DB, userID int) error {
 
 // CreateInvoiceProfile creates normalized buyer facts and atomically converges the per-type default profile.
 func CreateInvoiceProfile(userID int, request dto.CreateInvoiceProfileRequest) (*InvoiceProfile, error) {
-	title, taxNumber, err := normalizeInvoiceProfile(request.Type, request.Title, request.TaxNumber)
+	title, taxNumber, identityCardNumber, err := normalizeInvoiceProfile(request.Type, request.Title, request.TaxNumber, request.IdentityCardNumber)
 	if err != nil {
 		return nil, err
 	}
 	profile := &InvoiceProfile{
-		UserID: userID, Type: request.Type, Title: title, TaxNumber: taxNumber,
+		UserID: userID, Type: request.Type, Title: title, TaxNumber: taxNumber, IdentityCardNumber: identityCardNumber,
 		IsDefault: request.IsDefault, Version: 1,
 	}
 	err = runInvoiceTransaction(func(tx *gorm.DB) error {
@@ -143,7 +155,7 @@ func UpdateInvoiceProfile(userID int, request dto.UpdateInvoiceProfileRequest) (
 		if current.Version != request.ExpectedVersion {
 			return ErrInvoiceProfileVersionConflict
 		}
-		title, taxNumber, err := normalizeInvoiceProfile(current.Type, request.Title, request.TaxNumber)
+		title, taxNumber, identityCardNumber, err := normalizeInvoiceProfile(current.Type, request.Title, request.TaxNumber, request.IdentityCardNumber)
 		if err != nil {
 			return err
 		}
@@ -157,7 +169,7 @@ func UpdateInvoiceProfile(userID int, request dto.UpdateInvoiceProfileRequest) (
 		result := tx.Model(&InvoiceProfile{}).
 			Where("id = ? AND user_id = ? AND version = ?", current.ID, userID, request.ExpectedVersion).
 			Updates(map[string]any{
-				"title": title, "tax_number": taxNumber, "is_default": request.IsDefault,
+				"title": title, "tax_number": taxNumber, "identity_card_number": identityCardNumber, "is_default": request.IsDefault,
 				"version": request.ExpectedVersion + 1, "updated_at": time.Now().Unix(),
 			})
 		if result.Error != nil {

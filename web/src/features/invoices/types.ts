@@ -85,6 +85,7 @@ export interface InvoiceProfile {
   type: InvoiceType
   title: string
   tax_number: string
+  identity_card_number: string
   is_default: boolean
   version: number
   created_at: number
@@ -96,6 +97,7 @@ export interface CreateInvoiceProfileRequest {
   type: InvoiceType
   title: string
   tax_number: string
+  identity_card_number: string
   is_default: boolean
 }
 
@@ -105,6 +107,7 @@ export interface UpdateInvoiceProfileRequest {
   expected_version: number
   title: string
   tax_number: string
+  identity_card_number: string
   is_default: boolean
 }
 
@@ -177,6 +180,7 @@ export interface InvoiceProfileSnapshot {
   type: InvoiceType
   title: string
   tax_number: string
+  identity_card_number: string
   version: number
 }
 

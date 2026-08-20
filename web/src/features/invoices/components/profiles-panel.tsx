@@ -57,6 +57,7 @@ const EMPTY_PROFILE_DRAFT: ProfileDraft = {
   type: 'personal',
   title: '',
   taxNumber: '',
+  identityCardNumber: '',
   isDefault: false,
   version: 0,
 }
@@ -81,6 +82,7 @@ export function ProfilesPanel(props: ProfilesPanelProps) {
           type: draft.type,
           title: draft.title.trim(),
           tax_number: draft.type === 'company' ? draft.taxNumber.trim() : '',
+          identity_card_number: draft.type === 'personal' ? draft.identityCardNumber.trim() : '',
           is_default: draft.isDefault,
         })
       }
@@ -89,6 +91,7 @@ export function ProfilesPanel(props: ProfilesPanelProps) {
         expected_version: draft.version,
         title: draft.title.trim(),
         tax_number: draft.type === 'company' ? draft.taxNumber.trim() : '',
+        identity_card_number: draft.type === 'personal' ? draft.identityCardNumber.trim() : '',
         is_default: draft.isDefault,
       })
     },
@@ -186,6 +189,7 @@ export function ProfilesPanel(props: ProfilesPanelProps) {
             type: profile.type,
             title: profile.title,
             taxNumber: profile.tax_number,
+            identityCardNumber: profile.identity_card_number,
             isDefault: profile.is_default,
             version: profile.version,
           })

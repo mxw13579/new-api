@@ -123,6 +123,7 @@ func GetInvoiceApplicationDetail(applicationID int64, ownerID *int, includeSensi
 	if !includeSensitive {
 		profile.Title = ""
 		profile.TaxNumber = ""
+		profile.IdentityCardNumber = ""
 	}
 	policy := dto.InvoicePolicySnapshot{}
 	if err := common.UnmarshalJsonStr(application.PolicySnapshot, &policy); err != nil {

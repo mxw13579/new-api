@@ -24,7 +24,7 @@ func invoiceProfileDTO(profile *model.InvoiceProfile) *dto.InvoiceProfile {
 		return nil
 	}
 	return &dto.InvoiceProfile{
-		ID: profile.ID, Type: profile.Type, Title: profile.Title, TaxNumber: profile.TaxNumber,
+		ID: profile.ID, Type: profile.Type, Title: profile.Title, TaxNumber: profile.TaxNumber, IdentityCardNumber: profile.IdentityCardNumber,
 		IsDefault: profile.IsDefault, Version: profile.Version, CreatedAt: profile.CreatedAt, UpdatedAt: profile.UpdatedAt,
 	}
 }

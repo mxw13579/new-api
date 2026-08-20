@@ -190,7 +190,7 @@ func CreateInvoiceApplication(userID int, request dto.CreateInvoiceApplicationRe
 	if profile.Version != request.ProfileVersion {
 		return nil, ErrInvoiceProfileVersionConflict
 	}
-	if _, _, err := normalizeInvoiceProfile(profile.Type, profile.Title, profile.TaxNumber); err != nil {
+	if _, _, _, err := normalizeInvoiceProfile(profile.Type, profile.Title, profile.TaxNumber, profile.IdentityCardNumber); err != nil {
 		return nil, err
 	}
 
@@ -206,7 +206,7 @@ func CreateInvoiceApplication(userID int, request dto.CreateInvoiceApplicationRe
 		return nil, ErrInvoiceStateConflict
 	}
 	profileJSON, err := common.Marshal(dto.InvoiceProfileSnapshot{
-		Type: profile.Type, Title: profile.Title, TaxNumber: profile.TaxNumber, Version: profile.Version,
+		Type: profile.Type, Title: profile.Title, TaxNumber: profile.TaxNumber, IdentityCardNumber: profile.IdentityCardNumber, Version: profile.Version,
 	})
 	if err != nil {
 		return nil, err
@@ -235,7 +235,7 @@ func CreateInvoiceApplication(userID int, request dto.CreateInvoiceApplicationRe
 			return err
 		}
 		if currentProfile.Version != request.ProfileVersion || currentProfile.Type != profile.Type ||
-			currentProfile.Title != profile.Title || currentProfile.TaxNumber != profile.TaxNumber {
+			currentProfile.Title != profile.Title || currentProfile.TaxNumber != profile.TaxNumber || currentProfile.IdentityCardNumber != profile.IdentityCardNumber {
 			return ErrInvoiceProfileVersionConflict
 		}
 

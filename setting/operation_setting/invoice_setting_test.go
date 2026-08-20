@@ -80,7 +80,7 @@ func TestInvoiceSettingDefaultsAndValidation(t *testing.T) {
 	assert.False(t, setting.PersonalEnabled)
 	assert.False(t, setting.CompanyEnabled)
 	assert.Positive(t, setting.ApplicationWindowDays)
-	assert.Zero(t, setting.MinimumAmountMinor)
+	assert.Equal(t, int64(MinimumInvoiceAmountMinor), setting.MinimumAmountMinor)
 	assert.Zero(t, setting.FeePercent)
 	assert.Positive(t, setting.PDFRetentionDays)
 	assert.Empty(t, setting.R2Endpoint)
@@ -88,6 +88,9 @@ func TestInvoiceSettingDefaultsAndValidation(t *testing.T) {
 	assert.Empty(t, setting.R2AccessKeyID)
 	assert.Empty(t, setting.R2Secret)
 	assert.NoError(t, setting.Validate())
+	tooLow := setting
+	tooLow.MinimumAmountMinor = MinimumInvoiceAmountMinor - 1
+	assert.Error(t, tooLow.Validate())
 
 	invalid := []InvoiceSetting{
 		{ApplicationWindowDays: 0, PDFRetentionDays: 1},

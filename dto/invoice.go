@@ -14,31 +14,34 @@ type InvoiceConfig struct {
 
 // InvoiceProfile represents a versioned personal or company invoicing identity.
 type InvoiceProfile struct {
-	ID        int64  `json:"id"`
-	Type      string `json:"type"`
-	Title     string `json:"title"`
-	TaxNumber string `json:"tax_number"`
-	IsDefault bool   `json:"is_default"`
-	Version   int64  `json:"version"`
-	CreatedAt int64  `json:"created_at"`
-	UpdatedAt int64  `json:"updated_at"`
+	ID                 int64  `json:"id"`
+	Type               string `json:"type"`
+	Title              string `json:"title"`
+	TaxNumber          string `json:"tax_number"`
+	IdentityCardNumber string `json:"identity_card_number"`
+	IsDefault          bool   `json:"is_default"`
+	Version            int64  `json:"version"`
+	CreatedAt          int64  `json:"created_at"`
+	UpdatedAt          int64  `json:"updated_at"`
 }
 
 // CreateInvoiceProfileRequest carries the identity fields for a new invoice profile.
 type CreateInvoiceProfileRequest struct {
-	Type      string `json:"type"`
-	Title     string `json:"title"`
-	TaxNumber string `json:"tax_number"`
-	IsDefault bool   `json:"is_default"`
+	Type               string `json:"type"`
+	Title              string `json:"title"`
+	TaxNumber          string `json:"tax_number"`
+	IdentityCardNumber string `json:"identity_card_number"`
+	IsDefault          bool   `json:"is_default"`
 }
 
 // UpdateInvoiceProfileRequest carries an optimistic-concurrency update for an invoice profile.
 type UpdateInvoiceProfileRequest struct {
-	ID              int64  `json:"id"`
-	ExpectedVersion int64  `json:"expected_version"`
-	Title           string `json:"title"`
-	TaxNumber       string `json:"tax_number"`
-	IsDefault       bool   `json:"is_default"`
+	ID                 int64  `json:"id"`
+	ExpectedVersion    int64  `json:"expected_version"`
+	Title              string `json:"title"`
+	TaxNumber          string `json:"tax_number"`
+	IdentityCardNumber string `json:"identity_card_number"`
+	IsDefault          bool   `json:"is_default"`
 }
 
 // DeleteInvoiceProfileRequest identifies the profile version to remove.
@@ -134,10 +137,11 @@ type InvoiceFeeHistoryPage struct {
 
 // InvoiceProfileSnapshot preserves the buyer identity used when an application was submitted.
 type InvoiceProfileSnapshot struct {
-	Type      string `json:"type"`
-	Title     string `json:"title"`
-	TaxNumber string `json:"tax_number"`
-	Version   int64  `json:"version"`
+	Type               string `json:"type"`
+	Title              string `json:"title"`
+	TaxNumber          string `json:"tax_number"`
+	IdentityCardNumber string `json:"identity_card_number"`
+	Version            int64  `json:"version"`
 }
 
 // InvoicePolicySnapshot preserves the business policy applied to an invoice application.
