@@ -161,7 +161,7 @@ func reserveTokenQuotaDB(id int, quota int) (bool, error) {
 
 // TryReserveUserQuota atomically checks and deducts a user's wallet quota.
 // 缓存命中时以缓存余额为准（避免批量模式下过期的数据库余额放大并发超扣）；
-// Redis 异常或水合失败时降级为数据库条件更新，保证服务可用。
+// Redis 操作失败时拒绝预扣，缓存未命中时安全降级为数据库条件更新。
 func TryReserveUserQuota(id int, quota int) (bool, error) {
 	if quota < 0 {
 		return false, errors.New("quota 不能为负数！")
@@ -179,10 +179,10 @@ func TryReserveUserQuota(id int, quota int) (bool, error) {
 			result, err = cacheTryReserveUserQuota(id, int64(quota))
 		}
 	}
-	if err != nil || result == cacheQuotaMiss {
-		if err != nil {
-			common.SysLog("user quota cache reserve unavailable, falling back to database: " + err.Error())
-		}
+	if err != nil {
+		return false, err
+	}
+	if result == cacheQuotaMiss {
 		return reserveUserQuotaDB(id, quota)
 	}
 	if result == cacheQuotaInsufficient {
@@ -220,10 +220,10 @@ func TryReserveTokenQuota(id int, key string, quota int, unlimited bool) (bool, 
 			result, err = cacheTryReserveTokenQuota(id, key, int64(quota))
 		}
 	}
-	if err != nil || result == cacheQuotaMiss {
-		if err != nil {
-			common.SysLog("token quota cache reserve unavailable, falling back to database: " + err.Error())
-		}
+	if err != nil {
+		return false, err
+	}
+	if result == cacheQuotaMiss {
 		return reserveTokenQuotaDB(id, quota)
 	}
 	if result == cacheQuotaInsufficient {

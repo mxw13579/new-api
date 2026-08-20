@@ -137,7 +137,7 @@ func TestRedisBatchReserveNeverFallsBackToStaleDatabaseBalance(t *testing.T) {
 	assert.Equal(t, 7, reloadedToken.UsedQuota)
 }
 
-func TestReserveFallsBackToDatabaseWhenRedisIsUnavailable(t *testing.T) {
+func TestUserReserveFailsClosedWhenRedisIsUnavailable(t *testing.T) {
 	truncateTables(t)
 	resetBatchUpdateTestState(t)
 	server := useUserCacheMiniRedis(t)
@@ -146,16 +146,58 @@ func TestReserveFallsBackToDatabaseWhenRedisIsUnavailable(t *testing.T) {
 	require.NoError(t, populateUserCache(user))
 	server.Close()
 
-	// Redis 故障时降级为数据库条件更新：服务保持可用且不会超扣。
 	reserved, err := TryReserveUserQuota(user.Id, 5)
+	assert.False(t, reserved)
+	require.Error(t, err)
+	assert.Equal(t, 20, getUserQuotaFromDB(t, user.Id))
+
+	require.NoError(t, server.Restart())
+	cached, err := cacheGetUserBase(user.Id)
+	require.NoError(t, err)
+	assert.Equal(t, 20, cached.Quota)
+
+	reserved, err = TryReserveUserQuota(user.Id, 5)
 	require.NoError(t, err)
 	assert.True(t, reserved)
 	assert.Equal(t, 15, getUserQuotaFromDB(t, user.Id))
-
-	reserved, err = TryReserveUserQuota(user.Id, 16)
+	cached, err = cacheGetUserBase(user.Id)
 	require.NoError(t, err)
+	assert.Equal(t, 15, cached.Quota)
+}
+
+func TestTokenReserveFailsClosedWhenRedisIsUnavailable(t *testing.T) {
+	truncateTables(t)
+	resetBatchUpdateTestState(t)
+	server := useUserCacheMiniRedis(t)
+
+	token := createReserveTestToken(t, 20)
+	_, err := GetTokenByKey(token.Key, true)
+	require.NoError(t, err)
+	server.Close()
+
+	reserved, err := TryReserveTokenQuota(token.Id, token.Key, 5, false)
 	assert.False(t, reserved)
-	assert.Equal(t, 15, getUserQuotaFromDB(t, user.Id))
+	require.Error(t, err)
+	reloaded := getTokenFromDB(t, token.Id)
+	assert.Equal(t, 20, reloaded.RemainQuota)
+	assert.Zero(t, reloaded.UsedQuota)
+
+	require.NoError(t, server.Restart())
+	cached, err := cacheGetTokenByKey(token.Key)
+	require.NoError(t, err)
+	assert.Equal(t, 20, cached.RemainQuota)
+	assert.Zero(t, cached.UsedQuota)
+
+	reserved, err = TryReserveTokenQuota(token.Id, token.Key, 5, false)
+	require.NoError(t, err)
+	assert.True(t, reserved)
+	reloaded = getTokenFromDB(t, token.Id)
+	assert.Equal(t, 15, reloaded.RemainQuota)
+	assert.Equal(t, 5, reloaded.UsedQuota)
+	cached, err = cacheGetTokenByKey(token.Key)
+	require.NoError(t, err)
+	assert.Equal(t, 15, cached.RemainQuota)
+	assert.Equal(t, 5, cached.UsedQuota)
 }
 
 func TestSynchronousReserveCompensatesCacheWhenPersistenceFails(t *testing.T) {
