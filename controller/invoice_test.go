@@ -276,7 +276,7 @@ func TestUpdateInvoiceSettingRejectsUnknownFieldsAndPersistsValidSetting(t *test
 	UpdateInvoiceSetting(context)
 	assert.Equal(t, http.StatusBadRequest, recorder.Code, "response-only secret state must not be accepted by PUT")
 
-	context, recorder = invoiceControllerContext(http.MethodPut, "/", `{"personal_enabled":true,"company_enabled":true,"application_window_days":45,"minimum_amount_minor":100,"fee_percent":5,"pdf_retention_days":60,"r2_endpoint":"https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com","r2_bucket":"private-invoices","r2_access_key_id":"access-id","r2_secret_access_key":"secret-value"}`)
+	context, recorder = invoiceControllerContext(http.MethodPut, "/", `{"personal_enabled":true,"company_enabled":true,"application_window_days":45,"minimum_amount_minor":10000,"fee_percent":5,"pdf_retention_days":60,"r2_endpoint":"https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com","r2_bucket":"private-invoices","r2_access_key_id":"access-id","r2_secret_access_key":"secret-value"}`)
 	UpdateInvoiceSetting(context)
 	assert.Equal(t, http.StatusOK, recorder.Code)
 	assert.Equal(t, 45, operation_setting.GetInvoiceSetting().ApplicationWindowDays)

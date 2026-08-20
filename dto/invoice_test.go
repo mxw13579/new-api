@@ -62,9 +62,9 @@ func TestPersonalInvoiceDTOJSONContract(t *testing.T) {
 	}, `{"personal_enabled":true,"company_enabled":true,"application_window_days":90,"minimum_amount_minor":100,"fee_percent":5,"quota_per_unit":500000,"pdf_retention_days":365,"currency":"CNY"}`)
 
 	assertJSONContract(t, CreateInvoiceProfileRequest{Type: "company", Title: "Example Ltd", TaxNumber: "TAX", IsDefault: true},
-		`{"type":"company","title":"Example Ltd","tax_number":"TAX","is_default":true}`)
+		`{"type":"company","title":"Example Ltd","tax_number":"TAX","identity_card_number":"","is_default":true}`)
 	assertJSONContract(t, UpdateInvoiceProfileRequest{ID: 7, ExpectedVersion: 3, Title: "Example Ltd", TaxNumber: "TAX", IsDefault: false},
-		`{"id":7,"expected_version":3,"title":"Example Ltd","tax_number":"TAX","is_default":false}`)
+		`{"id":7,"expected_version":3,"title":"Example Ltd","tax_number":"TAX","identity_card_number":"","is_default":false}`)
 	assertJSONContract(t, DeleteInvoiceProfileRequest{ID: 7, ExpectedVersion: 4}, `{"id":7,"expected_version":4}`)
 
 	assertJSONContract(t, EligibleInvoiceOrderPage{
