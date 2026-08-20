@@ -97,6 +97,11 @@ export function ThemeProvider({
       root.classList.remove('light', 'dark')
       root.classList.add(nextResolvedTheme)
       setResolvedTheme(nextResolvedTheme)
+      window.dispatchEvent(
+        new CustomEvent('newapi:themechange', {
+          detail: { theme, resolvedTheme: nextResolvedTheme },
+        })
+      )
     }
 
     applyTheme()

@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { Languages, Check } from 'lucide-react'
-import { useCallback } from 'react'
+import { useCallback, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
@@ -39,6 +39,16 @@ export function LanguageSwitcher() {
   const { i18n, t } = useTranslation()
   const user = useAuthStore((s) => s.auth.user)
   const currentLanguage = normalizeInterfaceLanguage(i18n.language)
+
+  useEffect(() => {
+    document.documentElement.dataset.interfaceLanguage = currentLanguage
+    window.dispatchEvent(
+      new CustomEvent('newapi:languagechange', {
+        detail: { language: currentLanguage },
+      })
+    )
+  }, [currentLanguage])
+
   const handleChangeLanguage = useCallback(
     async (code: string) => {
       await i18n.changeLanguage(code)

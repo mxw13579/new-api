@@ -18,7 +18,9 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import DOMPurify, { type Config } from 'dompurify'
 import { useEffect, useMemo, useRef } from 'react'
+import { useTranslation } from 'react-i18next'
 
+import { normalizeInterfaceLanguage } from '@/i18n/languages'
 import { cn } from '@/lib/utils'
 
 export type HtmlContentVariant = 'inline' | 'isolated'
@@ -192,9 +194,13 @@ function sanitizeHtmlContent(
   )
 }
 
-function syncDarkClass(wrapper: HTMLElement): void {
+function syncApplicationState(
+  wrapper: HTMLElement,
+  interfaceLanguage: string
+): void {
   const isDark = document.documentElement.classList.contains('dark')
   wrapper.classList.toggle('dark', isDark)
+  wrapper.dataset.interfaceLanguage = interfaceLanguage
 }
 
 function IsolatedHtmlContent(props: {
@@ -202,6 +208,10 @@ function IsolatedHtmlContent(props: {
   html: string
 }): React.ReactElement {
   const containerRef = useRef<HTMLDivElement>(null)
+  const { i18n } = useTranslation()
+  const interfaceLanguage = normalizeInterfaceLanguage(
+    i18n.resolvedLanguage || i18n.language
+  )
 
   useEffect(() => {
     const container = containerRef.current
@@ -218,7 +228,7 @@ function IsolatedHtmlContent(props: {
     ].map((node) => node.cloneNode(true))
 
     const wrapper = document.createElement('div')
-    syncDarkClass(wrapper)
+    syncApplicationState(wrapper, interfaceLanguage)
     wrapper.innerHTML = props.html
 
     const contentTemplate = document.createElement('template')
@@ -230,14 +240,16 @@ function IsolatedHtmlContent(props: {
       wrapper
     )
 
-    const observer = new MutationObserver(() => syncDarkClass(wrapper))
+    const observer = new MutationObserver(() =>
+      syncApplicationState(wrapper, interfaceLanguage)
+    )
     observer.observe(document.documentElement, {
       attributes: true,
       attributeFilter: ['class'],
     })
 
     return () => observer.disconnect()
-  }, [props.html])
+  }, [interfaceLanguage, props.html])
 
   return (
     <div ref={containerRef} className={cn('block w-full', props.className)} />
