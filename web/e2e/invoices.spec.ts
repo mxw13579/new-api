@@ -95,6 +95,7 @@ async function installInvoiceBackend(
     authorization: string | null
   }> = []
   const cancelRequests: number[] = []
+  const profileUpdates: unknown[] = []
 
   await page.addInitScript((language) => {
     window.localStorage.setItem('setup_status_checked', 'true')
@@ -199,6 +200,11 @@ async function installInvoiceBackend(
     }
 
     if (path === '/api/user/invoice/profiles') {
+      if (request.method() === 'PUT') {
+        profileUpdates.push(request.postDataJSON())
+        await fulfill(route, success({ ...profile, ...request.postDataJSON(), version: 4 }))
+        return
+      }
       await fulfill(route, success(scenario === 'empty' ? [] : [profile]))
       return
     }
@@ -347,8 +353,29 @@ async function installInvoiceBackend(
     await fulfill(route, success(null))
   })
 
-  return { downloadRequests, cancelRequests }
+  return { downloadRequests, cancelRequests, profileUpdates }
 }
+
+test('editing a personal invoice profile submits its identity card number', async ({ page }) => {
+  const backend = await installInvoiceBackend(page)
+  await page.goto('/invoices')
+  await page.getByRole('tab', { name: 'Profiles' }).click()
+  await page.getByRole('button', { name: 'Edit' }).click()
+  await page.getByLabel('Full name').fill('Updated User')
+  await page.getByLabel('Identity card number').fill('11010519491231003X')
+  await page.getByRole('button', { name: 'Save' }).click()
+  await expect(page.getByText('Invoice profile saved')).toBeVisible()
+  expect(backend.profileUpdates).toEqual([
+    {
+      id: 1,
+      expected_version: 3,
+      title: 'Updated User',
+      tax_number: '',
+      identity_card_number: '11010519491231003X',
+      is_default: true,
+    },
+  ])
+})
 
 test('desktop invoice route supports keyboard application flow and held download suppression', async ({
   page,
@@ -551,7 +578,7 @@ test.describe('mobile invoice route', () => {
     await expect(
       page.getByRole('heading', { name: 'Hóa đơn', exact: true })
     ).toBeVisible()
-    await page.getByLabel('H�?sơ hóa đơn').selectOption('1')
+    await page.getByLabel('Hồ sơ hóa đơn').selectOption('1')
     await page.getByRole('checkbox', { name: 'TOPUP-101' }).check()
     const reviewButton = page.getByRole('button', {
       name: 'Kiểm tra yêu cầu',
