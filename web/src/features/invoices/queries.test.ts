@@ -22,7 +22,7 @@ describe('invoice query-cache redaction', () => {
       type: 'company',
       title: 'Buyer',
       tax_number: '91310000PRIVATE',
-      identity_card_number: '',
+      identity_card_number: '11010519491231002X',
       is_default: true,
       version: 1,
       created_at: 1,
@@ -35,6 +35,8 @@ describe('invoice query-cache redaction', () => {
     assert.equal(cached?.identity_card_number, '')
     assert.equal(profile.title, 'Buyer')
     assert.equal(profile.tax_number, '91310000PRIVATE')
+    assert.equal(profile.identity_card_number, '11010519491231002X')
+    assert.doesNotMatch(JSON.stringify(cached), /11010519491231002X/)
   })
 
   test('removes snapshot titles and tax numbers without mutating display details', () => {
@@ -43,7 +45,7 @@ describe('invoice query-cache redaction', () => {
       profile_snapshot: {
         title: 'Live Fixture Co',
         tax_number: '91310000PRIVATE',
-        identity_card_number: '',
+        identity_card_number: '11010519491231002X',
       },
     } as InvoiceApplicationDetail
 
@@ -53,5 +55,7 @@ describe('invoice query-cache redaction', () => {
     assert.equal(cached.profile_snapshot.identity_card_number, '')
     assert.equal(detail.profile_snapshot.title, 'Live Fixture Co')
     assert.equal(detail.profile_snapshot.tax_number, '91310000PRIVATE')
+    assert.equal(detail.profile_snapshot.identity_card_number, '11010519491231002X')
+    assert.doesNotMatch(JSON.stringify(cached), /11010519491231002X/)
   })
 })

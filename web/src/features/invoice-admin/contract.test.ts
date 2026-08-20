@@ -65,7 +65,7 @@ const baseDetail: InvoiceApplicationDetail = {
     type: 'company',
     title: 'Secret Company',
     tax_number: '91310000SECRET',
-    identity_card_number: '',
+    identity_card_number: '11010519491231002X',
     version: 3,
   },
   policy_snapshot: {
@@ -174,11 +174,13 @@ describe('invoice admin contracts', () => {
       masked.profile_snapshot.tax_number,
       PROTECTED_INVOICE_VALUE_KEY
     )
-    assert.doesNotMatch(JSON.stringify(masked), /Secret Company|91310000SECRET/)
+    assert.doesNotMatch(JSON.stringify(masked), /Secret Company|91310000SECRET|11010519491231002X/)
+    assert.equal(baseDetail.profile_snapshot.identity_card_number, '11010519491231002X')
     assert.equal(
       maskInvoiceSensitiveDetail(baseDetail, true).profile_snapshot.tax_number,
       '91310000SECRET'
     )
+    assert.equal(maskInvoiceSensitiveDetail(baseDetail, true).profile_snapshot.identity_card_number, '11010519491231002X')
   })
 
   test('builds the exact initial PDF multipart contract after strict validation', () => {

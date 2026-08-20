@@ -194,6 +194,60 @@ func completeInvoiceSettingOptions(version, secret string) map[string]string {
 	}
 }
 
+func TestMigrateInvoiceMinimumAmountOption(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&Option{}))
+	values := completeInvoiceSettingOptions("a", "secret-a")
+	values["invoice_setting.minimum_amount_minor"] = "0"
+	for key, value := range values {
+		require.NoError(t, db.Create(&Option{Key: key, Value: value}).Error)
+	}
+	require.NoError(t, migrateInvoiceMinimumAmountOption(db))
+	var options []Option
+	require.NoError(t, db.Find(&options).Error)
+	loaded := map[string]string{}
+	for _, option := range options {
+		loaded[option.Key] = option.Value
+	}
+	require.Equal(t, "10000", loaded["invoice_setting.minimum_amount_minor"])
+	for key, value := range values {
+		if key != "invoice_setting.minimum_amount_minor" {
+			require.Equal(t, value, loaded[key])
+		}
+	}
+	previous := operation_setting.GetInvoiceSetting()
+	t.Cleanup(func() { operation_setting.PublishInvoiceSetting(previous) })
+	require.NoError(t, publishInvoiceOptions(loaded))
+	snapshot := operation_setting.GetInvoiceSetting()
+	require.Equal(t, int64(10000), snapshot.MinimumAmountMinor)
+	require.Equal(t, "bucket-a", snapshot.R2Bucket)
+	require.Equal(t, "secret-a", snapshot.R2Secret)
+}
+
+func TestMigrateInvoiceMinimumAmountOptionLeavesMissingAndInvalid(t *testing.T) {
+	for name, value := range map[string]string{"missing": "", "invalid": "not-a-number"} {
+		t.Run(name, func(t *testing.T) {
+			db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
+			require.NoError(t, err)
+			require.NoError(t, db.AutoMigrate(&Option{}))
+			if value != "" {
+				require.NoError(t, db.Create(&Option{Key: "invoice_setting.minimum_amount_minor", Value: value}).Error)
+			}
+			require.NoError(t, migrateInvoiceMinimumAmountOption(db))
+			var count int64
+			require.NoError(t, db.Model(&Option{}).Count(&count).Error)
+			if value == "" {
+				require.Zero(t, count)
+			} else {
+				var option Option
+				require.NoError(t, db.First(&option).Error)
+				require.Equal(t, value, option.Value)
+			}
+		})
+	}
+}
+
 func TestUpdateOptionMapParsesRechargeRebateRatioForInviter(t *testing.T) {
 	originalOptionMap := common.OptionMap
 	originalRatio := common.RechargeRebateRatioForInviter
