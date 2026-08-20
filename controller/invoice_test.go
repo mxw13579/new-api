@@ -303,12 +303,12 @@ func TestUpdateInvoiceSettingRejectsUnknownFieldsAndPersistsValidSetting(t *test
 	assert.Contains(t, recorder.Body.String(), `"r2_secret_configured":true`)
 	assert.NotContains(t, recorder.Body.String(), "secret-value")
 
-	context, recorder = invoiceControllerContext(http.MethodPut, "/", `{"personal_enabled":true,"company_enabled":true,"application_window_days":45,"minimum_amount_minor":100,"fee_percent":6,"pdf_retention_days":60,"r2_endpoint":"https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com","r2_bucket":"private-invoices","r2_access_key_id":"rotated-access","r2_secret_access_key":""}`)
+	context, recorder = invoiceControllerContext(http.MethodPut, "/", `{"personal_enabled":true,"company_enabled":true,"application_window_days":45,"minimum_amount_minor":10000,"fee_percent":6,"pdf_retention_days":60,"r2_endpoint":"https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com","r2_bucket":"private-invoices","r2_access_key_id":"rotated-access","r2_secret_access_key":""}`)
 	UpdateInvoiceSetting(context)
 	assert.Equal(t, http.StatusOK, recorder.Code)
 	assert.Equal(t, "secret-value", operation_setting.GetInvoiceSetting().R2Secret)
 
-	context, recorder = invoiceControllerContext(http.MethodPut, "/", `{"personal_enabled":true,"company_enabled":true,"application_window_days":45,"minimum_amount_minor":100,"fee_percent":6,"pdf_retention_days":60,"r2_endpoint":"","r2_bucket":"","r2_access_key_id":"","r2_secret_access_key":""}`)
+	context, recorder = invoiceControllerContext(http.MethodPut, "/", `{"personal_enabled":true,"company_enabled":true,"application_window_days":45,"minimum_amount_minor":10000,"fee_percent":6,"pdf_retention_days":60,"r2_endpoint":"","r2_bucket":"","r2_access_key_id":"","r2_secret_access_key":""}`)
 	UpdateInvoiceSetting(context)
 	assert.Equal(t, http.StatusOK, recorder.Code)
 	assert.Empty(t, operation_setting.GetInvoiceSetting().R2Secret)
