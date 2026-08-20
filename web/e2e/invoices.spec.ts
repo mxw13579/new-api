@@ -33,6 +33,7 @@ const profile = {
   type: 'personal',
   title: 'Demo User',
   tax_number: '',
+  identity_card_number: '11010519491231002X',
   is_default: true,
   version: 3,
   created_at: now - 10_000,
@@ -361,9 +362,10 @@ test('editing a personal invoice profile submits its identity card number', asyn
   await page.goto('/invoices')
   await page.getByRole('tab', { name: 'Profiles' }).click()
   await page.getByRole('button', { name: 'Edit' }).click()
-  await page.getByLabel('Full name').fill('Updated User')
-  await page.getByLabel('Identity card number').fill('11010519491231003X')
-  await page.getByRole('button', { name: 'Save' }).click()
+  const editor = page.getByRole('dialog', { name: 'Edit invoice profile' })
+  await editor.locator('#invoice-profile-title').fill('Updated User')
+  await editor.locator('#invoice-profile-identity-card-number').fill('11010519491231003X')
+  await editor.getByRole('button', { name: 'Save' }).click()
   await expect(page.getByText('Invoice profile saved')).toBeVisible()
   expect(backend.profileUpdates).toEqual([
     {
