@@ -184,7 +184,7 @@ func completeInvoiceSettingOptions(version, secret string) map[string]string {
 		"invoice_setting.personal_enabled":        "true",
 		"invoice_setting.company_enabled":         "true",
 		"invoice_setting.application_window_days": "30",
-		"invoice_setting.minimum_amount_minor":    "0",
+		"invoice_setting.minimum_amount_minor":    "10000",
 		"invoice_setting.fee_percent":             "1",
 		"invoice_setting.pdf_retention_days":      "30",
 		"invoice_setting.r2_endpoint":             "https://" + map[string]string{"a": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "b": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}[version] + ".r2.cloudflarestorage.com",

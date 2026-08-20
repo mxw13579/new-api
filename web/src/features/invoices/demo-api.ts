@@ -195,6 +195,7 @@ export function createInvoiceDemoApi(): InvoiceApi {
         ...current,
         title: request.title,
         tax_number: request.tax_number,
+        identity_card_number: request.identity_card_number,
         is_default: request.is_default,
         version: current.version + 1,
         updated_at: now,
