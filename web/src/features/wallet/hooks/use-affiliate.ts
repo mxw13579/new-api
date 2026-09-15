@@ -21,6 +21,8 @@ import { useState, useEffect, useCallback } from 'react'
 import { toast } from 'sonner'
 
 import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard'
+import { handleServerError } from '@/lib/handle-server-error'
+import { requireServerSuccess } from '@/lib/server-error-message'
 
 import { getAffiliateCode, transferAffiliateQuota } from '../api'
 import { generateAffiliateLink } from '../lib'
@@ -40,7 +42,7 @@ export function useAffiliate() {
   const fetchAffiliateCode = useCallback(async () => {
     try {
       setLoading(true)
-      const response = await getAffiliateCode()
+      const response = requireServerSuccess(await getAffiliateCode())
 
       if (response.success && response.data) {
         setAffiliateCode(response.data)
@@ -48,8 +50,7 @@ export function useAffiliate() {
         setAffiliateLink(link)
       }
     } catch (error) {
-      // eslint-disable-next-line no-console
-      console.error('Failed to fetch affiliate code:', error)
+      handleServerError(error)
     } finally {
       setLoading(false)
     }
@@ -71,10 +72,10 @@ export function useAffiliate() {
         return true
       }
 
-      toast.error(response.message || i18next.t('Transfer failed'))
+      handleServerError(response, i18next.t('Transfer failed'))
       return false
-    } catch {
-      toast.error(i18next.t('Transfer failed'))
+    } catch (error) {
+      handleServerError(error, i18next.t('Transfer failed'))
       return false
     } finally {
       setTransferring(false)

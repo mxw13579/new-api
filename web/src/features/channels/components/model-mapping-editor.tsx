@@ -17,7 +17,15 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { Code, Plus, Table, Trash2 } from 'lucide-react'
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useEffectEvent,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { JsonCodeEditor } from '@/components/json-code-editor'
@@ -129,12 +137,15 @@ export function ModelMappingEditor(props: ModelMappingEditorProps) {
     [createRowId, t]
   )
 
-  // Parse JSON to rows when value changes externally
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
+  const syncExternalValue = useEffectEvent(() => {
     setJsonValue(props.value)
     parseJsonToRows(props.value)
-  }, [parseJsonToRows, props.value])
+  })
+
+  // 仅在外部值变化时同步，切换语言不能覆盖未保存的草稿。
+  useEffect(() => {
+    syncExternalValue()
+  }, [props.value])
 
   const convertRowsToJson = (updatedRows: MappingRow[]): string => {
     if (updatedRows.length === 0) {
@@ -268,8 +279,8 @@ export function ModelMappingEditor(props: ModelMappingEditorProps) {
           {rows.length > 0 ? (
             <div className='space-y-2'>
               <div className='grid grid-cols-[1fr_1fr_auto] gap-2 text-sm font-medium'>
-                <div>{t('Original Model')}</div>
-                <div>{t('Replacement Model')}</div>
+                <div>{t('Request Model Name')}</div>
+                <div>{t('Upstream Model Name')}</div>
                 <div className='w-10' />
               </div>
               {rows.map((row) => (
@@ -328,11 +339,16 @@ export function ModelMappingEditor(props: ModelMappingEditorProps) {
             {t('Add Mapping')}
           </Button>
         </TabsContent>
-        <TabsContent value='json'>
+        <TabsContent value='json' className='space-y-2'>
+          <p className='text-muted-foreground text-sm'>
+            {t(
+              'JSON keys are request model names; values are upstream model names.'
+            )}
+          </p>
           <JsonCodeEditor
             value={jsonValue}
             onChange={handleJsonChange}
-            placeholder={t('{"original-model": "replacement-model"}')}
+            placeholder='{"request-model": "upstream-model"}'
             disabled={props.disabled}
             className={jsonError ? 'border-destructive' : undefined}
             aria-invalid={Boolean(jsonError)}

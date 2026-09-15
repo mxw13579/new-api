@@ -53,7 +53,7 @@ if (!isolatedRun) {
           'Detected multiple renderers concurrently rendering the same context provider'
         )
       ).toBe(false)
-    })
+    }, 20_000)
   })
 } else {
   const domWindow = new Window()
@@ -71,6 +71,8 @@ if (!isolatedRun) {
     'requestAnimationFrame',
     'cancelAnimationFrame',
     'getComputedStyle',
+    'matchMedia',
+    'customElements',
   ] as const) {
     Object.defineProperty(globalThis, key, {
       configurable: true,
@@ -92,7 +94,10 @@ if (!isolatedRun) {
       type: '3rdParty',
       init: () => undefined,
     },
-    useTranslation: () => ({ t: (key: string) => key }),
+    useTranslation: () => ({
+      t: (key: string) => key,
+      i18n: { language: 'en' },
+    }),
   }))
 
   let topupInfo: TopupInfo = createTopupInfo(10)

@@ -218,7 +218,10 @@ export function validateInvoiceSetting(
     !Number.isSafeInteger(setting.minimum_amount_minor) ||
     setting.minimum_amount_minor < 10000
   ) {
-    return { ok: false, errorKey: 'Minimum invoice amount must be at least 100 CNY' }
+    return {
+      ok: false,
+      errorKey: 'Minimum invoice amount must be at least 100 CNY',
+    }
   }
   if (
     !Number.isSafeInteger(setting.fee_percent) ||

@@ -115,7 +115,9 @@ export function Invoices() {
           ) : null}
           <Tabs defaultValue='apply'>
             <TabsList className='max-w-full overflow-x-auto'>
-              <TabsTrigger value='apply'>{t('Apply')}</TabsTrigger>
+              <TabsTrigger value='apply'>
+                {t('Apply for an invoice')}
+              </TabsTrigger>
               <TabsTrigger value='profiles'>{t('Profiles')}</TabsTrigger>
               <TabsTrigger value='history'>{t('History')}</TabsTrigger>
             </TabsList>

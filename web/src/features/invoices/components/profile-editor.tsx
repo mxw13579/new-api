@@ -98,7 +98,9 @@ export function ProfileEditor(props: ProfileEditorProps) {
                   taxNumber:
                     event.target.value === 'personal' ? '' : current.taxNumber,
                   identityCardNumber:
-                    event.target.value === 'company' ? '' : current.identityCardNumber,
+                    event.target.value === 'company'
+                      ? ''
+                      : current.identityCardNumber,
                 }))
               }
             >
@@ -203,8 +205,10 @@ export function ProfileEditor(props: ProfileEditorProps) {
             disabled={
               props.saving ||
               !props.draft.title.trim() ||
-              (props.draft.type === 'company' && !props.draft.taxNumber.trim())
-              || (props.draft.type === 'personal' && !props.draft.identityCardNumber.trim())
+              (props.draft.type === 'company' &&
+                !props.draft.taxNumber.trim()) ||
+              (props.draft.type === 'personal' &&
+                !props.draft.identityCardNumber.trim())
             }
             onClick={props.onSave}
           >

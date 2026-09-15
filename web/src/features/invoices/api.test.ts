@@ -97,6 +97,7 @@ describe('HTTP InvoiceApi adapter', () => {
       expected_version: 9,
       title: 'Acme',
       tax_number: '91310000',
+      identity_card_number: '',
       is_default: true,
     })
     assert.deepEqual(calls[4].body, { id: 4, expected_version: 10 })

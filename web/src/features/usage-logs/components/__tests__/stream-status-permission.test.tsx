@@ -16,9 +16,10 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { describe, it as test } from 'bun:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { after, describe, test } from 'node:test'
+import { after } from 'node:test'
 
 const isolatedRun = process.env.USAGE_LOG_STREAM_STATUS_TEST_ISOLATED === '1'
 
@@ -51,7 +52,7 @@ if (!isolatedRun) {
         false,
         output
       )
-    })
+    }, 20_000)
   })
 } else {
   const { Window } = await import('happy-dom')
@@ -89,7 +90,12 @@ if (!isolatedRun) {
   const { createRoot } = await import('react-dom/client')
   const { createInstance } = await import('i18next')
   const { I18nextProvider, initReactI18next } = await import('react-i18next')
+  const { QueryClient, QueryClientProvider } =
+    await import('@tanstack/react-query')
   const { DetailsDialog } = await import('../dialogs/details-dialog')
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { enabled: false, retry: false } },
+  })
 
   const i18n = createInstance()
   await i18n.use(initReactI18next).init({
@@ -141,14 +147,17 @@ if (!isolatedRun) {
 
     await act(async () => {
       root.render(
-        <I18nextProvider i18n={i18n}>
-          <DetailsDialog
-            log={log}
-            isAdmin={isAdmin}
-            open
-            onOpenChange={() => undefined}
-          />
-        </I18nextProvider>
+        <QueryClientProvider client={queryClient}>
+          <I18nextProvider i18n={i18n}>
+            <DetailsDialog
+              log={log}
+              isAdmin={isAdmin}
+              isRoot={false}
+              open
+              onOpenChange={() => undefined}
+            />
+          </I18nextProvider>
+        </QueryClientProvider>
       )
     })
 
@@ -164,6 +173,7 @@ if (!isolatedRun) {
 
   describe('usage log stream status permissions', () => {
     after(() => {
+      queryClient.clear()
       domWindow.close()
     })
 

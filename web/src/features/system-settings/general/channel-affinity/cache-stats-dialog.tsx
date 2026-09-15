@@ -18,13 +18,13 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useEffect, useMemo, useState, useRef, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
-import { toast } from 'sonner'
 
 import { Dialog } from '@/components/dialog'
 import { formatTimestampToDate } from '@/lib/format'
+import { handleServerError } from '@/lib/handle-server-error'
 
 import { getAffinityUsageCache } from './api'
-import { getCacheStatsView, settleCacheStatsRequest } from './constants'
+import { getCacheStatsView } from './constants'
 
 function formatRate(hit: number, total: number): string {
   if (!total || total <= 0) return '-'
@@ -63,32 +63,20 @@ export function CacheStatsDialog(props: Props) {
 
     setStats(null)
 
-    const loadStats = async () => {
-      const outcome = await settleCacheStatsRequest(
-        getAffinityUsageCache(target),
-        () => seq === seqRef.current
-      )
-      if (outcome.kind === 'stale') {
-        return
-      }
-      if (outcome.kind === 'success') {
-        setStats(outcome.data)
-      } else {
-        toast.error(
-          outcome.message === 'Request failed'
-            ? t('Request failed')
-            : outcome.message
-        )
-      }
-      setLoading(false)
-    }
-
-    loadStats().catch(() => {
-      if (seq === seqRef.current) {
-        toast.error(t('Request failed'))
+    void getAffinityUsageCache(target)
+      .then((res) => {
+        if (seq !== seqRef.current) return
+        if (res.success) setStats((res.data as Record<string, unknown>) || {})
+        else handleServerError(res, t('Request failed'))
+      })
+      .catch((error) => {
+        if (seq !== seqRef.current) return
+        handleServerError(error, t('Request failed'))
+      })
+      .finally(() => {
+        if (seq !== seqRef.current) return
         setLoading(false)
-      }
-    })
+      })
   }, [props.open, props.target, t])
 
   const rows = useMemo(() => {

@@ -19,7 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import { InvoiceIcon } from '@hugeicons/core-free-icons'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { useNavigate } from '@tanstack/react-router'
-import { User, Wallet, LogOut, Settings } from 'lucide-react'
+import { User, Wallet, LogOut, Settings, ShieldCheck } from 'lucide-react'
 import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -51,6 +51,7 @@ export function ProfileDropdown() {
   const isSuperAdmin = user?.role === ROLE.SUPER_ADMIN
   const isWalletVisible = useIsSidebarModuleVisible('/wallet')
   const isInvoicesVisible = useIsSidebarModuleVisible('/invoices')
+  const isSecurityVisible = useIsSidebarModuleVisible('/security')
   const avatarName = user?.username || displayName
   const avatarFallback = getUserAvatarFallback(avatarName)
   const avatarFallbackStyle = useMemo(
@@ -109,6 +110,13 @@ export function ProfileDropdown() {
             <User className='size-4' />
             {t('Profile')}
           </DropdownMenuItem>
+
+          {isSecurityVisible && (
+            <DropdownMenuItem onClick={() => navigate({ to: '/security' })}>
+              <ShieldCheck className='size-4' />
+              {t('Security & Access')}
+            </DropdownMenuItem>
+          )}
 
           {isWalletVisible && (
             <DropdownMenuItem onClick={() => navigate({ to: '/wallet' })}>

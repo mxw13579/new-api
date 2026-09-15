@@ -55,7 +55,10 @@ describe('invoice query-cache redaction', () => {
     assert.equal(cached.profile_snapshot.identity_card_number, '')
     assert.equal(detail.profile_snapshot.title, 'Live Fixture Co')
     assert.equal(detail.profile_snapshot.tax_number, '91310000PRIVATE')
-    assert.equal(detail.profile_snapshot.identity_card_number, '11010519491231002X')
+    assert.equal(
+      detail.profile_snapshot.identity_card_number,
+      '11010519491231002X'
+    )
     assert.doesNotMatch(JSON.stringify(cached), /11010519491231002X/)
   })
 })

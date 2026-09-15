@@ -27,13 +27,22 @@ import {
 } from './billing-expr'
 import { StablePricingSequenceCoordinator } from './stable-pricing-keys'
 
-function parsePricingExpression(expression: string) {
-  const split = splitBillingExprAndRequestRules(expression)
+// Parse actual supported expressions independently: adding tiers together is
+// not a displayable tier chain in the upstream AST-based pricing parser.
+function parsePricingExpressions(expressions: string[]) {
+  const splits = expressions.map(splitBillingExprAndRequestRules)
   return {
-    tiers: parseTiersFromExpr(split.billingExpr),
-    ruleGroups: tryParseRequestRuleExpr(split.requestRuleExpr) ?? [],
+    tiers: splits.flatMap((split) => parseTiersFromExpr(split.billingExpr)),
+    ruleGroups: splits.flatMap(
+      (split) => tryParseRequestRuleExpr(split.requestRuleExpr) ?? []
+    ),
   }
 }
+
+const small = 'tier("small", p * 1 + c * 2)'
+const large = 'tier("large", p * 3 + c * 4)'
+const proRule = '(header("x-plan") == "pro" ? 2 : 1)'
+const teamRule = '(header("x-plan") == "team" ? 3 : 1)'
 
 describe('pricing behavior contracts', () => {
   it('normalizes every condition-source branch without changing valid input', () => {
@@ -62,82 +71,77 @@ describe('pricing behavior contracts', () => {
   it('reconciles keys across real tier and rule reparsing', () => {
     const coordinator = new StablePricingSequenceCoordinator()
     const beforePlan = coordinator.plan(
-      parsePricingExpression(
-        'tier("small", 1, 2) + tier("small", 1, 2) + tier("large", 3, 4)'
-      )
+      parsePricingExpressions([small, small, large])
     )
     coordinator.commit(beforePlan.nextSnapshot)
     const before = beforePlan.viewModel
-    const afterInsertPlan = coordinator.plan(
-      parsePricingExpression(
-        'tier("small", 1, 2) + tier("small", 1, 2) + tier("small", 1, 2) + tier("large", 3, 4)'
-      )
+    const insertedPlan = coordinator.plan(
+      parsePricingExpressions([small, small, small, large])
     )
-    coordinator.commit(afterInsertPlan.nextSnapshot)
-    const afterInsert = afterInsertPlan.viewModel
-    const afterReorderPlan = coordinator.plan(
-      parsePricingExpression(
-        'tier("large", 3, 4) + tier("small", 1, 2) + tier("small", 1, 2) + tier("small", 1, 2)'
-      )
+    coordinator.commit(insertedPlan.nextSnapshot)
+    const inserted = insertedPlan.viewModel
+    const reorderedPlan = coordinator.plan(
+      parsePricingExpressions([large, small, small, small])
     )
-    coordinator.commit(afterReorderPlan.nextSnapshot)
-    const afterReorder = afterReorderPlan.viewModel
-    const repeated = coordinator.plan(
-      parsePricingExpression(
-        'tier("large", 3, 4) + tier("small", 1, 2) + tier("small", 1, 2) + tier("small", 1, 2)'
-      )
-    ).viewModel
+    coordinator.commit(reorderedPlan.nextSnapshot)
+    const reordered = reorderedPlan.viewModel
 
-    assert.notEqual(afterInsert.tiers[0].key, before.tiers[0].key)
+    assert.equal(before.tiers.length, 3)
+    assert.notEqual(inserted.tiers[0].key, before.tiers[0].key)
     assert.deepEqual(
-      afterInsert.tiers.slice(1).map(({ key }) => key),
+      inserted.tiers.slice(1).map(({ key }) => key),
       before.tiers.map(({ key }) => key)
     )
-    assert.equal(afterReorder.tiers[0].key, before.tiers[2].key)
+    assert.equal(reordered.tiers[0].key, before.tiers[2].key)
     assert.deepEqual(
-      new Set(afterReorder.tiers.slice(1).map(({ key }) => key)),
-      new Set(afterInsert.tiers.slice(0, 3).map(({ key }) => key))
+      new Set(reordered.tiers.slice(1).map(({ key }) => key)),
+      new Set(inserted.tiers.slice(0, 3).map(({ key }) => key))
     )
-    assert.deepEqual(repeated, afterReorder)
+    assert.deepEqual(
+      coordinator.plan(parsePricingExpressions([large, small, small, small]))
+        .viewModel,
+      reordered
+    )
 
     const rulesBeforePlan = coordinator.plan(
-      parsePricingExpression(
-        '(tier("base", 1, 2)) * (header("x-plan") == "pro" ? 2 : 1) * (header("x-plan") == "pro" ? 2 : 1) * (header("x-plan") == "team" ? 3 : 1)'
-      )
+      parsePricingExpressions([
+        `(${small}) * ${proRule} * ${proRule} * ${teamRule}`,
+      ])
     )
     coordinator.commit(rulesBeforePlan.nextSnapshot)
     const rulesBefore = rulesBeforePlan.viewModel
-    const rulesAfterInsertPlan = coordinator.plan(
-      parsePricingExpression(
-        '(tier("base", 1, 2)) * (header("x-plan") == "pro" ? 2 : 1) * (header("x-plan") == "pro" ? 2 : 1) * (header("x-plan") == "pro" ? 2 : 1) * (header("x-plan") == "team" ? 3 : 1)'
-      )
+    const rulesInsertedPlan = coordinator.plan(
+      parsePricingExpressions([
+        `(${small}) * ${proRule} * ${proRule} * ${proRule} * ${teamRule}`,
+      ])
     )
-    coordinator.commit(rulesAfterInsertPlan.nextSnapshot)
-    const rulesAfterInsert = rulesAfterInsertPlan.viewModel
-    const rulesAfterReorder = coordinator.plan(
-      parsePricingExpression(
-        '(tier("base", 1, 2)) * (header("x-plan") == "team" ? 3 : 1) * (header("x-plan") == "pro" ? 2 : 1) * (header("x-plan") == "pro" ? 2 : 1) * (header("x-plan") == "pro" ? 2 : 1)'
-      )
+    coordinator.commit(rulesInsertedPlan.nextSnapshot)
+    const rulesInserted = rulesInsertedPlan.viewModel
+    const rulesReordered = coordinator.plan(
+      parsePricingExpressions([
+        `(${small}) * ${teamRule} * ${proRule} * ${proRule} * ${proRule}`,
+      ])
     ).viewModel
 
+    assert.equal(rulesBefore.ruleGroups.length, 3)
     assert.notEqual(
-      rulesAfterInsert.ruleGroups[0].key,
+      rulesInserted.ruleGroups[0].key,
       rulesBefore.ruleGroups[0].key
     )
     assert.deepEqual(
-      rulesAfterInsert.ruleGroups.slice(1).map(({ key }) => key),
+      rulesInserted.ruleGroups.slice(1).map(({ key }) => key),
       rulesBefore.ruleGroups.map(({ key }) => key)
     )
     assert.equal(
-      rulesAfterReorder.ruleGroups[0].key,
+      rulesReordered.ruleGroups[0].key,
       rulesBefore.ruleGroups[2].key
     )
     assert.deepEqual(
-      new Set(rulesAfterReorder.ruleGroups.slice(1).map(({ key }) => key)),
-      new Set(rulesAfterInsert.ruleGroups.slice(0, 3).map(({ key }) => key))
+      new Set(rulesReordered.ruleGroups.slice(1).map(({ key }) => key)),
+      new Set(rulesInserted.ruleGroups.slice(0, 3).map(({ key }) => key))
     )
     assert.ok(
-      rulesAfterReorder.ruleGroups.every(({ key }) =>
+      rulesReordered.ruleGroups.every(({ key }) =>
         key.startsWith('calculation[tier:')
       )
     )
@@ -145,17 +149,12 @@ describe('pricing behavior contracts', () => {
 
   it('does not let an abandoned plan mutate the committed pricing keys', () => {
     const coordinator = new StablePricingSequenceCoordinator()
-    const committedInput = parsePricingExpression(
-      'tier("small", 1, 2) + tier("large", 3, 4)'
-    )
+    const committedInput = parsePricingExpressions([small, large])
     const committedPlan = coordinator.plan(committedInput)
     coordinator.commit(committedPlan.nextSnapshot)
     coordinator.commit(committedPlan.nextSnapshot)
-
     const abandonedPlan = coordinator.plan(
-      parsePricingExpression(
-        'tier("small", 1, 2) + tier("small", 1, 2) + tier("large", 3, 4)'
-      )
+      parsePricingExpressions([small, small, large])
     )
     const restoredPlan = coordinator.plan(committedInput)
 
@@ -177,22 +176,18 @@ describe('pricing behavior contracts', () => {
   it('namespaces rule keys by the stable tier calculation identity', () => {
     const coordinator = new StablePricingSequenceCoordinator()
     const initialPlan = coordinator.plan(
-      parsePricingExpression(
-        '(tier("small", 1, 2) + tier("large", 3, 4)) * (header("x-plan") == "pro" ? 2 : 1)'
-      )
+      parsePricingExpressions([`(${small}) * ${proRule}`, large])
     )
     coordinator.commit(initialPlan.nextSnapshot)
-
     const reorderedPlan = coordinator.plan(
-      parsePricingExpression(
-        '(tier("large", 3, 4) + tier("small", 1, 2)) * (header("x-plan") == "pro" ? 2 : 1)'
-      )
+      parsePricingExpressions([`(${large}) * ${proRule}`, small])
     )
     coordinator.commit(reorderedPlan.nextSnapshot)
     const changedPlan = coordinator.plan(
-      parsePricingExpression(
-        '(tier("enterprise", 5, 6) + tier("small", 1, 2)) * (header("x-plan") == "pro" ? 2 : 1)'
-      )
+      parsePricingExpressions([
+        `(tier("enterprise", p * 5 + c * 6)) * ${proRule}`,
+        small,
+      ])
     )
 
     assert.deepEqual(

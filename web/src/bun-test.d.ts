@@ -27,5 +27,9 @@ declare module 'bun:test' {
 
   export function describe(name: string, callback: TestCallback): void
   export function expect<T>(actual: T): Matchers<T>
-  export function it(name: string, callback: TestCallback): void
+  export function it(
+    name: string,
+    callback: TestCallback,
+    timeout?: number
+  ): void
 }

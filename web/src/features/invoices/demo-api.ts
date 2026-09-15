@@ -70,7 +70,8 @@ function detailFromSummary(
       type: summary.type,
       title: summary.type === 'personal' ? 'Demo User' : 'Demo Company',
       tax_number: summary.type === 'company' ? '91310000DEMO' : '',
-      identity_card_number: summary.type === 'personal' ? '11010519491231002X' : '',
+      identity_card_number:
+        summary.type === 'personal' ? '11010519491231002X' : '',
       version: 1,
     },
     policy_snapshot: {

@@ -21,6 +21,7 @@ import { useState, useCallback } from 'react'
 import { toast } from 'sonner'
 
 import { formatQuota } from '@/lib/format'
+import { handleServerError } from '@/lib/handle-server-error'
 
 import { redeemTopupCode } from '../api'
 
@@ -51,10 +52,10 @@ export function useRedemption() {
         return true
       }
 
-      toast.error(response.message || i18next.t('Redemption failed'))
+      handleServerError(response, i18next.t('Redemption failed'))
       return false
-    } catch {
-      toast.error(i18next.t('Redemption failed'))
+    } catch (error) {
+      handleServerError(error, i18next.t('Redemption failed'))
       return false
     } finally {
       setRedeeming(false)

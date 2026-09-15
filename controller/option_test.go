@@ -51,7 +51,10 @@ func TestUpdateOptionRequiresPaymentComplianceForPositiveRechargeRebateRatio(t *
 
 	response := decodeAPIResponse(t, recorder)
 	require.False(t, response.Success)
-	require.Equal(t, "payment.compliance_required", response.Message)
+	require.NotEmpty(t, response.Message)
+	var count int64
+	require.NoError(t, model.DB.Model(&model.Option{}).Where("key = ?", "RechargeRebateRatioForInviter").Count(&count).Error)
+	require.Zero(t, count, "unconfirmed compliance must prevent persisting the rebate setting")
 }
 
 func TestUpdateOptionAllowsZeroRechargeRebateRatioWithoutPaymentCompliance(t *testing.T) {

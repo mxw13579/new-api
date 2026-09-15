@@ -34,6 +34,7 @@ import {
 import { JsonCodeEditor } from '@/components/json-code-editor'
 import { MultiSelect } from '@/components/multi-select'
 import { Button } from '@/components/ui/button'
+import { Combobox } from '@/components/ui/combobox'
 import {
   Form,
   FormControl,
@@ -60,6 +61,8 @@ import {
   SheetHeader,
   SheetTitle,
 } from '@/components/ui/sheet'
+import { handleServerError } from '@/lib/handle-server-error'
+import { requireServerSuccess } from '@/lib/server-error-message'
 
 import {
   checkClusterNameAvailability,
@@ -143,7 +146,7 @@ export function CreateDeploymentDrawer({
 
   const { data: hardwareTypesData, isLoading: isLoadingHardware } = useQuery({
     queryKey: ['deployment-hardware-types'],
-    queryFn: getHardwareTypes,
+    queryFn: async () => requireServerSuccess(await getHardwareTypes()),
     enabled: open,
   })
 
@@ -172,11 +175,13 @@ export function CreateDeploymentDrawer({
 
   const { data: replicasData, isLoading: isLoadingReplicas } = useQuery({
     queryKey: ['deployment-available-replicas', hardwareId, gpuCount],
-    queryFn: () =>
-      getAvailableReplicas({
-        hardware_id: hardwareId,
-        gpu_count: gpuCount,
-      }),
+    queryFn: async () =>
+      requireServerSuccess(
+        await getAvailableReplicas({
+          hardware_id: hardwareId,
+          gpu_count: gpuCount,
+        })
+      ),
     enabled: open && Boolean(hardwareId) && gpuCount > 0,
   })
 
@@ -210,15 +215,17 @@ export function CreateDeploymentDrawer({
       locationIds,
       currency,
     ],
-    queryFn: () =>
-      estimatePrice({
-        location_ids: locationIds,
-        hardware_id: hardwareId,
-        gpus_per_container: gpuCount,
-        duration_hours: durationHours,
-        replica_count: replicaCount,
-        currency: currency || 'usdc',
-      }),
+    queryFn: async () =>
+      requireServerSuccess(
+        await estimatePrice({
+          location_ids: locationIds,
+          hardware_id: hardwareId,
+          gpus_per_container: gpuCount,
+          duration_hours: durationHours,
+          replica_count: replicaCount,
+          currency: currency || 'usdc',
+        })
+      ),
     enabled:
       open &&
       Boolean(hardwareId) &&
@@ -233,7 +240,7 @@ export function CreateDeploymentDrawer({
     queryFn: async () => {
       const name = (resourceName || '').trim()
       if (!name) return null
-      return await checkClusterNameAvailability(name)
+      return requireServerSuccess(await checkClusterNameAvailability(name))
     },
     enabled: open && Boolean(resourceName && resourceName.trim().length > 0),
     staleTime: 10_000,
@@ -345,10 +352,10 @@ export function CreateDeploymentDrawer({
         onOpenChange(false)
         return
       }
-      toast.error(data?.message || t('Failed to create deployment'))
+      handleServerError(data, t('Failed to create deployment'))
     },
     onError: (err: Error) => {
-      toast.error(err.message || t('Failed to create deployment'))
+      handleServerError(err, t('Failed to create deployment'))
     },
   })
 
@@ -466,30 +473,19 @@ export function CreateDeploymentDrawer({
                   render={({ field }) => (
                     <FormItem>
                       <FormLabel>{t('Hardware type')}</FormLabel>
-                      <Select
-                        items={hardwareOptions.map((opt) => ({
-                          value: opt.value,
-                          label: opt.label,
-                        }))}
-                        value={field.value}
-                        onValueChange={(v) => field.onChange(v)}
-                        disabled={isLoadingHardware}
-                      >
-                        <FormControl>
-                          <SelectTrigger className='w-full'>
-                            <SelectValue placeholder={t('Select')} />
-                          </SelectTrigger>
-                        </FormControl>
-                        <SelectContent alignItemWithTrigger={false}>
-                          <SelectGroup>
-                            {hardwareOptions.map((opt) => (
-                              <SelectItem key={opt.value} value={opt.value}>
-                                {opt.label}
-                              </SelectItem>
-                            ))}
-                          </SelectGroup>
-                        </SelectContent>
-                      </Select>
+                      <FormControl>
+                        <Combobox
+                          options={hardwareOptions.map((opt) => ({
+                            value: opt.value,
+                            label: opt.label,
+                          }))}
+                          value={field.value}
+                          onValueChange={(v) => field.onChange(v)}
+                          disabled={isLoadingHardware}
+                          className='w-full'
+                          placeholder={t('Select')}
+                        />
+                      </FormControl>
                       <FormMessage />
                     </FormItem>
                   )}

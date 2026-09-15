@@ -3,6 +3,7 @@ package model
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"strconv"
 	"strings"
 	"sync"
@@ -29,7 +30,7 @@ var invoiceSettingUpdateMutex sync.Mutex
 
 func migrateInvoiceMinimumAmountOption(db *gorm.DB) error {
 	var option Option
-	err := db.Where("key = ?", "invoice_setting.minimum_amount_minor").First(&option).Error
+	err := db.Where(map[string]any{"key": "invoice_setting.minimum_amount_minor"}).First(&option).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil
 	}
@@ -40,7 +41,7 @@ func migrateInvoiceMinimumAmountOption(db *gorm.DB) error {
 	if err != nil || amount >= operation_setting.MinimumInvoiceAmountMinor {
 		return nil
 	}
-	return db.Model(&Option{}).Where("key = ? AND value = ?", option.Key, option.Value).
+	return db.Model(&Option{}).Where(map[string]any{"key": option.Key, "value": option.Value}).
 		Update("value", strconv.FormatInt(operation_setting.MinimumInvoiceAmountMinor, 10)).Error
 }
 
@@ -78,8 +79,6 @@ func InitOptionMap() {
 	common.OptionMap["TaskEnabled"] = strconv.FormatBool(common.TaskEnabled)
 	common.OptionMap["TaskPluginEnabled"] = strconv.FormatBool(constant.TaskPluginEnabled)
 	jsplugin.DefaultRegistry.SetEnabled(constant.TaskPluginEnabled)
-	common.OptionMap["TaskPluginOverrideEnabled"] = strconv.FormatBool(constant.TaskPluginOverrideEnabled)
-	jsplugin.DefaultRegistry.SetOverrideEnabled(constant.TaskPluginOverrideEnabled)
 	common.OptionMap[setting.TaskPluginMarketplaceSourcesKey] = setting.TaskPluginMarketplaceSources2JsonString()
 	common.OptionMap[setting.TaskPluginDisabledFactoryKeysKey] = "[]"
 	jsplugin.DefaultRegistry.SetDisabledFactoryKeys(nil)
@@ -212,9 +211,7 @@ func InitOptionMap() {
 
 	// 自动添加所有注册的模型配置
 	modelConfigs := config.GlobalConfig.ExportAllConfigs()
-	for k, v := range modelConfigs {
-		common.OptionMap[k] = v
-	}
+	maps.Copy(common.OptionMap, modelConfigs)
 
 	common.OptionMapRWMutex.Unlock()
 	loadOptionsFromDatabase()
@@ -225,6 +222,8 @@ func loadOptionsFromDatabase() {
 }
 
 func loadOptionsFromDatabaseWithHook(afterRead func()) {
+	passkeyOptionMutex.Lock()
+	defer passkeyOptionMutex.Unlock()
 	invoiceSettingUpdateMutex.Lock()
 	options, _ := AllOption()
 	if afterRead != nil {
@@ -243,12 +242,18 @@ func loadOptionsFromDatabaseWithHook(afterRead func()) {
 		common.SysLog("failed to update invoice option map: " + err.Error())
 	}
 	invoiceSettingUpdateMutex.Unlock()
+	passkeyOptions := make(map[string]string)
 	for _, option := range otherOptions {
+		if IsPasskeyDomainOption(option.Key) {
+			passkeyOptions[option.Key] = option.Value
+			continue
+		}
 		err := updateOptionMap(option.Key, option.Value)
 		if err != nil {
 			common.SysLog("failed to update option map: " + err.Error())
 		}
 	}
+	applyPasskeyDomainOptions(passkeyOptions)
 }
 
 func SyncOptions(frequency int) {
@@ -275,6 +280,13 @@ func validateOptionValue(key string, value string) error {
 func UpdateOption(key string, value string) error {
 	if strings.HasPrefix(key, "invoice_setting.") {
 		return UpdateOptionsBulk(map[string]string{key: value})
+	}
+	if IsPasskeyDomainOption(key) {
+		_, err := UpdatePasskeyDomainOptions(map[string]string{key: value}, false, "")
+		return err
+	}
+	if IsModelPricingOption(key) {
+		return UpdateModelPricingOptions(map[string]string{key: value})
 	}
 	if err := validateOptionValue(key, value); err != nil {
 		return err
@@ -341,6 +353,12 @@ func updateInvoiceSettingOptions(build func(operation_setting.InvoiceSetting) (m
 func updateOptionsBulk(values map[string]string, afterCommit func()) error {
 	if len(values) == 0 {
 		return nil
+	}
+	for key := range values {
+		if IsPasskeyDomainOption(key) {
+			_, err := UpdatePasskeyDomainOptions(values, false, "")
+			return err
+		}
 	}
 	if err := persistOptionsBulk(values); err != nil {
 		return err
@@ -538,9 +556,6 @@ func updateOptionMap(key string, value string) (err error) {
 		case "TaskPluginEnabled":
 			constant.TaskPluginEnabled = boolValue
 			jsplugin.DefaultRegistry.SetEnabled(boolValue)
-		case "TaskPluginOverrideEnabled":
-			constant.TaskPluginOverrideEnabled = boolValue
-			jsplugin.DefaultRegistry.SetOverrideEnabled(boolValue)
 		case "DataExportEnabled":
 			common.DataExportEnabled = boolValue
 		case "DefaultCollapseSidebar":

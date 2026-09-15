@@ -39,13 +39,13 @@ mockModule('react-i18next', () => ({
     type: '3rdParty',
     init: () => undefined,
   },
-  useTranslation: () => ({ t: (key: string) => key }),
+  useTranslation: () => ({ t: (key: string) => key, i18n: { language: 'en' } }),
 }))
 
 const { DynamicPricingBreakdown } = await import('../dynamic-pricing-breakdown')
 
 const BILLING_EXPRESSION =
-  '(tier("base", 1, 2)) * (header("x-plan") == "expression-only" ? 9 : 1)'
+  '(tier("base", p * 1 + c * 2)) * (header("x-plan") == "expression-only" ? 9 : 1)'
 
 describe('trace-driven dynamic pricing breakdown', () => {
   it('renders matched and unmatched trace rules instead of expression rules', () => {
@@ -79,7 +79,7 @@ describe('trace-driven dynamic pricing breakdown', () => {
   it('renders raw text when a trace condition is unparsable', () => {
     const html = renderToStaticMarkup(
       <DynamicPricingBreakdown
-        billingExpr='tier("base", 1, 2)'
+        billingExpr='tier("base", p * 1 + c * 2)'
         requestRules={[
           {
             cond: 'unsupported(condition) ~= "raw-value"',
@@ -164,7 +164,7 @@ describe('trace-driven dynamic pricing breakdown', () => {
       await act(async () => {
         root.render(
           <DynamicPricingBreakdown
-            billingExpr='tier("base", 1, 2)'
+            billingExpr='tier("base", p * 1 + c * 2)'
             requestRules={[{ ...duplicateRule }, { ...duplicateRule }]}
             compact
           />
@@ -176,7 +176,7 @@ describe('trace-driven dynamic pricing breakdown', () => {
       await act(async () => {
         root.render(
           <DynamicPricingBreakdown
-            billingExpr='tier("base", 1, 2)'
+            billingExpr='tier("base", p * 1 + c * 2)'
             requestRules={[{ ...duplicateRule }, { ...duplicateRule }]}
             compact
           />

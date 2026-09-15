@@ -203,7 +203,10 @@ async function installInvoiceBackend(
     if (path === '/api/user/invoice/profiles') {
       if (request.method() === 'PUT') {
         profileUpdates.push(request.postDataJSON())
-        await fulfill(route, success({ ...profile, ...request.postDataJSON(), version: 4 }))
+        await fulfill(
+          route,
+          success({ ...profile, ...request.postDataJSON(), version: 4 })
+        )
         return
       }
       await fulfill(route, success(scenario === 'empty' ? [] : [profile]))
@@ -357,14 +360,18 @@ async function installInvoiceBackend(
   return { downloadRequests, cancelRequests, profileUpdates }
 }
 
-test('editing a personal invoice profile submits its identity card number', async ({ page }) => {
+test('editing a personal invoice profile submits its identity card number', async ({
+  page,
+}) => {
   const backend = await installInvoiceBackend(page)
   await page.goto('/invoices')
   await page.getByRole('tab', { name: 'Profiles' }).click()
   await page.getByRole('button', { name: 'Edit' }).click()
   const editor = page.getByRole('dialog', { name: 'Edit invoice profile' })
   await editor.locator('#invoice-profile-title').fill('Updated User')
-  await editor.locator('#invoice-profile-identity-card-number').fill('11010519491231003X')
+  await editor
+    .locator('#invoice-profile-identity-card-number')
+    .fill('11010519491231003X')
   await editor.getByRole('button', { name: 'Save' }).click()
   await expect(page.getByText('Invoice profile saved')).toBeVisible()
   expect(backend.profileUpdates).toEqual([

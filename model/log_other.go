@@ -239,6 +239,23 @@ func formatLogOtherJSON(value string, visibility logOtherVisibility) string {
 				changed = true
 			}
 		}
+		if raw, exists := values["stream_status"]; exists {
+			var status map[string]json.RawMessage
+			if err := common.Unmarshal(raw, &status); err == nil && status != nil {
+				_, hasEndError := status["end_error"]
+				_, hasErrors := status["errors"]
+				if hasEndError || hasErrors {
+					delete(status, "end_error")
+					delete(status, "errors")
+					encoded, err := common.Marshal(status)
+					if err != nil {
+						return "{}"
+					}
+					values["stream_status"] = encoded
+					changed = true
+				}
+			}
+		}
 	} else {
 		changed = normalizeLegacyRejectReason(values)
 		if visibility == logOtherVisibilityAdmin {

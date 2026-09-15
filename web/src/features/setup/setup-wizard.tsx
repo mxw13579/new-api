@@ -37,6 +37,9 @@ import {
 import { Form } from '@/components/ui/form'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useSystemConfig } from '@/hooks/use-system-config'
+import { handleServerError } from '@/lib/handle-server-error'
+import { accountPasswordSchema } from '@/lib/password-policy'
+import { requireServerSuccess } from '@/lib/server-error-message'
 import { cn } from '@/lib/utils'
 
 import {
@@ -114,7 +117,7 @@ export function SetupWizard() {
     refetch,
   } = useQuery({
     queryKey: ['setup-status'],
-    queryFn: getSetupStatus,
+    queryFn: async () => requireServerSuccess(await getSetupStatus()),
     retry: false,
   })
 
@@ -129,13 +132,14 @@ export function SetupWizard() {
           navigate({ to: '/' })
         }, 1200)
       } else {
-        toast.error(
-          response.message || t('Initialization failed, please try again.')
+        handleServerError(
+          response,
+          t('Initialization failed, please try again.')
         )
       }
     },
-    onError: () => {
-      toast.error(t('Failed to initialize system'))
+    onError: (error) => {
+      handleServerError(error, t('Failed to initialize system'))
     },
   })
 
@@ -143,7 +147,7 @@ export function SetupWizard() {
     if (!statusResponse) return
 
     if (!statusResponse.success) {
-      toast.error(statusResponse.message || t('Failed to load setup status'))
+      handleServerError(statusResponse, t('Failed to load setup status'))
       return
     }
 
@@ -226,8 +230,8 @@ export function SetupWizard() {
     if (setupStatus?.root_init) return true
 
     const username = form.getValues('username')?.trim()
-    const password = form.getValues('password')?.trim()
-    const confirmPassword = form.getValues('confirmPassword')?.trim()
+    const password = form.getValues('password')
+    const confirmPassword = form.getValues('confirmPassword')
 
     if (!username) {
       form.setError('username', {
@@ -238,12 +242,12 @@ export function SetupWizard() {
       return false
     }
 
-    if (!password || password.length < 8) {
+    if (!accountPasswordSchema.safeParse(password).success) {
       form.setError('password', {
         type: 'manual',
-        message: t('Password must be at least 8 characters'),
+        message: t('Password must contain between 8 and 128 characters.'),
       })
-      toast.error(t('Password must be at least 8 characters'))
+      toast.error(t('Password must contain between 8 and 128 characters.'))
       return false
     }
 

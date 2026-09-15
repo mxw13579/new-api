@@ -3,6 +3,7 @@ package model
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 
 	"github.com/QuantumNous/new-api/common"
@@ -63,6 +64,7 @@ var (
 	ErrVerifiedEpayCompletionConflict = errors.New("verified epay completion conflict")
 	ErrInvalidTopUpQuota              = errors.New("invalid top-up quota")
 	ErrTopUpQuotaLimitExceeded        = errors.New("top-up quota limit exceeded")
+	ErrWalletQuotaLimitExceeded       = errors.New("wallet quota limit exceeded")
 )
 
 type WalletTopUpCreditResult struct {
@@ -94,23 +96,11 @@ func calculateWalletTopUpQuota(topUp *TopUp) (int, error) {
 	}
 	switch topUp.PaymentProvider {
 	case PaymentProviderStripe:
-		quota, clamp := common.QuotaFromDecimalChecked(decimal.NewFromFloat(topUp.Money).Mul(decimal.NewFromFloat(common.QuotaPerUnit)).Truncate(0))
-		if clamp != nil {
-			return 0, clamp
-		}
-		return quota, nil
+		return common.WalletQuotaFromDecimalStrict(decimal.NewFromFloat(topUp.Money).Mul(decimal.NewFromFloat(common.QuotaPerUnit)).Truncate(0))
 	case PaymentProviderCreem:
-		quota, clamp := common.QuotaFromDecimalChecked(decimal.NewFromInt(topUp.Amount))
-		if clamp != nil {
-			return 0, clamp
-		}
-		return quota, nil
+		return common.WalletQuotaFromDecimalStrict(decimal.NewFromInt(topUp.Amount))
 	case PaymentProviderEpay, PaymentProviderWaffo, PaymentProviderWaffoPancake:
-		quota, clamp := common.QuotaFromDecimalChecked(decimal.NewFromInt(topUp.Amount).Mul(decimal.NewFromFloat(common.QuotaPerUnit)).Truncate(0))
-		if clamp != nil {
-			return 0, clamp
-		}
-		return quota, nil
+		return common.WalletQuotaFromDecimalStrict(decimal.NewFromInt(topUp.Amount).Mul(decimal.NewFromFloat(common.QuotaPerUnit)).Truncate(0))
 	default:
 		return 0, ErrPaymentMethodMismatch
 	}
@@ -290,10 +280,10 @@ func (topUp *TopUp) Insert() error {
 }
 
 func topUpQuotaMaxCurrent(creditedQuota int) (int, error) {
-	if creditedQuota <= 0 || creditedQuota >= common.MaxQuota {
+	if creditedQuota <= 0 || creditedQuota > common.MaxWalletQuota {
 		return 0, ErrInvalidTopUpQuota
 	}
-	return common.MaxQuota - 1 - creditedQuota, nil
+	return common.MaxWalletQuota - creditedQuota, nil
 }
 
 // ValidateTopUpQuotaCapacity performs the user-facing pre-payment check. The
@@ -318,16 +308,14 @@ func ValidateTopUpQuotaCapacity(userId int, creditedQuota int) error {
 // creditTopUpQuota atomically enforces the int32 wallet ceiling while adding
 // quota. Keeping the predicate and increment in one UPDATE prevents two
 // concurrent callbacks from both passing a separate read/check.
-func creditTopUpQuota(tx *gorm.DB, userId int, creditedQuota int, updates map[string]interface{}) error {
+func creditTopUpQuota(tx *gorm.DB, userId int, creditedQuota int, updates map[string]any) error {
 	maxCurrentQuota, err := topUpQuotaMaxCurrent(creditedQuota)
 	if err != nil {
 		return err
 	}
 
-	updateFields := make(map[string]interface{}, len(updates)+1)
-	for key, value := range updates {
-		updateFields[key] = value
-	}
+	updateFields := make(map[string]any, len(updates)+1)
+	maps.Copy(updateFields, updates)
 	updateFields["quota"] = gorm.Expr("quota + ?", creditedQuota)
 
 	result := tx.Model(&User{}).

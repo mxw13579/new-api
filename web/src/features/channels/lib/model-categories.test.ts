@@ -57,8 +57,8 @@ describe('model category classification', () => {
     expect(getModelCategory('azure.o4:preview')).toBe('OpenAI')
   })
 
-  it('does not classify similar but unbounded or unsupported o-series names', () => {
-    expect(getModelCategory('vendor-o1')).toBe('Other')
+  it('recognizes legacy log aliases without matching unsupported o-series names', () => {
+    expect(getModelCategory('vendor-o1')).toBe('OpenAI')
     expect(getModelCategory('o2-mini')).toBe('Other')
     expect(getModelCategory('o4mini')).toBe('Other')
     expect(getModelCategory('o10-preview')).toBe('Other')
