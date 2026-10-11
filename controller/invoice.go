@@ -299,6 +299,17 @@ func AdminListInvoiceApplications(c *gin.Context) {
 	writeInvoiceSuccess(c, http.StatusOK, result)
 }
 
+// canReadSensitiveInvoice keeps secondary tax-data disclosure within both
+// live account permissions and the authenticated token's grant. Browser
+// sessions and unretired legacy tokens retain their existing RBAC behavior.
+func canReadSensitiveInvoice(c *gin.Context) bool {
+	if c.GetBool("use_access_token") && !c.GetBool("access_token_legacy") &&
+		!service.AccessTokenScopeGranted(c.GetStringSlice("access_token_scopes"), service.AccessTokenScopeOf(authz.InvoiceSensitiveRead)) {
+		return false
+	}
+	return authz.Can(c.GetInt("id"), c.GetInt("role"), authz.InvoiceSensitiveRead)
+}
+
 // AdminGetInvoiceApplication returns an invoice application with tax data gated by sensitive-read permission.
 func AdminGetInvoiceApplication(c *gin.Context) {
 	id, err := invoiceApplicationID(c)
@@ -306,7 +317,7 @@ func AdminGetInvoiceApplication(c *gin.Context) {
 		writeInvoiceError(c, err)
 		return
 	}
-	includeSensitive := authz.Can(c.GetInt("id"), c.GetInt("role"), authz.InvoiceSensitiveRead)
+	includeSensitive := canReadSensitiveInvoice(c)
 	detail, err := service.GetInvoiceApplicationDetail(id, nil, includeSensitive, true)
 	if err != nil {
 		writeInvoiceError(c, err)
@@ -332,7 +343,7 @@ func AdminReviewInvoiceApplication(c *gin.Context) {
 		writeInvoiceError(c, err)
 		return
 	}
-	includeSensitive := authz.Can(c.GetInt("id"), c.GetInt("role"), authz.InvoiceSensitiveRead)
+	includeSensitive := canReadSensitiveInvoice(c)
 	detail, err := service.GetInvoiceApplicationDetail(application.ID, nil, includeSensitive, true)
 	if err != nil {
 		writeInvoiceError(c, err)
@@ -358,7 +369,7 @@ func AdminRejectInvoiceApplication(c *gin.Context) {
 		writeInvoiceError(c, err)
 		return
 	}
-	includeSensitive := authz.Can(c.GetInt("id"), c.GetInt("role"), authz.InvoiceSensitiveRead)
+	includeSensitive := canReadSensitiveInvoice(c)
 	detail, err := service.GetInvoiceApplicationDetail(application.ID, nil, includeSensitive, true)
 	if err != nil {
 		writeInvoiceError(c, err)
@@ -429,7 +440,7 @@ func AdminUploadInvoiceDocument(c *gin.Context) {
 		writeInvoiceError(c, err)
 		return
 	}
-	includeSensitive := authz.Can(c.GetInt("id"), c.GetInt("role"), authz.InvoiceSensitiveRead)
+	includeSensitive := canReadSensitiveInvoice(c)
 	includeIdentity := authz.Can(c.GetInt("id"), c.GetInt("role"), authz.InvoiceReview)
 	detail, err := service.GetInvoiceApplicationDetail(id, nil, includeSensitive, includeIdentity)
 	if err != nil {

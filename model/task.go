@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -134,6 +135,15 @@ type TaskPrivateData struct {
 	PluginState json.RawMessage `json:"plugin_state,omitempty"`
 	// PollFailures counts consecutive unrecognized or transient poll outcomes.
 	PollFailures int `json:"poll_failures,omitempty"`
+	// FailureChargeRetained is a final billing disposition, not a settlement
+	// receipt. Persist it with the FAILURE transition, before moving funds, so
+	// reconciliation cannot mistake an intentional charge for a pending refund.
+	FailureChargeRetained bool `json:"failure_charge_retained,omitempty"`
+	// ResultDiscarded marks an immediate terminal result whose submit route
+	// declared retainResult: false. The upstream snapshot was never written
+	// and every retrieval surface treats the task as not found. The zero
+	// value keeps historical rows retained and retrievable.
+	ResultDiscarded bool `json:"result_discarded,omitempty"`
 }
 
 type TaskExecutionSnapshot struct {
@@ -169,6 +179,12 @@ type TaskBillingContext struct {
 	TieredSnapshot  *billingexpr.BillingSnapshot `json:"tiered_snapshot,omitempty"`
 }
 
+// ResultRetrievable reports whether retrieval surfaces (native query routes,
+// protocol retrieve endpoints, artifact projection) may serve this task.
+func (t *Task) ResultRetrievable() bool {
+	return !t.PrivateData.ResultDiscarded
+}
+
 // GetUpstreamTaskID 获取上游真实 task ID（用于与 provider 通信）
 // 旧数据没有 UpstreamTaskID 时，TaskID 本身就是上游 ID
 func (t *Task) GetUpstreamTaskID() string {
@@ -194,6 +210,7 @@ func GenerateTaskID() string {
 }
 
 func (p *TaskPrivateData) Scan(val any) error {
+	*p = TaskPrivateData{}
 	bytesValue := jsonScanBytes(val)
 	if len(bytesValue) == 0 {
 		return nil
@@ -205,7 +222,8 @@ func (p TaskPrivateData) Value() (driver.Value, error) {
 	if p.Key == "" && p.UpstreamTaskID == "" && p.ResultURL == "" &&
 		p.Execution == nil && p.BillingSource == "" && p.SubscriptionId == 0 &&
 		p.TokenId == 0 && p.NodeName == "" && p.BillingContext == nil &&
-		!p.ResponsesBackground && len(p.PluginState) == 0 && p.PollFailures == 0 {
+		!p.ResponsesBackground && len(p.PluginState) == 0 && p.PollFailures == 0 &&
+		!p.ResultDiscarded && !p.FailureChargeRetained {
 		return nil, nil
 	}
 	// 同 Properties.Value:string 避免 PG simple protocol 的 bytea 编码。
@@ -233,8 +251,11 @@ func InitTask(platform constant.TaskPlatform, relayInfo *commonRelay.RelayInfo) 
 	properties := Properties{}
 	privateData := TaskPrivateData{}
 	if relayInfo != nil && relayInfo.ChannelMeta != nil {
+		// A New API channel may rotate between several gateway tokens, so the
+		// task keeps the key that submitted it and polls with the same identity.
 		if relayInfo.ChannelMeta.ChannelType == constant.ChannelTypeGemini ||
-			relayInfo.ChannelMeta.ChannelType == constant.ChannelTypeVertexAi {
+			relayInfo.ChannelMeta.ChannelType == constant.ChannelTypeVertexAi ||
+			relayInfo.ChannelMeta.ChannelType == constant.ChannelTypeNewAPI {
 			privateData.Key = relayInfo.ChannelMeta.ApiKey
 		}
 		if relayInfo.UpstreamModelName != "" {
@@ -296,7 +317,9 @@ func TaskGetAllUserTask(userId int, startIdx int, num int, queryParams SyncTaskQ
 	}
 
 	// 获取数据
-	err = query.Omit("channel_id").Order("id desc").Limit(num).Offset(startIdx).Find(&tasks).Error
+	// Task lists never render the persisted upstream snapshot; the dashboard
+	// loads media through the artifacts endpoint instead.
+	err = query.Omit("channel_id", "data").Order("id desc").Limit(num).Offset(startIdx).Find(&tasks).Error
 	if err != nil {
 		return nil
 	}
@@ -341,7 +364,7 @@ func TaskGetAllTasks(startIdx int, num int, queryParams SyncTaskQueryParams) []*
 	}
 
 	// 获取数据
-	err = query.Order("id desc").Limit(num).Offset(startIdx).Find(&tasks).Error
+	err = query.Omit("data").Order("id desc").Limit(num).Offset(startIdx).Find(&tasks).Error
 	if err != nil {
 		return nil
 	}
@@ -363,26 +386,42 @@ func GetTimedOutUnfinishedTasks(cutoffUnix int64, limit int) []*Task {
 	return tasks
 }
 
-// GetUnrefundedFailedTasks returns failed tasks whose non-zero quota marks a
-// pending refund. Legacy timeout tasks are excluded before LIMIT is applied so
-// they cannot starve refundable tasks from the reconciliation sweep.
+// GetUnrefundedFailedTasks returns positive pending refunds, excluding legacy
+// tasks and intentional failure charges. Keyset paging past retained charges
+// prevents them from starving refunds without dialect-specific JSON SQL.
 func GetUnrefundedFailedTasks(updatedBefore int64, limit int) []*Task {
 	if limit <= 0 {
 		return nil
 	}
 
 	var tasks []*Task
-	err := DB.Where("status = ?", TaskStatusFailure).
-		Where("quota > ?", 0).
-		Where("updated_at <= ?", updatedBefore).
-		Where("(submit_time <= ? OR submit_time >= ?)", 0, TaskRefundLegacyCutoff).
-		Order("id").
-		Limit(limit).
-		Find(&tasks).Error
-	if err != nil {
-		return nil
+	var afterID int64
+	const pageSize = 100
+	for {
+		var page []*Task
+		err := DB.Where("status = ?", TaskStatusFailure).
+			Where("quota > ?", 0).
+			Where("updated_at <= ?", updatedBefore).
+			Where("(submit_time <= ? OR submit_time >= ?)", 0, TaskRefundLegacyCutoff).
+			Where("id > ?", afterID).
+			Omit("data").Order("id").Limit(pageSize).Find(&page).Error
+		if err != nil {
+			return nil
+		}
+		for _, task := range page {
+			afterID = task.ID
+			if task.PrivateData.FailureChargeRetained {
+				continue
+			}
+			tasks = append(tasks, task)
+			if len(tasks) == limit {
+				return tasks
+			}
+		}
+		if len(page) < pageSize {
+			return tasks
+		}
 	}
-	return tasks
 }
 
 func GetAllUnFinishSyncTasks(limit int) []*Task {
@@ -419,14 +458,7 @@ func HasTaskPollingWork() bool {
 		return true
 	}
 
-	var id int64
-	err := DB.Model(&Task{}).
-		Where("status = ?", TaskStatusFailure).
-		Where("quota > ?", 0).
-		Where("(submit_time <= ? OR submit_time >= ?)", 0, TaskRefundLegacyCutoff).
-		Limit(1).
-		Pluck("id", &id).Error
-	return err == nil && id != 0
+	return len(GetUnrefundedFailedTasks(math.MaxInt64, 1)) > 0
 }
 
 func GetByOnlyTaskId(taskId string) (*Task, bool, error) {
@@ -512,8 +544,15 @@ func (Task *Task) Insert() error {
 	return Task.InsertWithContext(context.Background())
 }
 
-func (Task *Task) InsertWithContext(ctx context.Context) error {
-	return DB.WithContext(ctx).Create(Task).Error
+// InsertWithContext creates the row. omitColumns are left out of the INSERT
+// (for example "data" when the submit route discards the upstream snapshot)
+// while the in-memory task keeps its values for presentation.
+func (Task *Task) InsertWithContext(ctx context.Context, omitColumns ...string) error {
+	tx := DB.WithContext(ctx)
+	if len(omitColumns) > 0 {
+		tx = tx.Omit(omitColumns...)
+	}
+	return tx.Create(Task).Error
 }
 
 type taskSnapshot struct {
@@ -572,7 +611,8 @@ var ErrTaskRefundInvalidState = errors.New("task refund requires failure status"
 
 // RefundTaskFunding atomically applies the primary wallet/subscription refund
 // and clears the positive task quota marker. A nil task means another runner
-// already completed the refund or the caller's expected quota is stale.
+// already completed the refund, the failure intentionally retains its charge,
+// or the caller's expected quota is stale.
 func RefundTaskFunding(id int64, expectedQuota int) (*Task, error) {
 	if expectedQuota <= 0 {
 		return nil, ErrTaskRefundInvalidQuota
@@ -592,6 +632,9 @@ func RefundTaskFunding(id int64, expectedQuota int) (*Task, error) {
 		}
 		if task.Status != TaskStatusFailure {
 			return ErrTaskRefundInvalidState
+		}
+		if task.PrivateData.FailureChargeRetained {
+			return nil
 		}
 
 		if task.PrivateData.BillingSource == "subscription" && task.PrivateData.SubscriptionId > 0 {
@@ -670,6 +713,22 @@ func (t *Task) UpdateWithStatus(fromStatus TaskStatus) (bool, error) {
 		return false, result.Error
 	}
 	return result.RowsAffected > 0, nil
+}
+
+// FailUnfinishedTasksByID conditionally fails only nonterminal rows. A stale
+// polling batch must never turn a concurrent success into a refundable failure.
+// Quota stays intact for the existing refund reconciliation path.
+func FailUnfinishedTasksByID(ids []int64, reason string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	return DB.Model(&Task{}).
+		Where("id IN ?", ids).
+		Where("status NOT IN ?", []string{TaskStatusFailure, TaskStatusSuccess}).
+		Updates(map[string]any{
+			"status": TaskStatusFailure, "progress": "100%",
+			"finish_time": time.Now().Unix(), "fail_reason": reason,
+		}).Error
 }
 
 // TaskBulkUpdateByID performs an unconditional bulk UPDATE by primary key IDs.

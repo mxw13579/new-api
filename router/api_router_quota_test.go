@@ -1,19 +1,15 @@
 package router
 
 import (
-	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/gin-gonic/gin"
-	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"gorm.io/gorm"
 )
 
 type selfQuotaRouteResponse struct {
@@ -24,41 +20,19 @@ type selfQuotaRouteResponse struct {
 	} `json:"data"`
 }
 
-func setupQuotaRouterTestDB(t *testing.T) *gorm.DB {
-	t.Helper()
-	gin.SetMode(gin.TestMode)
-	common.SetDatabaseTypes(common.DatabaseTypeSQLite, common.DatabaseTypeSQLite)
-	common.RedisEnabled = false
-
-	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", strings.ReplaceAll(t.Name(), "/", "_"))
-	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
-	require.NoError(t, err)
-	model.DB = db
-	model.LOG_DB = db
-	require.NoError(t, db.AutoMigrate(&model.User{}))
-
-	t.Cleanup(func() {
-		sqlDB, err := db.DB()
-		if err == nil {
-			_ = sqlDB.Close()
-		}
-	})
-
-	return db
-}
-
 func TestSelfQuotaRouteUsesAuthenticatedUserQuota(t *testing.T) {
-	db := setupQuotaRouterTestDB(t)
-	token := "self-quota-access-token"
-	require.NoError(t, db.Create(&model.User{
+	db := setupAccessTokenRouteDB(t)
+	user := model.User{
 		Id:          41,
 		Username:    "quota-user",
-		AccessToken: &token,
+		AuthVersion: 1,
 		Role:        common.RoleCommonUser,
 		Status:      common.UserStatusEnabled,
 		Group:       "default",
 		Quota:       12345,
-	}).Error)
+	}
+	require.NoError(t, db.Create(&user).Error)
+	token := createRouteScopedToken(t, user.Id, user.Role, "wallet:read")
 
 	engine := gin.New()
 	SetApiRouter(engine)

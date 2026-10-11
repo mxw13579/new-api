@@ -29,7 +29,7 @@ func runPersonalInvoicePostgreSQLDomainContract(t *testing.T) {
 	require.NoError(t, migratePersonalInvoiceStructures(DB))
 	previousSetting := operation_setting.GetInvoiceSetting()
 	previousQuotaPerUnit := common.QuotaPerUnit
-	common.QuotaPerUnit = 100
+	common.QuotaPerUnit = 1
 	t.Cleanup(func() {
 		operation_setting.PublishInvoiceSetting(previousSetting)
 		common.QuotaPerUnit = previousQuotaPerUnit
@@ -57,7 +57,7 @@ func runPersonalInvoicePostgreSQLDomainContract(t *testing.T) {
 		require.NoError(t, err)
 
 		_, err = UpdateInvoiceProfile(user.Id, dto.UpdateInvoiceProfileRequest{
-			ID: first.ID, ExpectedVersion: first.Version + 1, Title: first.Title, IsDefault: true,
+			ID: first.ID, ExpectedVersion: first.Version + 1, Title: first.Title, IdentityCardNumber: first.IdentityCardNumber, IsDefault: true,
 		})
 		assert.ErrorIs(t, err, ErrInvoiceProfileVersionConflict)
 
@@ -69,7 +69,7 @@ func runPersonalInvoicePostgreSQLDomainContract(t *testing.T) {
 			go func() {
 				defer wait.Done()
 				_, updateErr := UpdateInvoiceProfile(user.Id, dto.UpdateInvoiceProfileRequest{
-					ID: profile.ID, ExpectedVersion: profile.Version, Title: profile.Title, IsDefault: true,
+					ID: profile.ID, ExpectedVersion: profile.Version, Title: profile.Title, IdentityCardNumber: profile.IdentityCardNumber, IsDefault: true,
 				})
 				errs <- updateErr
 			}()
@@ -97,12 +97,12 @@ func runPersonalInvoicePostgreSQLDomainContract(t *testing.T) {
 	t.Run("normalized_idempotency_exact_sum_and_positive_fee", func(t *testing.T) {
 		setFee(25)
 		user, profile := personalInvoicePostgreSQLUserAndProfile(t, "positive", 1000)
-		personalInvoicePostgreSQLTopUp(t, 101, user.Id, "positive-a", 75)
-		personalInvoicePostgreSQLTopUp(t, 102, user.Id, "positive-b", 25)
+		personalInvoicePostgreSQLTopUp(t, 101, user.Id, "positive-a", 7_500)
+		personalInvoicePostgreSQLTopUp(t, 102, user.Id, "positive-b", 2_500)
 		request := createInvoiceApplicationRequest("pg-positive", profile, 102, 101, 102)
 		application, err := CreateInvoiceApplication(user.Id, request, nil)
 		require.NoError(t, err)
-		assert.Equal(t, int64(100), application.AmountMinor)
+		assert.Equal(t, int64(10_000), application.AmountMinor)
 		assert.Equal(t, constant.InvoiceFeeStatusPaid, application.FeeStatus)
 		require.NotNil(t, application.FeeChargeEntryID)
 		assert.Nil(t, application.FeeRefundEntryID)
@@ -111,7 +111,7 @@ func runPersonalInvoicePostgreSQLDomainContract(t *testing.T) {
 		require.NoError(t, DB.Where("application_id = ?", application.ID).Order("topup_id").Find(&items).Error)
 		require.Len(t, items, 2)
 		assert.Equal(t, []int{101, 102}, []int{items[0].TopUpID, items[1].TopUpID})
-		assert.Equal(t, int64(100), items[0].PaidAmountMinor+items[1].PaidAmountMinor)
+		assert.Equal(t, int64(10_000), items[0].PaidAmountMinor+items[1].PaidAmountMinor)
 		var charges []InvoiceFeeLedgerEntry
 		require.NoError(t, DB.Where("application_id = ? AND entry_type = ?", application.ID, InvoiceFeeEntryTypeCharge).Find(&charges).Error)
 		require.Len(t, charges, 1)
@@ -135,7 +135,7 @@ func runPersonalInvoicePostgreSQLDomainContract(t *testing.T) {
 	t.Run("insufficient_quota_rolls_back_everything", func(t *testing.T) {
 		setFee(50)
 		user, profile := personalInvoicePostgreSQLUserAndProfile(t, "insufficient", 10)
-		personalInvoicePostgreSQLTopUp(t, 201, user.Id, "insufficient", 100)
+		personalInvoicePostgreSQLTopUp(t, 201, user.Id, "insufficient", 10_000)
 		beforeApplications := personalInvoicePostgreSQLCount(t, &InvoiceApplication{})
 		beforeItems := personalInvoicePostgreSQLCount(t, &InvoiceItem{})
 		beforeLedger := personalInvoicePostgreSQLCount(t, &InvoiceFeeLedgerEntry{})
@@ -159,7 +159,7 @@ func runPersonalInvoicePostgreSQLDomainContract(t *testing.T) {
 	t.Run("zero_fee_has_no_ledger_or_pointers", func(t *testing.T) {
 		setFee(0)
 		user, profile := personalInvoicePostgreSQLUserAndProfile(t, "zero", 100)
-		personalInvoicePostgreSQLTopUp(t, 301, user.Id, "zero", 100)
+		personalInvoicePostgreSQLTopUp(t, 301, user.Id, "zero", 10_000)
 		application, err := CreateInvoiceApplication(user.Id,
 			createInvoiceApplicationRequest("pg-zero", profile, 301), nil)
 		require.NoError(t, err)
@@ -172,7 +172,7 @@ func runPersonalInvoicePostgreSQLDomainContract(t *testing.T) {
 	t.Run("release_refund_and_pending_cas_are_exactly_once", func(t *testing.T) {
 		setFee(20)
 		cancelUser, cancelProfile := personalInvoicePostgreSQLUserAndProfile(t, "cancel", 100)
-		personalInvoicePostgreSQLTopUp(t, 401, cancelUser.Id, "cancel", 100)
+		personalInvoicePostgreSQLTopUp(t, 401, cancelUser.Id, "cancel", 10_000)
 		cancelApplication, err := CreateInvoiceApplication(cancelUser.Id,
 			createInvoiceApplicationRequest("pg-cancel", cancelProfile, 401), nil)
 		require.NoError(t, err)
@@ -192,7 +192,7 @@ func runPersonalInvoicePostgreSQLDomainContract(t *testing.T) {
 		assert.Equal(t, 100, refundedUser.Quota)
 
 		pendingUser, pendingProfile := personalInvoicePostgreSQLUserAndProfile(t, "pending", 100)
-		personalInvoicePostgreSQLTopUp(t, 402, pendingUser.Id, "pending", 100)
+		personalInvoicePostgreSQLTopUp(t, 402, pendingUser.Id, "pending", 10_000)
 		pendingApplication, err := CreateInvoiceApplication(pendingUser.Id,
 			createInvoiceApplicationRequest("pg-pending", pendingProfile, 402), nil)
 		require.NoError(t, err)

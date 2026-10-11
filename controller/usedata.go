@@ -6,6 +6,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/service"
 
 	"github.com/gin-gonic/gin"
 )
@@ -84,10 +85,7 @@ func GetUserQuotaDates(c *gin.Context) {
 	endTimestamp, _ := strconv.ParseInt(c.Query("end_timestamp"), 10, 64)
 	// 判断时间跨度是否超过 1 个月
 	if endTimestamp-startTimestamp > 2592000 {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": "时间跨度不能超过 1 个月",
-		})
+		common.ApiErrorT(c, "The time range cannot exceed 1 month")
 		return
 	}
 	dates, err := model.GetQuotaDataByUserId(userId, startTimestamp, endTimestamp)
@@ -129,10 +127,7 @@ func GetUserFlowQuotaDates(c *gin.Context) {
 		return
 	}
 	if endTimestamp-startTimestamp > 2592000 {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": "时间跨度不能超过 1 个月",
-		})
+		common.ApiErrorT(c, "The time range cannot exceed 1 month")
 		return
 	}
 	dates, err := model.GetFlowQuotaData(startTimestamp, endTimestamp, "", userId, common.RoleCommonUser)
@@ -148,7 +143,7 @@ func GetUserFlowQuotaDates(c *gin.Context) {
 	return
 }
 
-// GetQuotaDistribution returns role-scoped quota, token, and request distribution data.
+// GetQuotaDistribution returns role- and token-scoped quota, token, and request distribution data.
 func GetQuotaDistribution(c *gin.Context) {
 	userID := c.GetInt("id")
 	if userID <= 0 {
@@ -172,9 +167,22 @@ func GetQuotaDistribution(c *gin.Context) {
 		return
 	}
 
+	role := c.GetInt("role")
+	if c.GetBool("use_access_token") && !c.GetBool("access_token_legacy") {
+		scopes := c.GetStringSlice("access_token_scopes")
+		if role < common.RoleAdminUser || !service.AccessTokenScopeGranted(scopes, "log:read") {
+			if !service.AccessTokenScopeGranted(scopes, "usage:read") {
+				common.ApiErrorStatus(c, http.StatusForbidden, common.NewMessage("The access token lacks the required permission: {{scope}}", map[string]any{"scope": "usage:read"}), gin.H{"code": "ACCESS_TOKEN_SCOPE_DENIED"})
+				return
+			}
+			// Like self usage logs, select by the authenticated user ID, never
+			// by a supplied username or the token owner's elevated role.
+			role = common.RoleCommonUser
+		}
+	}
 	rows, err := model.GetQuotaDistribution(model.QuotaDistributionQuery{
 		AuthUserID: userID,
-		Role:       c.GetInt("role"),
+		Role:       role,
 		StartTime:  startTimestamp,
 		EndTime:    endTimestamp,
 		Metric:     metric,

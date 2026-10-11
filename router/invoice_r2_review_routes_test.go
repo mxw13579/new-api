@@ -14,9 +14,10 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/authz"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
-	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -47,36 +48,28 @@ type invoiceReviewRouteFixture struct {
 	adminID      int
 	adminToken   string
 	domainWrites atomic.Int32
-	objectCalls  atomic.Int32
 }
 
 func setupInvoiceReviewRouteFixture(t *testing.T) *invoiceReviewRouteFixture {
 	t.Helper()
-	gin.SetMode(gin.TestMode)
-	previousDB, previousLogDB := model.DB, model.LOG_DB
-	previousRedis, previousMaster := common.RedisEnabled, common.IsMasterNode
-	previousMainType := common.MainDatabaseType()
-	common.RedisEnabled = false
-	common.IsMasterNode = true
-	common.SetMainDatabaseType(common.DatabaseTypeSQLite)
-	databaseName := strings.ReplaceAll(t.Name(), "/", "_")
-	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", databaseName)
-	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
-	require.NoError(t, err)
-	logDB, err := gorm.Open(sqlite.Open(fmt.Sprintf("file:%s_logs?mode=memory&cache=shared", databaseName)), &gorm.Config{})
-	require.NoError(t, err)
+	db := setupAccessTokenRouteDB(t)
 	require.NoError(t, db.AutoMigrate(
-		&model.User{}, &model.CasbinRule{}, &model.AuthzRole{},
 		&model.InvoiceApplication{}, &model.InvoiceIssuance{}, &model.InvoiceDocument{},
 	))
-	require.NoError(t, logDB.AutoMigrate(&model.Log{}))
-	model.DB, model.LOG_DB = db, logDB
-	require.NoError(t, authz.Init(db))
+	previousSetting := operation_setting.GetInvoiceSetting()
+	previousSecure, previousOrigins := common.SessionCookieSecure, common.SessionCookieTrustedURLs
+	// Fail before object-store access even when an upload is authorized.
+	operation_setting.PublishInvoiceSetting(operation_setting.InvoiceSetting{})
+	common.SessionCookieSecure, common.SessionCookieTrustedURLs = true, nil
+	t.Cleanup(func() {
+		operation_setting.PublishInvoiceSetting(previousSetting)
+		common.SessionCookieSecure, common.SessionCookieTrustedURLs = previousSecure, previousOrigins
+	})
 
-	fixture := &invoiceReviewRouteFixture{db: db, adminID: 9101, adminToken: strings.Repeat("d", 32)}
+	fixture := &invoiceReviewRouteFixture{db: db, adminID: 9101}
 	admin := &model.User{
-		Id: fixture.adminID, Username: "invoice-route-denied", Password: "test-password",
-		AccessToken: &fixture.adminToken, Role: common.RoleAdminUser, Status: common.UserStatusEnabled,
+		Id: fixture.adminID, Username: "invoice-route-denied",
+		Role: common.RoleAdminUser, Status: common.UserStatusEnabled,
 		Group: "default", AffCode: "invoice-route-denied", AuthVersion: 1,
 	}
 	require.NoError(t, db.Create(admin).Error)
@@ -100,13 +93,40 @@ func setupInvoiceReviewRouteFixture(t *testing.T) *invoiceReviewRouteFixture {
 
 	fixture.engine = gin.New()
 	SetApiRouter(fixture.engine)
+	bundle, err := service.CreateLoginSession(fixture.adminID, "route-fixture", "127.0.0.1", "isolated-invoice-test")
+	require.NoError(t, err)
+	// Exercise the actual cookie refresh + CSRF origin guard, then use the
+	// returned browser-session bearer on the invoice routes (not a legacy PAT).
+	for _, origin := range []string{"", "https://dashboard.example.test"} {
+		request := httptest.NewRequest(http.MethodPost, "https://dashboard.example.test/api/user/auth/refresh", nil)
+		request.AddCookie(&http.Cookie{Name: service.RefreshCookieName, Value: bundle.RefreshToken})
+		request.Header.Set("X-Auth-Session", bundle.Session.SID)
+		if origin != "" {
+			request.Header.Set("Origin", origin)
+		}
+		response := httptest.NewRecorder()
+		fixture.engine.ServeHTTP(response, request)
+		if origin == "" {
+			require.Equal(t, http.StatusForbidden, response.Code)
+			assert.Contains(t, response.Body.String(), "AUTH_ORIGIN_FORBIDDEN")
+			continue
+		}
+		require.Equal(t, http.StatusOK, response.Code)
+		var payload struct {
+			Success bool `json:"success"`
+			Data    struct {
+				AccessToken string `json:"access_token"`
+			} `json:"data"`
+		}
+		require.NoError(t, common.Unmarshal(response.Body.Bytes(), &payload))
+		require.True(t, payload.Success)
+		require.NotEmpty(t, payload.Data.AccessToken)
+		fixture.adminToken = payload.Data.AccessToken
+	}
 	t.Cleanup(func() {
 		_ = db.Callback().Create().Remove(callbackPrefix + ":create")
 		_ = db.Callback().Update().Remove(callbackPrefix + ":update")
 		_ = db.Callback().Delete().Remove(callbackPrefix + ":delete")
-		model.DB, model.LOG_DB = previousDB, previousLogDB
-		common.RedisEnabled, common.IsMasterNode = previousRedis, previousMaster
-		common.SetMainDatabaseType(previousMainType)
 	})
 	return fixture
 }
@@ -151,14 +171,15 @@ func TestInvoiceAdminProductionPermissionMatrix(t *testing.T) {
 				invoiceReviewUploadMatrixCase(t, "replacement", 9204, constant.InvoiceApplicationStatusIssued, identity.uploadOK),
 			} {
 				t.Run(testCase.name, func(t *testing.T) {
-					beforeWrites, beforeObjects := fixture.domainWrites.Load(), fixture.objectCalls.Load()
+					beforeWrites := fixture.domainWrites.Load()
 					var beforeApplications []model.InvoiceApplication
 					require.NoError(t, fixture.db.Order("id").Find(&beforeApplications).Error)
 					var bodyReads atomic.Int32
-					request := httptest.NewRequest(http.MethodPost, testCase.path, &invoiceReviewRouteReadSentinel{
+					request := httptest.NewRequest(http.MethodPost, "https://dashboard.example.test"+testCase.path, &invoiceReviewRouteReadSentinel{
 						reader: bytes.NewReader(testCase.body), reads: &bodyReads,
 					})
 					request.Header.Set("Content-Type", testCase.contentType)
+					request.Header.Set("Origin", "https://dashboard.example.test")
 					if identity.authenticated {
 						request.Header.Set("Authorization", "Bearer "+fixture.adminToken)
 						request.Header.Set("New-Api-User", fmt.Sprint(fixture.adminID))
@@ -166,10 +187,17 @@ func TestInvoiceAdminProductionPermissionMatrix(t *testing.T) {
 					recorder := httptest.NewRecorder()
 					fixture.engine.ServeHTTP(recorder, request)
 
+					assertPrivateNoStore(t, recorder)
 					if testCase.allowed {
-						assert.NotEqual(t, http.StatusUnauthorized, recorder.Code)
-						assert.NotEqual(t, http.StatusForbidden, recorder.Code)
+						if strings.HasSuffix(testCase.path, "/document") {
+							assert.Equal(t, http.StatusServiceUnavailable, recorder.Code)
+							assert.Contains(t, recorder.Body.String(), constant.InvoiceCodeStorageNotConfigured)
+						} else {
+							assert.Equal(t, http.StatusConflict, recorder.Code)
+							assert.Contains(t, recorder.Body.String(), constant.InvoiceCodeStateConflict)
+						}
 						assert.Positive(t, bodyReads.Load(), "allowed production route must invoke its handler")
+						assert.Equal(t, beforeWrites, fixture.domainWrites.Load())
 						return
 					}
 					if identity.authenticated {
@@ -180,7 +208,6 @@ func TestInvoiceAdminProductionPermissionMatrix(t *testing.T) {
 					assert.Equal(t, identity.deniedCode, invoiceReviewDeniedCode(t, recorder, identity.role >= common.RoleAdminUser && identity.authenticated))
 					assert.Zero(t, bodyReads.Load(), "denied production route must not invoke its handler")
 					assert.Equal(t, beforeWrites, fixture.domainWrites.Load(), "denied route must not mutate invoice domain tables")
-					assert.Equal(t, beforeObjects, fixture.objectCalls.Load(), "denied route must not contact object storage")
 					var afterApplications []model.InvoiceApplication
 					require.NoError(t, fixture.db.Order("id").Find(&afterApplications).Error)
 					assert.Equal(t, beforeApplications, afterApplications)

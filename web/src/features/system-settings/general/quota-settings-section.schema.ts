@@ -16,20 +16,28 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import i18next from 'i18next'
 import * as z from 'zod'
 
 export const quotaSchema = z.object({
   QuotaForNewUser: z.coerce.number().min(0),
-  PreConsumedQuota: z.coerce.number().min(0),
   QuotaForInviter: z.coerce.number().min(0),
   RechargeRebateRatioForInviter: z.coerce.number().min(0).max(100),
   QuotaForInvitee: z.coerce.number().min(0),
   TopUpLink: z.string(),
-  general_setting: z.object({
-    docs_link: z.string(),
-  }),
   quota_setting: z.object({
     enable_free_model_pre_consume: z.boolean(),
+    trust_quota_usd: z.preprocess(
+      (value) => (value === '' ? undefined : value),
+      z.coerce
+        .number({ error: () => i18next.t('Please enter a valid number') })
+        .min(0, {
+          error: () => i18next.t('Must be greater than or equal to 0'),
+        })
+    ),
+    pre_consume_multiplier: z.coerce
+      .number({ error: () => i18next.t('Please enter a valid number') })
+      .positive({ error: () => i18next.t('Must be greater than 0') }),
   }),
 })
 

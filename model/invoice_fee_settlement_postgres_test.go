@@ -24,7 +24,8 @@ func TestInvoiceFeeSettlementPostgreSQLCoreRaceContract(t *testing.T) {
 	require.NoError(t, migratePersonalInvoiceStructures(DB))
 	previousSetting := operation_setting.GetInvoiceSetting()
 	previousQuotaPerUnit := common.QuotaPerUnit
-	common.QuotaPerUnit = 100
+	// Keep a CNY100 invoice above the production minimum and its 20% fee at 20 quota.
+	common.QuotaPerUnit = 1
 	operation_setting.PublishInvoiceSetting(operation_setting.InvoiceSetting{
 		PersonalEnabled: true, CompanyEnabled: true, ApplicationWindowDays: 30,
 		MinimumAmountMinor: operation_setting.MinimumInvoiceAmountMinor, FeePercent: 20, PDFRetentionDays: 30,
@@ -36,7 +37,7 @@ func TestInvoiceFeeSettlementPostgreSQLCoreRaceContract(t *testing.T) {
 
 	t.Run("same_fingerprint_single_charge", func(t *testing.T) {
 		user, profile := personalInvoicePostgreSQLUserAndProfile(t, "fee-race-same", 100)
-		personalInvoicePostgreSQLTopUp(t, 7101, user.Id, "fee-race-same", 100)
+		personalInvoicePostgreSQLTopUp(t, 7101, user.Id, "fee-race-same", 10_000)
 		request := createInvoiceApplicationRequest("pg-fee-race-same", profile, 7101)
 		results := runConcurrentInvoiceFeeCreates(user.Id, profile, []dto.CreateInvoiceApplicationRequest{request, request})
 		require.Len(t, results, 2)
@@ -54,8 +55,8 @@ func TestInvoiceFeeSettlementPostgreSQLCoreRaceContract(t *testing.T) {
 
 	t.Run("different_fingerprint_conflict_has_no_extra_claim", func(t *testing.T) {
 		user, profile := personalInvoicePostgreSQLUserAndProfile(t, "fee-race-conflict", 100)
-		personalInvoicePostgreSQLTopUp(t, 7201, user.Id, "fee-race-conflict-a", 100)
-		personalInvoicePostgreSQLTopUp(t, 7202, user.Id, "fee-race-conflict-b", 100)
+		personalInvoicePostgreSQLTopUp(t, 7201, user.Id, "fee-race-conflict-a", 10_000)
+		personalInvoicePostgreSQLTopUp(t, 7202, user.Id, "fee-race-conflict-b", 10_000)
 		requestA := createInvoiceApplicationRequest("pg-fee-race-conflict", profile, 7201)
 		requestB := createInvoiceApplicationRequest("pg-fee-race-conflict", profile, 7202)
 		results := runConcurrentInvoiceFeeCreates(user.Id, profile, []dto.CreateInvoiceApplicationRequest{requestA, requestB})
@@ -80,7 +81,7 @@ func TestInvoiceFeeSettlementPostgreSQLCoreRaceContract(t *testing.T) {
 
 	t.Run("double_apply_single_credit", func(t *testing.T) {
 		user, profile := personalInvoicePostgreSQLUserAndProfile(t, "fee-race-apply", 100)
-		personalInvoicePostgreSQLTopUp(t, 7301, user.Id, "fee-race-apply", 100)
+		personalInvoicePostgreSQLTopUp(t, 7301, user.Id, "fee-race-apply", 10_000)
 		application, err := CreateInvoiceApplication(user.Id,
 			createInvoiceApplicationRequest("pg-fee-race-apply", profile, 7301), nil)
 		require.NoError(t, err)
@@ -126,7 +127,7 @@ func TestInvoiceFeeSettlementPostgreSQLCoreRaceContract(t *testing.T) {
 
 	t.Run("ledger_write_failure_rolls_back_quota_and_financial_state", func(t *testing.T) {
 		user, profile := personalInvoicePostgreSQLUserAndProfile(t, "fee-ledger-rollback", 100)
-		personalInvoicePostgreSQLTopUp(t, 7401, user.Id, "fee-ledger-rollback", 100)
+		personalInvoicePostgreSQLTopUp(t, 7401, user.Id, "fee-ledger-rollback", 10_000)
 		application, err := CreateInvoiceApplication(user.Id,
 			createInvoiceApplicationRequest("pg-fee-ledger-rollback", profile, 7401), nil)
 		require.NoError(t, err)

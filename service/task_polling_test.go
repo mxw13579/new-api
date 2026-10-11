@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -15,15 +16,19 @@ import (
 	taskdto "github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
+	perfmetrics "github.com/QuantumNous/new-api/pkg/perf_metrics"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 type taskPollingFetchAdaptor struct {
 	mu           sync.Mutex
+	initInfo     *relaycommon.RelayInfo
 	taskIDs      []string
 	fetched      chan string
 	blockTaskID  string
@@ -59,7 +64,19 @@ func (a *batchPollingAdaptor) ParseBatchResult(_ []*model.Task, _ *http.Response
 	return results, nil
 }
 
-func (a *taskPollingFetchAdaptor) Init(_ *relaycommon.RelayInfo) {}
+func (a *taskPollingFetchAdaptor) Init(info *relaycommon.RelayInfo) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.initInfo = info
+}
+func (a *taskPollingFetchAdaptor) initChannelMeta() *relaycommon.ChannelMeta {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.initInfo == nil {
+		return nil
+	}
+	return a.initInfo.ChannelMeta
+}
 
 func (a *taskPollingFetchAdaptor) FetchTask(_ string, _ string, task *model.Task, _ string) (*http.Response, error) {
 	taskID := ""
@@ -223,6 +240,37 @@ func TestUpdateVideoTasksDefaultSleepWaitsBetweenTasks(t *testing.T) {
 
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 	assert.Equal(t, 1, adaptor.fetchCount())
+}
+
+func TestPollingPassesExecutingChannelTypeToAdaptor(t *testing.T) {
+	truncate(t)
+	const channelID = 112
+	baseURL := "https://gateway.example"
+	gateway := &model.Channel{Id: channelID, Type: constant.ChannelTypeNewAPI, Name: "gateway", Key: "sk-gateway", Status: common.ChannelStatusEnabled, BaseURL: &baseURL}
+	gateway.SetOtherSettings(dto.ChannelOtherSettings{DisableTaskPollingSleep: true})
+	require.NoError(t, model.DB.Create(gateway).Error)
+	task := seedPollingTask(t, channelID, "task_gateway", "upstream_gateway")
+	taskChannels := map[int][]string{channelID: {task.GetUpstreamTaskID()}}
+	tasks := map[string]*model.Task{task.GetUpstreamTaskID(): task}
+
+	perTask := &taskPollingFetchAdaptor{}
+	previousFactory := GetTaskAdaptorFunc
+	GetTaskAdaptorFunc = func(constant.TaskPlatform) TaskPollingAdaptor { return perTask }
+	t.Cleanup(func() { GetTaskAdaptorFunc = previousFactory })
+	require.NoError(t, UpdateVideoTasks(context.Background(), constant.TaskPlatform("kling"), taskChannels, tasks))
+	meta := perTask.initChannelMeta()
+	require.NotNil(t, meta, "per-task polling initializes the adaptor with channel metadata")
+	assert.Equal(t, constant.ChannelTypeNewAPI, meta.ChannelType, "the adaptor derives the upstream kind from the channel type")
+	assert.Equal(t, channelID, meta.ChannelId)
+	assert.Equal(t, baseURL, meta.ChannelBaseUrl)
+
+	batch := &batchPollingAdaptor{}
+	require.NoError(t, UpdateBatchTasks(context.Background(), batch, taskChannels, tasks))
+	meta = batch.initChannelMeta()
+	require.NotNil(t, meta, "batch polling initializes the adaptor with channel metadata")
+	assert.Equal(t, constant.ChannelTypeNewAPI, meta.ChannelType)
+	assert.Equal(t, channelID, meta.ChannelId)
+	assert.Equal(t, baseURL, meta.ChannelBaseUrl)
 }
 
 func TestDispatchPlatformUpdateUsesFetchMode(t *testing.T) {
@@ -758,18 +806,20 @@ func TestSweepTimedOutTasksHonorsRefundRolloutBoundary(t *testing.T) {
 	assert.EqualValues(t, model.TaskStatusFailure, reloadedModern.Status)
 	assert.Zero(t, reloadedLegacy.Quota)
 	assert.Zero(t, reloadedModern.Quota)
-	assert.Contains(t, reloadedLegacy.FailReason, "旧系统遗留任务")
-	assert.Contains(t, reloadedModern.FailReason, "任务超时")
+	assert.Contains(t, reloadedLegacy.FailReason, "old system")
+	assert.Equal(t, "Task timed out", reloadedModern.FailReason)
 	assert.Equal(t, initialQuota+modernTaskQuota, getUserQuota(t, userID))
 	assert.Equal(t, int64(1), countLogs(t))
 }
 
 type scriptedPollingAdaptor struct {
-	statusCode int
-	body       []byte
-	fetchErr   error
-	parse      *relaycommon.TaskInfo
-	parseErr   error
+	statusCode   int
+	body         []byte
+	fetchErr     error
+	parse        *relaycommon.TaskInfo
+	parseErr     error
+	adjustReturn int
+	adjustCalls  int
 }
 
 func (a *scriptedPollingAdaptor) Init(*relaycommon.RelayInfo) {}
@@ -797,7 +847,8 @@ func (a *scriptedPollingAdaptor) ParseTaskResult(*model.Task, *http.Response, []
 	return &relaycommon.TaskInfo{Status: model.TaskStatusInProgress}, nil
 }
 func (a *scriptedPollingAdaptor) AdjustBillingOnComplete(*model.Task, *relaycommon.TaskInfo) int {
-	return 0
+	a.adjustCalls++
+	return a.adjustReturn
 }
 
 type scriptedBatchPollingAdaptor struct {
@@ -814,6 +865,270 @@ func (a *scriptedBatchPollingAdaptor) ParseBatchResult([]*model.Task, *http.Resp
 		return nil, a.parseErr
 	}
 	return a.results, nil
+}
+
+func TestPollingIntegrationBulkFailurePreservesConcurrentSuccess(t *testing.T) {
+	previousLimit, previousTimeout := constant.TaskQueryLimit, constant.TaskTimeoutMinutes
+	previousCache := common.MemoryCacheEnabled
+	constant.TaskQueryLimit, constant.TaskTimeoutMinutes = 10, 0
+	common.MemoryCacheEnabled = false
+	t.Cleanup(func() {
+		constant.TaskQueryLimit, constant.TaskTimeoutMinutes = previousLimit, previousTimeout
+		common.MemoryCacheEnabled = previousCache
+	})
+	for _, path := range []string{"missing video channel", "missing batch channel", "null task ID"} {
+		t.Run(path, func(t *testing.T) {
+			truncate(t)
+			const userID, channelID, reserved = 701, 701, 100
+			seedUser(t, userID, 1_000)
+			task := makeTask(userID, channelID, reserved, 0, BillingSourceWallet, 0)
+			task.TaskID = "integration_bulk"
+			task.Platform = "integration-plugin"
+			task.SubmitTime = time.Now().Unix()
+			if path == "null task ID" {
+				task.TaskID = ""
+			}
+			require.NoError(t, model.DB.Create(task).Error)
+			complete := func() {
+				winner := *task
+				winner.Status = model.TaskStatusSuccess
+				winner.Progress = "100%"
+				won, err := winner.UpdateWithStatus(model.TaskStatusInProgress)
+				require.NoError(t, err)
+				require.True(t, won)
+			}
+			if path == "null task ID" {
+				previous := GetTaskAdaptorFunc
+				GetTaskAdaptorFunc = func(constant.TaskPlatform) TaskPollingAdaptor { return &scriptedPollingAdaptor{} }
+				t.Cleanup(func() { GetTaskAdaptorFunc = previous })
+				summary := RunTaskPollingOnce(context.Background(), func(processed, total int) {
+					if processed == 0 && total == 1 {
+						complete() // after the polling query, before the bulk failure
+					}
+				})
+				require.Equal(t, 1, summary.NullTasksFailed)
+			} else {
+				complete() // keep the poller's in-memory snapshot stale
+				tasks := map[string]*model.Task{task.TaskID: task}
+				if path == "missing video channel" {
+					require.Error(t, updateVideoTasks(context.Background(), task.Platform, channelID, []string{task.TaskID}, tasks))
+				} else {
+					require.NoError(t, updateBatchTasks(context.Background(), &scriptedBatchPollingAdaptor{}, channelID, []string{task.TaskID}, tasks))
+				}
+			}
+			var persisted model.Task
+			require.NoError(t, model.DB.First(&persisted, task.ID).Error)
+			assert.EqualValues(t, model.TaskStatusSuccess, persisted.Status)
+			require.NoError(t, model.DB.Model(&model.Task{}).Where("id = ?", task.ID).
+				UpdateColumn("updated_at", time.Now().Add(-time.Minute).Unix()).Error)
+			sweepUnrefundedFailedTasks(context.Background())
+			assert.Equal(t, reserved, getTaskQuota(t, task.ID))
+			assert.Equal(t, 1_000, getUserQuota(t, userID))
+			assert.Zero(t, countLogs(t))
+		})
+	}
+}
+
+func TestPollingIntegrationReconciliationPreservesPositiveSettlement(t *testing.T) {
+	previousModels := ratio_setting.ModelRatio2JSONString()
+	previousGroups := ratio_setting.GroupRatio2JSONString()
+	previousGroupGroups := ratio_setting.GroupGroupRatio2JSONString()
+	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{"test-model":1}`))
+	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"default":1}`))
+	require.NoError(t, ratio_setting.UpdateGroupGroupRatioByJSONString(`{}`))
+	t.Cleanup(func() {
+		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(previousModels))
+		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(previousGroups))
+		require.NoError(t, ratio_setting.UpdateGroupGroupRatioByJSONString(previousGroupGroups))
+	})
+	for _, tc := range []struct {
+		name             string
+		adjustment       int
+		tokens           int
+		completionTokens int
+		actual           int
+		batch            bool
+	}{
+		{name: "adaptor delta", adjustment: 60, actual: 60},
+		{name: "adaptor additional charge", adjustment: 160, actual: 160},
+		{name: "adaptor no delta", adjustment: 100, actual: 100},
+		{name: "total tokens", tokens: 60, actual: 60},
+		{name: "tokens no delta", tokens: 100, actual: 100},
+		{name: "completion tokens", completionTokens: 60, actual: 60},
+		{name: "batch adaptor delta", adjustment: 60, actual: 60, batch: true},
+		{name: "batch adaptor no delta", adjustment: 100, actual: 100, batch: true},
+		{name: "batch tokens", tokens: 60, actual: 60, batch: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			truncate(t)
+			const userID, tokenID, channelID = 702, 702, 702
+			seedUser(t, userID, 1_000)
+			seedToken(t, tokenID, userID, "synthetic-polling-token", 800)
+			seedTaskPollingChannel(t, channelID, true)
+			seedChargedAccounting(t, userID, channelID, tokenID, 100, 1)
+			task := makeTask(userID, channelID, 100, tokenID, BillingSourceWallet, 0)
+			task.TaskID = "integration_settlement"
+			task.SubmitTime = time.Now().Unix()
+			require.NoError(t, model.DB.Create(task).Error)
+			result := relaycommon.TaskInfo{Status: model.TaskStatusFailure, Reason: "synthetic failure",
+				TotalTokens: tc.tokens, CompletionTokens: tc.completionTokens}
+			adaptor := &scriptedBatchPollingAdaptor{
+				scriptedPollingAdaptor: scriptedPollingAdaptor{adjustReturn: tc.adjustment, parse: &result},
+				results:                map[string]*BatchTaskResult{task.TaskID: {TaskInfo: result}},
+			}
+			tasks := map[string]*model.Task{task.TaskID: task}
+			if tc.batch {
+				require.NoError(t, updateBatchTasks(context.Background(), adaptor, channelID, []string{task.TaskID}, tasks))
+			} else {
+				require.NoError(t, updateVideoSingleTask(context.Background(), adaptor, &model.Channel{Id: channelID}, task.TaskID, tasks))
+			}
+			assert.Equal(t, 1, adaptor.adjustCalls, "disposition and settlement must share one billing decision")
+			var persisted model.Task
+			require.NoError(t, model.DB.First(&persisted, task.ID).Error)
+			assert.True(t, persisted.PrivateData.FailureChargeRetained)
+			assert.False(t, model.HasTaskPollingWork())
+			require.Equal(t, tc.actual, getTaskQuota(t, task.ID))
+			require.Equal(t, 1_000+100-tc.actual, getUserQuota(t, userID))
+			logs := countLogs(t)
+			require.NoError(t, model.DB.Model(&model.Task{}).Where("id = ?", task.ID).
+				UpdateColumn("updated_at", time.Now().Add(-time.Minute).Unix()).Error)
+			sweepUnrefundedFailedTasks(context.Background())
+			assert.Equal(t, tc.actual, getTaskQuota(t, task.ID))
+			assert.Equal(t, 1_000+100-tc.actual, getUserQuota(t, userID))
+			assert.Equal(t, 800+100-tc.actual, getTokenRemainQuota(t, tokenID))
+			assert.Equal(t, logs, countLogs(t))
+		})
+	}
+}
+
+func TestPollingIntegrationFailureDispositionSurvivesInterruptedFinalization(t *testing.T) {
+	for _, retainCharge := range []bool{true, false} {
+		name := "pending refund"
+		if retainCharge {
+			name = "retained charge"
+		}
+		t.Run(name, func(t *testing.T) {
+			truncate(t)
+			const userID, reserved = 704, 100
+			seedUser(t, userID, 1_000)
+			task := makeTask(userID, 0, reserved, 0, BillingSourceWallet, 0)
+			task.TaskID = "interrupted_finalization"
+			task.SubmitTime = model.TaskRefundLegacyCutoff
+			require.NoError(t, model.DB.Create(task).Error)
+			adaptor := &scriptedPollingAdaptor{parse: &relaycommon.TaskInfo{Status: model.TaskStatusFailure}}
+			if retainCharge {
+				adaptor.adjustReturn = 60
+			}
+
+			// Stop after the terminal write commits, before any settlement/refund.
+			// Recovery must distinguish the dispositions without rerunning a hook.
+			interrupted := errors.New("synthetic interruption after terminal commit")
+			const callback = "test:interrupt_terminal_finalization"
+			require.NoError(t, model.DB.Callback().Update().After("gorm:commit_or_rollback_transaction").Register(callback, func(tx *gorm.DB) {
+				if row, ok := tx.Statement.Dest.(*model.Task); ok && row.ID == task.ID && row.Status == model.TaskStatusFailure && tx.RowsAffected == 1 {
+					tx.AddError(interrupted)
+				}
+			}))
+			t.Cleanup(func() { model.DB.Callback().Update().Remove(callback) })
+			err := updateVideoSingleTask(context.Background(), adaptor, &model.Channel{}, task.TaskID, map[string]*model.Task{task.TaskID: task})
+			require.ErrorIs(t, err, interrupted)
+			assert.Equal(t, 1, adaptor.adjustCalls)
+			var persisted model.Task
+			require.NoError(t, model.DB.First(&persisted, task.ID).Error)
+			assert.EqualValues(t, model.TaskStatusFailure, persisted.Status)
+			assert.Equal(t, retainCharge, persisted.PrivateData.FailureChargeRetained)
+			assert.Equal(t, reserved, persisted.Quota, "no funds have moved after the CAS")
+			assert.Equal(t, 1_000, getUserQuota(t, userID))
+			assert.Equal(t, !retainCharge, model.HasTaskPollingWork())
+			assert.Zero(t, countLogs(t))
+
+			require.NoError(t, model.DB.Model(&model.Task{}).Where("id = ?", task.ID).
+				UpdateColumn("updated_at", time.Now().Add(-time.Minute).Unix()).Error)
+			sweepUnrefundedFailedTasks(context.Background())
+			sweepUnrefundedFailedTasks(context.Background())
+			if retainCharge {
+				assert.Equal(t, reserved, getTaskQuota(t, task.ID))
+				assert.Equal(t, 1_000, getUserQuota(t, userID))
+				assert.Zero(t, countLogs(t))
+			} else {
+				assert.Zero(t, getTaskQuota(t, task.ID))
+				assert.Equal(t, 1_000+reserved, getUserQuota(t, userID))
+				assert.EqualValues(t, 1, countLogs(t))
+			}
+		})
+	}
+}
+
+func pollingMetricRequestCount(t *testing.T, name string) int64 {
+	t.Helper()
+	summary, err := perfmetrics.QuerySummaryAll(24, nil)
+	require.NoError(t, err)
+	for _, item := range summary.Models {
+		if item.ModelName == name {
+			return item.RequestCount
+		}
+	}
+	return 0
+}
+
+func TestPollingIntegrationMetricsOnlyFinalizeTransitionWinner(t *testing.T) {
+	require.NoError(t, model.DB.AutoMigrate(&model.PerfMetric{}))
+	for _, tc := range []struct {
+		name   string
+		status string
+		http   int
+		batch  bool
+	}{
+		{name: "video success", status: model.TaskStatusSuccess},
+		{name: "video failure", status: model.TaskStatusFailure},
+		{name: "video not found", status: model.TaskStatusFailure, http: http.StatusNotFound},
+		{name: "batch success", status: model.TaskStatusSuccess, batch: true},
+		{name: "batch failure", status: model.TaskStatusFailure, batch: true},
+		{name: "batch not found", status: model.TaskStatusFailure, http: http.StatusNotFound, batch: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			truncate(t)
+			const channelID = 703
+			seedTaskPollingChannel(t, channelID, true)
+			task := seedPollingTask(t, channelID, "integration_metrics", "upstream_metrics")
+			task.Properties.OriginModelName = "integration-metrics-" + tc.name
+			require.NoError(t, task.Update())
+			stale := *task
+			before := pollingMetricRequestCount(t, task.Properties.OriginModelName)
+			adaptor := &scriptedBatchPollingAdaptor{
+				scriptedPollingAdaptor: scriptedPollingAdaptor{statusCode: tc.http, parse: &relaycommon.TaskInfo{Status: tc.status}},
+				results:                map[string]*BatchTaskResult{task.GetUpstreamTaskID(): {TaskInfo: relaycommon.TaskInfo{Status: tc.status}}},
+			}
+			for _, pollTask := range []*model.Task{task, &stale, task} {
+				tasks := map[string]*model.Task{task.GetUpstreamTaskID(): pollTask}
+				if tc.batch {
+					require.NoError(t, updateBatchTasks(context.Background(), adaptor, channelID, []string{task.GetUpstreamTaskID()}, tasks))
+				} else {
+					require.NoError(t, updateVideoSingleTask(context.Background(), adaptor, &model.Channel{Id: channelID}, task.GetUpstreamTaskID(), tasks))
+				}
+				assert.Equal(t, before+1, pollingMetricRequestCount(t, task.Properties.OriginModelName), "winner, stale loser and duplicate terminal poll must contribute only one sample")
+			}
+			// Even a conflicting later terminal response cannot reopen a completed
+			// task or add a second metric sample.
+			otherStatus := model.TaskStatusSuccess
+			if tc.status == model.TaskStatusSuccess {
+				otherStatus = model.TaskStatusFailure
+			}
+			adaptor.statusCode = http.StatusOK
+			adaptor.parse.Status = otherStatus
+			adaptor.results[task.GetUpstreamTaskID()].TaskInfo.Status = otherStatus
+			tasks := map[string]*model.Task{task.GetUpstreamTaskID(): task}
+			if tc.batch {
+				require.NoError(t, updateBatchTasks(context.Background(), adaptor, channelID, []string{task.GetUpstreamTaskID()}, tasks))
+			} else {
+				require.NoError(t, updateVideoSingleTask(context.Background(), adaptor, &model.Channel{Id: channelID}, task.GetUpstreamTaskID(), tasks))
+			}
+			var persisted model.Task
+			require.NoError(t, model.DB.First(&persisted, task.ID).Error)
+			assert.EqualValues(t, tc.status, persisted.Status)
+			assert.Equal(t, before+1, pollingMetricRequestCount(t, task.Properties.OriginModelName))
+		})
+	}
 }
 
 func TestUpdateVideoSingleTaskPollClassification(t *testing.T) {
@@ -838,7 +1153,7 @@ func TestUpdateVideoSingleTaskPollClassification(t *testing.T) {
 			statusCode:    http.StatusNotFound,
 			wantStatus:    model.TaskStatusFailure,
 			wantRefund:    true,
-			wantReason:    "upstream task not found (HTTP 404)",
+			wantReason:    "Upstream task not found",
 			wantUnchanged: false,
 		},
 		{
@@ -856,7 +1171,7 @@ func TestUpdateVideoSingleTaskPollClassification(t *testing.T) {
 			wantStatus:    model.TaskStatusFailure,
 			wantFailures:  3,
 			wantRefund:    true,
-			wantReason:    "poll failed: transient (HTTP 429)",
+			wantReason:    "Failed to query the upstream task status",
 		},
 		{
 			name:          "UNKNOWN increments",
@@ -940,7 +1255,7 @@ func TestUpdateVideoSingleTaskPollClassification(t *testing.T) {
 				assert.Empty(t, persisted.FailReason)
 			}
 			if testCase.wantReason != "" {
-				assert.Contains(t, persisted.FailReason, testCase.wantReason)
+				assert.Equal(t, testCase.wantReason, persisted.FailReason)
 			}
 			if testCase.wantState != "" {
 				assert.JSONEq(t, testCase.wantState, string(persisted.PrivateData.PluginState))
@@ -975,7 +1290,7 @@ func TestUpdateBatchTasksPollClassification(t *testing.T) {
 			statusCode: http.StatusNotFound,
 			wantStatus: model.TaskStatusFailure,
 			wantRefund: true,
-			wantReason: "upstream task not found (HTTP 404)",
+			wantReason: "Upstream task not found",
 		},
 		{
 			name:         "401 increments every task",
@@ -1022,7 +1337,7 @@ func TestUpdateBatchTasksPollClassification(t *testing.T) {
 			assert.EqualValues(t, testCase.wantStatus, persisted.Status)
 			assert.Equal(t, testCase.wantFailures, persisted.PrivateData.PollFailures)
 			if testCase.wantReason != "" {
-				assert.Contains(t, persisted.FailReason, testCase.wantReason)
+				assert.Equal(t, testCase.wantReason, persisted.FailReason)
 			}
 			if testCase.wantRefund {
 				assert.Equal(t, initialQuota+preConsumed, getUserQuota(t, userID))

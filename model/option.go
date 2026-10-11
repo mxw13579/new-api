@@ -222,6 +222,13 @@ func loadOptionsFromDatabase() {
 }
 
 func loadOptionsFromDatabaseWithHook(afterRead func()) {
+	requestPolicyOptionMutex.Lock()
+	defer requestPolicyOptionMutex.Unlock()
+	defer func() {
+		if err := refreshRequestPolicySnapshot(); err != nil {
+			common.SysError(common.LogText("invalid request policy: %s", err.Error()))
+		}
+	}()
 	passkeyOptionMutex.Lock()
 	defer passkeyOptionMutex.Unlock()
 	invoiceSettingUpdateMutex.Lock()
@@ -239,7 +246,7 @@ func loadOptionsFromDatabaseWithHook(afterRead func()) {
 		otherOptions = append(otherOptions, option)
 	}
 	if err := publishInvoiceOptions(invoiceOptions); err != nil {
-		common.SysLog("failed to update invoice option map: " + err.Error())
+		common.SysLog(common.LogText("failed to update invoice option map: %s", err.Error()))
 	}
 	invoiceSettingUpdateMutex.Unlock()
 	passkeyOptions := make(map[string]string)
@@ -250,7 +257,7 @@ func loadOptionsFromDatabaseWithHook(afterRead func()) {
 		}
 		err := updateOptionMap(option.Key, option.Value)
 		if err != nil {
-			common.SysLog("failed to update option map: " + err.Error())
+			common.SysLog(common.LogText("failed to update option map: %s", err.Error()))
 		}
 	}
 	applyPasskeyDomainOptions(passkeyOptions)
@@ -259,12 +266,18 @@ func loadOptionsFromDatabaseWithHook(afterRead func()) {
 func SyncOptions(frequency int) {
 	for {
 		time.Sleep(time.Duration(frequency) * time.Second)
-		common.SysLog("syncing options from database")
+		common.SysLog(common.LogText("syncing options from database"))
 		loadOptionsFromDatabase()
 	}
 }
 
 func validateOptionValue(key string, value string) error {
+	if key == legacyAccessTokenRetireAtKey {
+		return errLegacyRetireAtReadOnly
+	}
+	if err := operation_setting.ValidateQuotaOption(key, value); err != nil {
+		return err
+	}
 	if key == operation_setting.ToolPriceOptionKey {
 		return operation_setting.ValidateToolPricesJSON(value)
 	}
@@ -280,6 +293,9 @@ func validateOptionValue(key string, value string) error {
 func UpdateOption(key string, value string) error {
 	if strings.HasPrefix(key, "invoice_setting.") {
 		return UpdateOptionsBulk(map[string]string{key: value})
+	}
+	if IsRequestPolicyOption(key) {
+		return UpdateRequestPolicyOptions(map[string]string{key: value})
 	}
 	if IsPasskeyDomainOption(key) {
 		_, err := UpdatePasskeyDomainOptions(map[string]string{key: value}, false, "")
@@ -360,6 +376,25 @@ func updateOptionsBulk(values map[string]string, afterCommit func()) error {
 			return err
 		}
 	}
+	var policySnapshot *RequestPolicySnapshot
+	for key := range values {
+		if IsRequestPolicyOption(key) {
+			requestPolicyOptionMutex.Lock()
+			defer requestPolicyOptionMutex.Unlock()
+			options := maps.Clone(CurrentRequestPolicy().Options)
+			for key, value := range values {
+				if IsRequestPolicyOption(key) {
+					options[key] = value
+				}
+			}
+			var err error
+			policySnapshot, err = BuildRequestPolicy(options)
+			if err != nil {
+				return err
+			}
+			break
+		}
+	}
 	if err := persistOptionsBulk(values); err != nil {
 		return err
 	}
@@ -370,6 +405,9 @@ func updateOptionsBulk(values map[string]string, afterCommit func()) error {
 		if err := updateOptionMap(k, v); err != nil {
 			return err
 		}
+	}
+	if policySnapshot != nil {
+		requestPolicySnapshot.Store(policySnapshot)
 	}
 	return nil
 }
@@ -474,7 +512,7 @@ func publishInvoiceCandidate(values map[string]string, candidate operation_setti
 }
 
 func updateOptionMap(key string, value string) (err error) {
-	if key == retiredThemeOptionKey {
+	if key == retiredThemeOptionKey || key == legacyAccessTokenRetireAtKey {
 		common.OptionMapRWMutex.Lock()
 		delete(common.OptionMap, key)
 		common.OptionMapRWMutex.Unlock()

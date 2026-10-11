@@ -57,6 +57,7 @@ func TestMain(m *testing.M) {
 		&SystemInstance{},
 		&SystemTask{},
 		&SystemTaskLock{},
+		&UserAccessToken{},
 	); err != nil {
 		panic("failed to migrate: " + err.Error())
 	}
@@ -75,6 +76,7 @@ func truncateTables(t *testing.T) {
 		DB.Exec("DELETE FROM two_fa_backup_codes")
 		DB.Exec("DELETE FROM two_fas")
 		DB.Exec("DELETE FROM tokens")
+		DB.Exec("DELETE FROM user_access_tokens")
 		DB.Exec("DELETE FROM user_oauth_bindings")
 		DB.Exec("DELETE FROM users")
 		DB.Exec("DELETE FROM logs")
@@ -255,6 +257,93 @@ func TestUpdateWithStatus_ConcurrentWinner(t *testing.T) {
 		}
 	}
 	assert.Equal(t, 1, winCount, "exactly one goroutine should win the CAS")
+}
+
+func TestFailUnfinishedTasksByID_PreservesTerminalBilling(t *testing.T) {
+	truncateTables(t)
+	tasks := []*Task{
+		{TaskID: "pending", Status: TaskStatusInProgress, Quota: 100},
+		{TaskID: "succeeded", Status: TaskStatusSuccess, Quota: 200, Progress: "100%"},
+		{TaskID: "failed_charge", Status: TaskStatusFailure, Quota: 300, Progress: "100%", PrivateData: TaskPrivateData{FailureChargeRetained: true}},
+	}
+	for _, task := range tasks {
+		insertTask(t, task)
+	}
+	require.NoError(t, FailUnfinishedTasksByID([]int64{tasks[0].ID, tasks[1].ID, tasks[2].ID}, "missing channel"))
+	var found []Task
+	require.NoError(t, DB.Order("id").Find(&found).Error)
+	require.Len(t, found, 3)
+	assert.EqualValues(t, TaskStatusFailure, found[0].Status)
+	assert.Equal(t, "100%", found[0].Progress)
+	assert.Equal(t, "missing channel", found[0].FailReason)
+	assert.Positive(t, found[0].FinishTime)
+	assert.Equal(t, 100, found[0].Quota, "pending refund stays durable")
+	assert.False(t, found[0].PrivateData.FailureChargeRetained)
+	assert.Equal(t, *tasks[1], found[1])
+	assert.Equal(t, *tasks[2], found[2])
+}
+
+func TestTaskPrivateDataFailureChargeDispositionRoundTrip(t *testing.T) {
+	original := TaskPrivateData{FailureChargeRetained: true}
+	value, err := original.Value()
+	require.NoError(t, err)
+	encoded, ok := value.(string)
+	require.True(t, ok, "JSON values must be strings, including for PostgreSQL simple protocol")
+	assert.JSONEq(t, `{"failure_charge_retained":true}`, encoded)
+
+	for _, input := range []any{encoded, []byte(encoded)} {
+		var decoded TaskPrivateData
+		require.NoError(t, decoded.Scan(input))
+		assert.Equal(t, original, decoded)
+	}
+	// A reused scanner must not carry a retained-charge marker into a legacy
+	// or empty row, which would silently suppress that row's pending refund.
+	for _, input := range []any{nil, "", []byte{}, "null", []byte(`{}`), `{"poll_failures":2}`} {
+		decoded := original
+		require.NoError(t, decoded.Scan(input))
+		assert.False(t, decoded.FailureChargeRetained)
+	}
+	var decoded TaskPrivateData
+	require.Error(t, decoded.Scan(`{"failure_charge_retained":`))
+	value, err = (TaskPrivateData{}).Value()
+	require.NoError(t, err)
+	assert.Nil(t, value)
+}
+
+func TestGetUnrefundedFailedTasks_PagesPastRetainedCharges(t *testing.T) {
+	truncateTables(t)
+	// More than one query page of retained charges must not hide the refunds
+	// that follow, even when the caller only requests a single task.
+	for range 101 {
+		insertTask(t, &Task{
+			TaskID: "retained_charge", Status: TaskStatusFailure, Quota: 100,
+			SubmitTime:  TaskRefundLegacyCutoff,
+			PrivateData: TaskPrivateData{FailureChargeRetained: true},
+		})
+	}
+	assert.False(t, HasTaskPollingWork())
+	first := &Task{TaskID: "first_refund", Status: TaskStatusFailure, Quota: 100}
+	second := &Task{TaskID: "second_refund", Status: TaskStatusFailure, Quota: 200, SubmitTime: TaskRefundLegacyCutoff}
+	insertTask(t, first)
+	insertTask(t, second)
+	assert.True(t, HasTaskPollingWork())
+
+	before := time.Now().Unix() + 1
+	assert.Empty(t, GetUnrefundedFailedTasks(before, 0))
+	found := GetUnrefundedFailedTasks(before, 1)
+	require.Len(t, found, 1)
+	assert.Equal(t, first.ID, found[0].ID)
+	found = GetUnrefundedFailedTasks(before, 2)
+	require.Len(t, found, 2)
+	assert.Equal(t, []int64{first.ID, second.ID}, []int64{found[0].ID, found[1].ID})
+
+	require.NoError(t, DB.Model(first).Update("quota", 0).Error)
+	found = GetUnrefundedFailedTasks(before, 10)
+	require.Len(t, found, 1)
+	assert.Equal(t, second.ID, found[0].ID)
+	require.NoError(t, DB.Model(second).Update("quota", 0).Error)
+	assert.Empty(t, GetUnrefundedFailedTasks(before, 1))
+	assert.False(t, HasTaskPollingWork())
 }
 
 func TestGetUnrefundedFailedTasks_Uses2025CutoffBoundary(t *testing.T) {

@@ -1,6 +1,8 @@
 package model
 
 import (
+	"errors"
+	"maps"
 	"sync"
 	"testing"
 	"time"
@@ -8,6 +10,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/glebarez/sqlite"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
@@ -339,4 +342,69 @@ func TestUpdateOptionsBulkRejectsInvalidToolPricesWithoutChangingDatabaseOrOptio
 		operation_setting.ToolPriceOptionKey: originalToolPrices,
 		"SystemName":                         "before",
 	}, common.OptionMap)
+}
+
+func TestUpdateOptionsBulkPreservesRequestPolicyAndInvoiceBoundaries(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	sqlDB.SetMaxOpenConns(1)
+	require.NoError(t, db.AutoMigrate(&Option{}))
+	previousDB, previousOptions := DB, common.OptionMap
+	previousPolicy, previousRetry := requestPolicySnapshot.Load(), common.RetryTimes
+	previousInvoice := operation_setting.GetInvoiceSetting()
+	t.Cleanup(func() {
+		DB, common.OptionMap = previousDB, previousOptions
+		requestPolicySnapshot.Store(previousPolicy)
+		common.RetryTimes = previousRetry
+		operation_setting.PublishInvoiceSetting(previousInvoice)
+		require.NoError(t, sqlDB.Close())
+	})
+	DB = db
+	policy, err := BuildRequestPolicy(map[string]string{"RetryTimes": "1"})
+	require.NoError(t, err)
+	requestPolicySnapshot.Store(policy)
+	common.OptionMap = maps.Clone(policy.Options)
+	common.RetryTimes = 1
+	operation_setting.PublishInvoiceSetting(operation_setting.DefaultInvoiceSetting())
+	require.NoError(t, db.Create(&Option{Key: "RetryTimes", Value: "1"}).Error)
+
+	require.Error(t, UpdateOptionsBulk(map[string]string{"RetryTimes": "-1", "MergeFixtureOption": "invalid"}))
+	assert.Same(t, policy, CurrentRequestPolicy())
+	assert.Equal(t, 1, common.RetryTimes)
+	var count int64
+	require.NoError(t, db.Model(&Option{}).Where(map[string]any{"key": "MergeFixtureOption"}).Count(&count).Error)
+	assert.Zero(t, count, "invalid policy must reject the entire bulk write")
+
+	require.NoError(t, UpdateOptionsBulk(map[string]string{"RetryTimes": "2", "MergeFixtureOption": "committed"}))
+	assert.Equal(t, 2, CurrentRequestPolicy().RetryTimes)
+	assert.Equal(t, 2, common.RetryTimes)
+	assert.Equal(t, "committed", common.OptionMap["MergeFixtureOption"])
+	policy = CurrentRequestPolicy()
+	require.NoError(t, db.Callback().Update().Before("gorm:update").Register("merge_bulk_reject", func(tx *gorm.DB) {
+		tx.AddError(errors.New("synthetic option write failure"))
+	}))
+	require.Error(t, UpdateOptionsBulk(map[string]string{"RetryTimes": "3", "MergeFixtureOption": "rejected"}))
+	require.NoError(t, db.Callback().Update().Remove("merge_bulk_reject"))
+	assert.Same(t, policy, CurrentRequestPolicy())
+	assert.Equal(t, 2, common.RetryTimes)
+	assert.Equal(t, "committed", common.OptionMap["MergeFixtureOption"])
+	var storedRetry Option
+	require.NoError(t, db.Where(map[string]any{"key": "RetryTimes"}).First(&storedRetry).Error)
+	assert.Equal(t, "2", storedRetry.Value)
+
+	require.NoError(t, UpdateOptionsBulk(map[string]string{"invoice_setting.minimum_amount_minor": "20000"}))
+	assert.Equal(t, int64(20000), operation_setting.GetInvoiceSetting().MinimumAmountMinor)
+	assert.Same(t, policy, CurrentRequestPolicy(), "invoice publication must not replace the policy snapshot")
+	require.Error(t, UpdateOptionsBulk(map[string]string{
+		"invoice_setting.minimum_amount_minor": "30000",
+		"RetryTimes":                           "4",
+	}))
+	assert.Equal(t, int64(20000), operation_setting.GetInvoiceSetting().MinimumAmountMinor)
+	assert.Same(t, policy, CurrentRequestPolicy())
+	assert.Equal(t, 2, common.RetryTimes)
+	var storedInvoice Option
+	require.NoError(t, db.Where(map[string]any{"key": "invoice_setting.minimum_amount_minor"}).First(&storedInvoice).Error)
+	assert.Equal(t, "20000", storedInvoice.Value)
 }

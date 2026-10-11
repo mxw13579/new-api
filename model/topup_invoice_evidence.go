@@ -172,6 +172,6 @@ func CompleteVerifiedEpayWalletTopUp(completion VerifiedEpayCompletion) error {
 		return err
 	}
 	invalidateWalletTopUpQuotaCache(creditResult)
-	RecordTopupLog(creditResult.UserId, fmt.Sprintf("Epay wallet topup succeeded, quota: %v, paid amount: %.2f", logger.LogQuota(creditResult.QuotaToAdd), creditResult.Money), completion.CallerIP, creditResult.PaymentMethod, PaymentProviderEpay)
+	RecordTopupLog(creditResult.UserId, common.NewMessage("Online top-up succeeded, amount added: {{quota}}, payment amount: {{amount}}", map[string]any{"quota": logger.FormatQuota(creditResult.QuotaToAdd), "amount": fmt.Sprintf("%.2f", creditResult.Money)}), completion.CallerIP, creditResult.PaymentMethod, PaymentProviderEpay)
 	return nil
 }

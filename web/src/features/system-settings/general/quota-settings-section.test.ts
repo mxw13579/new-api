@@ -22,16 +22,14 @@ import { quotaSchema } from './quota-settings-section.schema'
 
 const baseQuotaSettings = {
   QuotaForNewUser: 0,
-  PreConsumedQuota: 0,
   QuotaForInviter: 0,
   RechargeRebateRatioForInviter: 0,
   QuotaForInvitee: 0,
   TopUpLink: '',
-  general_setting: {
-    docs_link: '',
-  },
   quota_setting: {
     enable_free_model_pre_consume: false,
+    trust_quota_usd: 10,
+    pre_consume_multiplier: 1,
   },
 }
 

@@ -316,8 +316,10 @@ func seedInvoiceR2ReviewCandidates(t *testing.T, db *gorm.DB, applicationID int6
 	documents := make([]*model.InvoiceDocument, 0, count)
 	for index := range count {
 		objectKey := fmt.Sprintf("invoices/r2-pg-%s-%d.pdf", suffix, index)
+		authorityID, objectETag := invoiceTestAuthorityID, fmt.Sprintf("r2-pg-%s-%d-etag", suffix, index)
 		document := &model.InvoiceDocument{
 			ApplicationID: applicationID, R2Bucket: "invoice-r2-review-test", ObjectKey: &objectKey,
+			R2AuthorityID: &authorityID, ObjectETag: &objectETag,
 			ContentType: model.InvoicePDFContentType, SizeBytes: 100, SHA256: strings.Repeat("a", 64),
 			Status: model.InvoiceDocumentStatusValidating, OperationToken: fmt.Sprintf("r2-pg-%s-token-%d", suffix, index),
 			OperationStartedAt: 10, UploadedBy: 700 + index, UploadedAt: 10, CreatedAt: 10, UpdatedAt: 10,
@@ -337,11 +339,13 @@ func seedIssuedInvoiceR2ReviewApplication(t *testing.T, db *gorm.DB, suffix stri
 	}
 	require.NoError(t, db.Create(issuance).Error)
 	objectKey := "invoices/r2-pg-existing.pdf"
+	authorityID, objectETag := invoiceTestAuthorityID, "r2-pg-existing-etag"
 	version := int64(1)
 	availableAt, expiresAt, actor := int64(50), int64(5000000), 600
 	active := &model.InvoiceDocument{
 		ApplicationID: application.ID, IssuanceID: &issuance.ID, Version: &version,
 		R2Bucket: "invoice-r2-review-test", ObjectKey: &objectKey, ContentType: model.InvoicePDFContentType,
+		R2AuthorityID: &authorityID, ObjectETag: &objectETag,
 		SizeBytes: 100, SHA256: strings.Repeat("b", 64), Status: model.InvoiceDocumentStatusAvailable,
 		OperationToken: "r2-pg-existing-token", OperationStartedAt: 50, UploadedBy: actor, UploadedAt: 50,
 		PDFFactsAttested: true, AttestedBy: &actor, AttestedAt: &availableAt,
