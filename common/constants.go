@@ -134,6 +134,7 @@ var RechargeRebateRatioForInviter = 0.0
 var ChannelDisableThreshold = 5.0
 var AutomaticDisableChannelEnabled = false
 var AutomaticEnableChannelEnabled = false
+var QuotaRemindEnabled = true
 var QuotaRemindThreshold = 1000
 
 // PreConsumedQuota is retained for old option clients; token reservations now
