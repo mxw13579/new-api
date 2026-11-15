@@ -213,6 +213,13 @@ func UploadRateLimit() func(c *gin.Context) {
 	return rateLimitFactory(common.UploadRateLimitNum, common.UploadRateLimitDuration, "UP")
 }
 
+// TokenUsageRateLimit limits API-token usage queries per IP in their own
+// bucket, so clients polling usage do not consume the CriticalRateLimit
+// budget shared by login, registration, and session refresh.
+func TokenUsageRateLimit() func(c *gin.Context) {
+	return rateLimitFactory(common.TokenUsageRateLimitNum, common.TokenUsageRateLimitDuration, "TU")
+}
+
 // userRateLimitFactory creates a rate limiter keyed by authenticated user ID
 // instead of client IP, making it resistant to proxy rotation attacks.
 // Must be used AFTER authentication middleware (UserAuth).

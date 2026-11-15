@@ -290,3 +290,59 @@ func TestGlobalWebRateLimitCountsFrontendFilesInStaticBucket(t *testing.T) {
 		assert.Equal(t, "1", webCount)
 	})
 }
+
+func TestTokenUsageRateLimitUsesItsOwnPerIPBucket(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	previousCriticalEnable, previousCriticalNum, previousCriticalDuration := common.CriticalRateLimitEnable, common.CriticalRateLimitNum, common.CriticalRateLimitDuration
+	previousRedisEnabled := common.RedisEnabled
+	t.Cleanup(func() {
+		common.CriticalRateLimitEnable, common.CriticalRateLimitNum, common.CriticalRateLimitDuration = previousCriticalEnable, previousCriticalNum, previousCriticalDuration
+		common.RedisEnabled = previousRedisEnabled
+	})
+	common.CriticalRateLimitEnable, common.CriticalRateLimitNum, common.CriticalRateLimitDuration = true, 2, 1200
+
+	for _, backend := range []struct {
+		name     string
+		useRedis bool
+		ipPrefix string
+	}{
+		{"redis", true, "192.0.2."},
+		{"memory", false, "198.51.100."},
+	} {
+		t.Run(backend.name, func(t *testing.T) {
+			if backend.useRedis {
+				useRateLimitMiniRedis(t)
+			} else {
+				common.RedisEnabled = false
+			}
+			router := gin.New()
+			require.NoError(t, router.SetTrustedProxies(nil))
+			router.GET("/api/usage/token/", TokenUsageRateLimit(), func(c *gin.Context) { c.Status(http.StatusNoContent) })
+			router.GET("/api/user/login", CriticalRateLimit(), func(c *gin.Context) { c.Status(http.StatusNoContent) })
+
+			pollingAddr := backend.ipPrefix + "80:12345"
+			for range 10 {
+				assert.Equal(t, http.StatusNoContent, performRateLimitRequest(router, "/api/usage/token/", pollingAddr).Code)
+			}
+			limited := performRateLimitRequest(router, "/api/usage/token/", pollingAddr)
+			assert.Equal(t, http.StatusTooManyRequests, limited.Code)
+			assert.Equal(t, "60", limited.Header().Get("Retry-After"))
+
+			for range 2 {
+				assert.Equal(t, http.StatusNoContent, performRateLimitRequest(router, "/api/user/login", pollingAddr).Code,
+					"usage queries must not consume the login budget of the same IP")
+			}
+			assert.Equal(t, http.StatusTooManyRequests, performRateLimitRequest(router, "/api/user/login", pollingAddr).Code)
+			assert.Equal(t, http.StatusNoContent, performRateLimitRequest(router, "/api/usage/token/", backend.ipPrefix+"81:12345").Code,
+				"another IP keeps its own usage budget")
+
+			loginAddr := backend.ipPrefix + "82:12345"
+			for range 2 {
+				assert.Equal(t, http.StatusNoContent, performRateLimitRequest(router, "/api/user/login", loginAddr).Code)
+			}
+			assert.Equal(t, http.StatusTooManyRequests, performRateLimitRequest(router, "/api/user/login", loginAddr).Code)
+			assert.Equal(t, http.StatusNoContent, performRateLimitRequest(router, "/api/usage/token/", loginAddr).Code,
+				"an exhausted login budget must not block usage queries")
+		})
+	}
+}

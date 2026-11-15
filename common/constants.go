@@ -242,6 +242,12 @@ var (
 	DownloadRateLimitNum            = 10
 	DownloadRateLimitDuration int64 = 60
 
+	// Per-IP limit for API-token usage queries (/api/usage), counted
+	// separately from CriticalRateLimit so polling clients cannot exhaust
+	// the login budget of users behind the same IP.
+	TokenUsageRateLimitNum            = 10
+	TokenUsageRateLimitDuration int64 = 60
+
 	// Per-user search rate limit (applies after authentication, keyed by user ID)
 	SearchRateLimitEnable         = true
 	SearchRateLimitNum            = 10
