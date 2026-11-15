@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
@@ -24,6 +25,18 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 	info.IsStream = true
 	clientConn := info.ClientWs
 	targetConn := info.TargetWs
+
+	// Same per-message limits as the Responses WebSocket relay.
+	clientLimitMB := constant.MaxRequestBodyMB
+	if clientLimitMB <= 0 {
+		clientLimitMB = 128
+	}
+	clientConn.SetReadLimit(int64(clientLimitMB) << 20)
+	targetLimit := int64(helper.DefaultMaxScannerBufferSize)
+	if constant.StreamScannerMaxBufferMB > 0 {
+		targetLimit = int64(constant.StreamScannerMaxBufferMB) << 20
+	}
+	targetConn.SetReadLimit(targetLimit)
 
 	clientClosed := make(chan struct{})
 	targetClosed := make(chan struct{})

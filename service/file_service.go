@@ -522,24 +522,28 @@ func parseHEIFDimensions(data []byte) (int, int, bool) {
 
 	// Walk top-level boxes to find "meta"
 	offset := 0
-	for offset+8 <= size {
+	for size-offset >= 8 {
 		boxSize := int(binary.BigEndian.Uint32(data[offset : offset+4]))
 		boxType := string(data[offset+4 : offset+8])
 		headerLen := 8
 
 		if boxSize == 1 {
 			// 64-bit extended size
-			if offset+16 > size {
+			if size-offset < 16 {
 				break
 			}
-			boxSize = int(binary.BigEndian.Uint64(data[offset+8 : offset+16]))
+			extendedSize := binary.BigEndian.Uint64(data[offset+8 : offset+16])
+			if extendedSize > uint64(size-offset) {
+				break
+			}
+			boxSize = int(extendedSize)
 			headerLen = 16
 		} else if boxSize == 0 {
 			// box extends to end of data
 			boxSize = size - offset
 		}
 
-		if boxSize < headerLen || offset+boxSize > size {
+		if boxSize < headerLen || boxSize > size-offset {
 			break
 		}
 
@@ -549,28 +553,35 @@ func parseHEIFDimensions(data []byte) (int, int, bool) {
 			if len(metaData) < 4 {
 				return 0, 0, false
 			}
-			return findISPE(metaData[4:])
+			return findISPE(metaData[4:], 0)
 		}
 		offset += boxSize
 	}
 	return 0, 0, false
 }
 
+// heifMaxContainerDepth bounds findISPE recursion on untrusted input; the
+// valid path meta -> iprp -> ipco -> ispe needs far fewer levels.
+const heifMaxContainerDepth = 4
+
 // findISPE recursively searches for the ispe box within container boxes.
 // Path: meta -> iprp -> ipco -> ispe
-func findISPE(data []byte) (int, int, bool) {
+func findISPE(data []byte, depth int) (int, int, bool) {
+	if depth > heifMaxContainerDepth {
+		return 0, 0, false
+	}
 	offset := 0
 	size := len(data)
-	for offset+8 <= size {
+	for size-offset >= 8 {
 		boxSize := int(binary.BigEndian.Uint32(data[offset : offset+4]))
 		boxType := string(data[offset+4 : offset+8])
-		if boxSize < 8 || offset+boxSize > size {
+		if boxSize < 8 || boxSize > size-offset {
 			break
 		}
 		content := data[offset+8 : offset+boxSize]
 		switch boxType {
 		case "iprp", "ipco":
-			if w, h, ok := findISPE(content); ok {
+			if w, h, ok := findISPE(content, depth+1); ok {
 				return w, h, true
 			}
 		case "ispe":
