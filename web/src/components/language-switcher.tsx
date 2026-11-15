@@ -19,6 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import { Languages, Check } from 'lucide-react'
 import { useCallback, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
 
 import { Button } from '@/components/ui/button'
 import {
@@ -27,6 +28,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import { changeInterfaceLanguage } from '@/i18n/init'
 import {
   INTERFACE_LANGUAGE_OPTIONS,
   normalizeInterfaceLanguage,
@@ -51,7 +53,12 @@ export function LanguageSwitcher() {
 
   const handleChangeLanguage = useCallback(
     async (code: string) => {
-      await i18n.changeLanguage(code)
+      if (!(await changeInterfaceLanguage(i18n, code))) {
+        toast.error(
+          t('Failed to load language. Please refresh the page and try again.')
+        )
+        return
+      }
       if (user) {
         try {
           await api.put('/api/user/self', { language: code })
@@ -60,7 +67,7 @@ export function LanguageSwitcher() {
         }
       }
     },
-    [i18n, user]
+    [i18n, t, user]
   )
 
   return (

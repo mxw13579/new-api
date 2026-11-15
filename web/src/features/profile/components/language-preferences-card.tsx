@@ -23,6 +23,7 @@ import { toast } from 'sonner'
 
 import { Combobox } from '@/components/ui/combobox'
 import { TitledCard } from '@/components/ui/titled-card'
+import { changeInterfaceLanguage } from '@/i18n/init'
 import {
   INTERFACE_LANGUAGE_OPTIONS,
   normalizeInterfaceLanguage,
@@ -64,7 +65,14 @@ export function LanguagePreferencesCard(props: LanguagePreferencesCardProps) {
     const previousLanguage = currentLanguage
     setCurrentLanguage(nextLanguage)
     setSaving(true)
-    await i18n.changeLanguage(nextLanguage)
+    if (!(await changeInterfaceLanguage(i18n, nextLanguage))) {
+      setCurrentLanguage(previousLanguage)
+      setSaving(false)
+      toast.error(
+        t('Failed to load language. Please refresh the page and try again.')
+      )
+      return
+    }
 
     try {
       const response = await updateUserLanguage(nextLanguage)

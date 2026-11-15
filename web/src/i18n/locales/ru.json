@@ -2651,6 +2651,7 @@
     "Failed to load billing history": "Не удалось загрузить историю платежей",
     "Failed to load channel": "Не удалось загрузить канал",
     "Failed to load enabled models": "Не удалось загрузить включённые модели",
+    "Failed to load language. Please refresh the page and try again.": "Не удалось загрузить язык. Обновите страницу и попробуйте снова.",
     "Failed to load home page content": "Не удалось загрузить содержимое главной страницы",
     "Failed to load image": "Не удалось загрузить изображение",
     "Failed to load key status": "Не удалось загрузить статус ключей",

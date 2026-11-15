@@ -22,6 +22,7 @@ import { StrictMode } from 'react'
 import ReactDOM from 'react-dom/client'
 
 import { installBuildMetadata } from '@/lib/build-metadata'
+import { reloadOnceAfterChunkError } from '@/lib/chunk-reload'
 import { applyFaviconToDom } from '@/lib/dom-utils'
 import '@/lib/dayjs'
 import { initializeFrontendCache } from '@/lib/frontend-cache'
@@ -31,7 +32,7 @@ import { readCachedStatus, statusQueryOptions } from '@/lib/status-query'
 import { DirectionProvider } from './context/direction-provider'
 import { FontProvider } from './context/font-provider'
 import { ThemeProvider } from './context/theme-provider'
-import './i18n/config'
+import { i18nReady } from './i18n/config'
 // Generated Routes
 import { routeTree } from './routeTree.gen'
 
@@ -112,7 +113,17 @@ if (!rootElement) {
     /* empty */
   }
 })()
-if (!rootElement.innerHTML) {
+// Wait for the active locale chunk so the first paint is already translated.
+// `i18nReady` never rejects. A stale locale chunk (left behind by a newer
+// deployment) reloads the page once; any other or repeated failure renders
+// with key fallbacks.
+void i18nReady.then((result) => {
+  if (
+    reloadOnceAfterChunkError(result.activeLanguageError, 'locale_chunk_reload')
+  ) {
+    return
+  }
+  if (rootElement.innerHTML) return
   const root = ReactDOM.createRoot(rootElement)
   root.render(
     <StrictMode>
@@ -127,4 +138,4 @@ if (!rootElement.innerHTML) {
       </QueryClientProvider>
     </StrictMode>
   )
-}
+})

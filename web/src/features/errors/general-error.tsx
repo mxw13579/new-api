@@ -21,6 +21,7 @@ import { useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
+import { reloadOnceAfterChunkError } from '@/lib/chunk-reload'
 import { cn } from '@/lib/utils'
 
 const FEEDBACK_URL = 'https://github.com/QuantumNous/new-api/issues'
@@ -47,25 +48,9 @@ export function GeneralError({
   const navigate = useNavigate()
   const { history } = useRouter()
   useEffect(() => {
-    if (
-      !(error instanceof Error) ||
-      (error.name !== 'ChunkLoadError' &&
-        !/^Loading (CSS )?chunk .+ failed\./.test(error.message))
-    ) {
-      return
-    }
-
     // Recover only when the failed route is displayed, never on intent preload.
     // Keep the marker across reloads so a persistent failure shows this page.
-    try {
-      const key = `tanstack_router_reload:${error.message}`
-      if (sessionStorage.getItem(key)) return
-      sessionStorage.setItem(key, '1')
-    } catch {
-      // Without a persistent marker, reloading could loop indefinitely.
-      return
-    }
-    window.location.reload()
+    reloadOnceAfterChunkError(error, 'tanstack_router_reload')
   }, [error])
 
   const status = getHttpStatus(error)

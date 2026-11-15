@@ -2651,6 +2651,7 @@
     "Failed to load billing history": "加载计费历史失败",
     "Failed to load channel": "渠道加载失败",
     "Failed to load enabled models": "获取启用模型失败",
+    "Failed to load language. Please refresh the page and try again.": "语言加载失败，请刷新页面后重试。",
     "Failed to load home page content": "加载首页内容失败",
     "Failed to load image": "无法加载图像",
     "Failed to load key status": "加载密钥状态失败",
