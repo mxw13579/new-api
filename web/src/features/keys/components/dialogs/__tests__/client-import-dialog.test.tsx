@@ -17,16 +17,19 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { act, render, screen, waitFor } from '@testing-library/react'
+import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { Toaster } from 'sonner'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { api } from '@/lib/api'
 import {
   DEFAULT_CURRENCY_CONFIG,
   useSystemConfigStore,
 } from '@/stores/system-config-store'
 
-import { CCSwitchDialog } from '../cc-switch-dialog'
+import type { ClientImportTarget } from '../../../types'
+import { ClientImportDialog } from '../client-import-dialog'
 
 let queryClient: QueryClient
 
@@ -40,14 +43,24 @@ afterEach(() => {
   queryClient.clear()
 })
 
-function renderDialog(models = ['gpt-5.4', 'claude-sonnet-4-6']) {
+function renderDialog(
+  models = ['gpt-5.4', 'claude-sonnet-4-6'],
+  target: ClientImportTarget = 'cc-switch',
+  tokenKey = 'test-only'
+) {
   queryClient.setQueryData(['user-models-ccswitch'], {
     success: true,
     data: models,
   })
   render(
     <QueryClientProvider client={queryClient}>
-      <CCSwitchDialog open onOpenChange={vi.fn()} tokenKey='test-only' />
+      <ClientImportDialog
+        target={target}
+        open
+        onOpenChange={vi.fn()}
+        tokenKey={tokenKey}
+      />
+      <Toaster />
     </QueryClientProvider>
   )
 }
@@ -245,7 +258,12 @@ describe('CC Switch usage query', () => {
     })
     const view = (open: boolean) => (
       <QueryClientProvider client={queryClient}>
-        <CCSwitchDialog open={open} onOpenChange={vi.fn()} tokenKey='k' />
+        <ClientImportDialog
+          target='cc-switch'
+          open={open}
+          onOpenChange={vi.fn()}
+          tokenKey='k'
+        />
       </QueryClientProvider>
     )
     const { rerender } = render(view(true))
@@ -289,6 +307,76 @@ describe('CC Switch usage query', () => {
       'http://localhost:3000/api/usage/token/'
     )
   })
+
+  it.each([
+    [
+      'Codex with its primary model',
+      'Codex',
+      [['Primary Model', 'gpt-5.4']],
+      [
+        ['resource', 'provider'],
+        ['app', 'codex'],
+        ['name', 'My Codex'],
+        ['endpoint', `${SITE}/v1`],
+        ['apiKey', 'sk-test-only'],
+        ['model', 'gpt-5.4'],
+        ['homepage', SITE],
+        ['enabled', 'true'],
+        ['usageScript', 'script'],
+      ],
+    ],
+    [
+      'Claude with all four models',
+      'Claude',
+      [
+        ['Primary Model', 'claude-sonnet-4-6'],
+        ['Haiku Model', 'gpt-5.4'],
+        ['Sonnet Model', 'claude-sonnet-4-6'],
+        ['Opus Model', 'gpt-5.4'],
+      ],
+      [
+        ['resource', 'provider'],
+        ['app', 'claude'],
+        ['name', 'My Claude'],
+        ['endpoint', SITE],
+        ['apiKey', 'sk-test-only'],
+        ['model', 'claude-sonnet-4-6'],
+        ['haikuModel', 'gpt-5.4'],
+        ['sonnetModel', 'claude-sonnet-4-6'],
+        ['opusModel', 'gpt-5.4'],
+        ['homepage', SITE],
+        ['enabled', 'true'],
+        ['usageScript', 'script'],
+      ],
+    ],
+  ])(
+    'builds the complete CC Switch parameter list for %s',
+    async (_case, app, selections, expected) => {
+      renderDialog()
+      const user = userEvent.setup()
+      await user.click(screen.getByRole('radio', { name: app }))
+      for (const [field, model] of selections) {
+        await user.click(screen.getByRole('combobox', { name: field }))
+        await user.click(await screen.findByRole('option', { name: model }))
+      }
+
+      await user.click(screen.getByRole('button', { name: 'Open CC Switch' }))
+
+      const raw = String(openSpy.mock.calls[0][0])
+      const link = new URL(raw)
+      expect(raw.startsWith('ccswitch://v1/import?')).toBe(true)
+      expect(raw).toContain(`name=My+${app}`)
+      expect(
+        [...link.searchParams.entries()].map(([key, value]) => [
+          key,
+          key === 'usageScript' ? 'script' : value,
+        ])
+      ).toEqual(expected)
+      expect(atob(link.searchParams.get('usageScript') ?? '')).toContain(
+        '/api/usage/token/'
+      )
+    }
+  )
 
   it.each([
     ['Claude', SITE],
@@ -451,4 +539,180 @@ describe('CC Switch usage query', () => {
       })
     }
   )
+})
+
+describe('client imports without CC Switch usage query', () => {
+  let openSpy: ReturnType<typeof vi.spyOn>
+
+  beforeEach(() => {
+    localStorage.setItem('status', JSON.stringify({ server_address: SITE }))
+    openSpy = vi.spyOn(window, 'open').mockImplementation(() => null)
+  })
+
+  afterEach(() => {
+    openSpy.mockRestore()
+    localStorage.removeItem('status')
+  })
+
+  function openedLink(): URL {
+    expect(openSpy).toHaveBeenCalledTimes(1)
+    return new URL(String(openSpy.mock.calls[0][0]))
+  }
+
+  function rawOpenedLink(): string {
+    expect(openSpy).toHaveBeenCalledTimes(1)
+    return String(openSpy.mock.calls[0][0])
+  }
+
+  describe('Codex++', () => {
+    it.each([
+      ['Claude', 'My Claude', 'anthropic'],
+      ['Codex', 'My Codex', 'responses'],
+      ['Gemini', 'My Gemini', 'chat'],
+    ])(
+      'imports a %s provider into the pool with the matching wire API',
+      async (app, name, wireApi) => {
+        renderDialog(undefined, 'codex-plus-plus')
+        const user = userEvent.setup()
+        await user.click(screen.getByRole('radio', { name: app }))
+
+        await user.click(screen.getByRole('button', { name: 'Open Codex++' }))
+
+        const link = openedLink()
+        expect(`${link.protocol}//${link.host}${link.pathname}`).toBe(
+          'codexplusplus://v1/import/provider'
+        )
+        expect([...link.searchParams.entries()]).toEqual([
+          ['name', name],
+          ['baseUrl', `${SITE}/v1`],
+          ['apiKey', 'sk-test-only'],
+          ['wireApi', wireApi],
+          ['target', 'pool'],
+        ])
+      }
+    )
+
+    it('shows the three applications without model fields or the usage query switch', () => {
+      renderDialog(undefined, 'codex-plus-plus')
+
+      const dialog = screen.getByRole('dialog', { name: 'Import to Codex++' })
+      expect(within(dialog).getAllByRole('radio')).toEqual(
+        ['Claude', 'Codex', 'Gemini'].map((name) =>
+          within(dialog).getByRole('radio', { name })
+        )
+      )
+      expect(within(dialog).queryByRole('combobox')).not.toBeInTheDocument()
+      expect(
+        within(dialog).queryByRole('switch', USAGE_SWITCH)
+      ).not.toBeInTheDocument()
+    })
+
+    it('encodes spaces in the name as %20 in the raw link', async () => {
+      renderDialog(undefined, 'codex-plus-plus')
+
+      await userEvent.click(
+        screen.getByRole('button', { name: 'Open Codex++' })
+      )
+
+      const raw = rawOpenedLink()
+      expect(raw).toContain('name=My%20Claude&')
+      expect(raw).not.toContain('+')
+    })
+
+    it('does not request the user model list when the dialog opens', async () => {
+      const get = vi.spyOn(api, 'get')
+      render(
+        <QueryClientProvider client={queryClient}>
+          <ClientImportDialog
+            target='codex-plus-plus'
+            open
+            onOpenChange={vi.fn()}
+            tokenKey='test-only'
+          />
+        </QueryClientProvider>
+      )
+
+      expect(
+        await screen.findByRole('dialog', { name: 'Import to Codex++' })
+      ).toBeVisible()
+      expect(get).not.toHaveBeenCalledWith('/api/user/models')
+      get.mockRestore()
+    })
+
+    it('keeps a key that already has the sk- prefix unchanged', async () => {
+      renderDialog(undefined, 'codex-plus-plus', 'sk-test-only')
+
+      await userEvent.click(
+        screen.getByRole('button', { name: 'Open Codex++' })
+      )
+
+      expect(openedLink().searchParams.get('apiKey')).toBe('sk-test-only')
+    })
+  })
+
+  describe('AiMaMi', () => {
+    it('imports a Codex provider with the selected primary model', async () => {
+      renderDialog(undefined, 'aimami')
+      const user = userEvent.setup()
+      await user.click(screen.getByRole('combobox', { name: 'Primary Model' }))
+      await user.click(await screen.findByRole('option', { name: 'gpt-5.4' }))
+
+      await user.click(screen.getByRole('button', { name: 'Open AiMaMi' }))
+
+      const link = openedLink()
+      expect(`${link.protocol}//${link.host}${link.pathname}`).toBe(
+        'aimami://v1/import'
+      )
+      expect([...link.searchParams.entries()]).toEqual([
+        ['resource', 'provider'],
+        ['app', 'codex'],
+        ['name', 'My Codex'],
+        ['endpoint', `${SITE}/v1`],
+        ['apiKey', 'sk-test-only'],
+        ['model', 'gpt-5.4'],
+      ])
+    })
+
+    it('encodes spaces in the name as %20 in the raw link', async () => {
+      renderDialog(undefined, 'aimami')
+      const user = userEvent.setup()
+      await user.click(screen.getByRole('combobox', { name: 'Primary Model' }))
+      await user.click(await screen.findByRole('option', { name: 'gpt-5.4' }))
+
+      await user.click(screen.getByRole('button', { name: 'Open AiMaMi' }))
+
+      const raw = rawOpenedLink()
+      expect(raw).toContain('name=My%20Codex&')
+      expect(raw).not.toContain('+')
+    })
+
+    it('offers only Codex with a single primary model field and no usage query switch', () => {
+      renderDialog(undefined, 'aimami')
+
+      const dialog = screen.getByRole('dialog', { name: 'Import to AiMaMi' })
+      const radios = within(dialog).getAllByRole('radio')
+      expect(radios).toHaveLength(1)
+      expect(within(dialog).getByRole('radio', { name: 'Codex' })).toBeChecked()
+      expect(within(dialog).getAllByRole('combobox')).toEqual([
+        within(dialog).getByRole('combobox', { name: 'Primary Model' }),
+      ])
+      expect(
+        within(dialog).queryByRole('switch', USAGE_SWITCH)
+      ).not.toBeInTheDocument()
+    })
+
+    it('warns and does not open AiMaMi when no primary model is selected', async () => {
+      renderDialog(undefined, 'aimami')
+
+      await userEvent.click(screen.getByRole('button', { name: 'Open AiMaMi' }))
+
+      expect(
+        await screen.findByText('Please select a primary model')
+      ).toBeVisible()
+      expect(openSpy).not.toHaveBeenCalled()
+      expect(
+        screen.getByRole('dialog', { name: 'Import to AiMaMi' })
+      ).toBeVisible()
+    })
+  })
 })

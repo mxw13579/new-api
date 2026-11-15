@@ -438,6 +438,13 @@ export const STATIC_I18N_KEYS = [
   // CC Switch dialog
   'Import to CC Switch',
   'Open CC Switch',
+  'Import to Codex++',
+  'Open Codex++',
+  'Import to AiMaMi',
+  'Open AiMaMi',
+  'CC Switch',
+  'Codex++',
+  'AiMaMi',
   'Primary Model',
   'Haiku Model',
   'Sonnet Model',

@@ -53,6 +53,7 @@ import {
 import { apiKeySchema, type ApiKey } from '../../types'
 import { ApiKeyQuotaCell } from '../api-key-quota-cell'
 import { useApiKeysColumns } from '../api-keys-columns'
+import { ApiKeysDialogs } from '../api-keys-dialogs'
 import { ApiKeysProvider } from '../api-keys-provider'
 import { ApiKeysTable } from '../api-keys-table'
 
@@ -298,6 +299,7 @@ function KeysPage() {
   return (
     <ApiKeysProvider>
       <ApiKeysTable />
+      <ApiKeysDialogs />
       <Toaster />
     </ApiKeysProvider>
   )
@@ -310,6 +312,9 @@ async function renderKeysPage(status = 1, overrides: Partial<ApiKey> = {}) {
       return {
         data: { success: true, data: { items: [currentKey], total: 1 } },
       }
+    }
+    if (url === '/api/user/models') {
+      return { data: { success: true, data: ['gpt-5.4'] } }
     }
     return { data: { success: true, data: { default: { ratio: 1 } } } }
   })
@@ -445,6 +450,37 @@ it.each([true, false])(
     }
   }
 )
+
+it.each([
+  ['CC Switch', 'Import to CC Switch'],
+  ['Codex++', 'Import to Codex++'],
+  ['AiMaMi', 'Import to AiMaMi'],
+])(
+  'opens the %s import dialog from the row menu with the full key',
+  async (entry, title) => {
+    const user = userEvent.setup()
+    const { post } = await renderKeysPage()
+    await user.click(screen.getByRole('button', { name: 'Open menu' }))
+
+    await user.click(screen.getByRole('menuitem', { name: entry }))
+
+    expect(await screen.findByRole('dialog', { name: title })).toBeVisible()
+    expect(post).toHaveBeenCalledWith('/api/token/7/key')
+  }
+)
+
+it('lists the client import entries in the row menu in a fixed order', async () => {
+  const user = userEvent.setup()
+  await renderKeysPage()
+
+  await user.click(screen.getByRole('button', { name: 'Open menu' }))
+
+  const entries = screen
+    .getAllByRole('menuitem')
+    .map((item) => item.textContent)
+    .filter((text) => ['CC Switch', 'Codex++', 'AiMaMi'].includes(text ?? ''))
+  expect(entries).toEqual(['CC Switch', 'Codex++', 'AiMaMi'])
+})
 
 it('keeps full mobile information without group or quota section headings', async () => {
   const matchMedia = window.matchMedia

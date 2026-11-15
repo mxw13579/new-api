@@ -18,6 +18,8 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import type { StatusBadgeProps } from '@/components/status-badge'
 
+import type { ClientImportTarget } from './types'
+
 // ============================================================================
 // API Key Status Configuration
 // label values are i18n keys; use t(config.label) in components (e.g. StatusBadge)
@@ -98,3 +100,18 @@ export const SUCCESS_MESSAGES = {
   API_KEY_ENABLED: 'API Key enabled successfully',
   API_KEY_DISABLED: 'API Key disabled successfully',
 } as const
+
+// ============================================================================
+// Client Imports
+// ============================================================================
+
+/** Client import entries in the order they appear in the API key row menu. */
+export const CLIENT_IMPORT_ENTRIES: {
+  target: ClientImportTarget
+  /** i18n key of the menu item, the product name */
+  labelKey: string
+}[] = [
+  { target: 'cc-switch', labelKey: 'CC Switch' },
+  { target: 'codex-plus-plus', labelKey: 'Codex++' },
+  { target: 'aimami', labelKey: 'AiMaMi' },
+]

@@ -16,10 +16,11 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { CLIENT_IMPORT_ENTRIES } from '../constants'
 import { ApiKeysDeleteDialog } from './api-keys-delete-dialog'
 import { ApiKeysMutateDrawer } from './api-keys-mutate-drawer'
 import { useApiKeys } from './api-keys-provider'
-import { CCSwitchDialog } from './dialogs/cc-switch-dialog'
+import { ClientImportDialog } from './dialogs/client-import-dialog'
 
 export function ApiKeysDialogs() {
   const { open, setOpen, currentRow, resolvedKey } = useApiKeys()
@@ -32,11 +33,15 @@ export function ApiKeysDialogs() {
         currentRow={open === 'update' ? currentRow || undefined : undefined}
       />
       <ApiKeysDeleteDialog />
-      <CCSwitchDialog
-        open={open === 'cc-switch'}
-        onOpenChange={(isOpen) => !isOpen && setOpen(null)}
-        tokenKey={resolvedKey}
-      />
+      {CLIENT_IMPORT_ENTRIES.map((entry) => (
+        <ClientImportDialog
+          key={entry.target}
+          target={entry.target}
+          open={open === entry.target}
+          onOpenChange={(isOpen) => !isOpen && setOpen(null)}
+          tokenKey={resolvedKey}
+        />
+      ))}
     </>
   )
 }

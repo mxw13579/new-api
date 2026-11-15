@@ -35,6 +35,8 @@ import {
   useSystemConfigStore,
 } from '@/stores/system-config-store'
 
+import type { ClientImportTarget } from '../../types'
+
 const APP_CONFIGS = {
   claude: {
     label: 'Claude',
@@ -157,54 +159,142 @@ function buildTokenUsageScript(currency: UsageScriptCurrency): string {
 })`
 }
 
-function buildCCSwitchURL(
-  app: string,
-  name: string,
-  models: Record<string, string>,
-  apiKey: string,
+interface ImportLink {
+  app: AppType
+  name: string
+  models: Record<string, string>
+  apiKey: string
   usageScript: string | null
-): string {
+}
+
+function buildCCSwitchURL(link: ImportLink): string {
   const serverAddress = getServerAddress()
-  const endpoint = app === 'codex' ? `${serverAddress}/v1` : serverAddress
+  const endpoint = link.app === 'codex' ? `${serverAddress}/v1` : serverAddress
   const params = new URLSearchParams()
   params.set('resource', 'provider')
-  params.set('app', app)
-  params.set('name', name)
+  params.set('app', link.app)
+  params.set('name', link.name)
   params.set('endpoint', endpoint)
-  params.set('apiKey', apiKey)
-  for (const [k, v] of Object.entries(models)) {
+  params.set('apiKey', link.apiKey)
+  for (const [k, v] of Object.entries(link.models)) {
     if (v) params.set(k, v)
   }
   params.set('homepage', serverAddress)
   params.set('enabled', 'true')
-  if (usageScript) {
-    params.set('usageScript', btoa(usageScript))
+  if (link.usageScript) {
+    params.set('usageScript', btoa(link.usageScript))
   }
   return `ccswitch://v1/import?${params.toString()}`
 }
 
+/**
+ * Serializes import parameters with spaces as `%20` instead of `+`, so the
+ * values decode correctly with both form and percent decoding. A literal `+`
+ * is already escaped as `%2B`, so every remaining `+` is a space.
+ */
+function toPercentEncodedQuery(params: URLSearchParams): string {
+  return params.toString().replaceAll('+', '%20')
+}
+
+/** Codex++ provider protocol for each application choice. */
+const CODEX_PLUS_PLUS_WIRE_APIS: Record<AppType, string> = {
+  claude: 'anthropic',
+  codex: 'responses',
+  gemini: 'chat',
+}
+
+/**
+ * Codex++ adds the provider to its pool. The link cannot carry models or a
+ * usage script; Codex++ detects usage on its own.
+ */
+function buildCodexPlusPlusURL(link: ImportLink): string {
+  const params = new URLSearchParams()
+  params.set('name', link.name)
+  params.set('baseUrl', `${getServerAddress()}/v1`)
+  params.set('apiKey', link.apiKey)
+  params.set('wireApi', CODEX_PLUS_PLUS_WIRE_APIS[link.app])
+  params.set('target', 'pool')
+  return `codexplusplus://v1/import/provider?${toPercentEncodedQuery(params)}`
+}
+
+/** AiMaMi only imports Codex providers with a single primary model. */
+function buildAiMaMiURL(link: ImportLink): string {
+  const params = new URLSearchParams()
+  params.set('resource', 'provider')
+  params.set('app', 'codex')
+  params.set('name', link.name)
+  params.set('endpoint', `${getServerAddress()}/v1`)
+  params.set('apiKey', link.apiKey)
+  params.set('model', link.models.model ?? '')
+  return `aimami://v1/import?${toPercentEncodedQuery(params)}`
+}
+
+interface ImportTargetConfig {
+  /** i18n key of the dialog title */
+  title: string
+  /** i18n key of the submit button */
+  submitLabel: string
+  apps: readonly AppType[]
+  hasModels: boolean
+  hasUsageQuery: boolean
+  buildURL: (link: ImportLink) => string
+}
+
+const IMPORT_TARGETS: Record<ClientImportTarget, ImportTargetConfig> = {
+  'cc-switch': {
+    title: 'Import to CC Switch',
+    submitLabel: 'Open CC Switch',
+    apps: ['claude', 'codex', 'gemini'],
+    hasModels: true,
+    hasUsageQuery: true,
+    buildURL: buildCCSwitchURL,
+  },
+  'codex-plus-plus': {
+    title: 'Import to Codex++',
+    submitLabel: 'Open Codex++',
+    apps: ['claude', 'codex', 'gemini'],
+    hasModels: false,
+    hasUsageQuery: false,
+    buildURL: buildCodexPlusPlusURL,
+  },
+  aimami: {
+    title: 'Import to AiMaMi',
+    submitLabel: 'Open AiMaMi',
+    apps: ['codex'],
+    hasModels: true,
+    hasUsageQuery: false,
+    buildURL: buildAiMaMiURL,
+  },
+}
+
 interface Props {
+  target: ClientImportTarget
   open: boolean
   onOpenChange: (open: boolean) => void
   tokenKey: string
 }
 
-export function CCSwitchDialog(props: Props) {
+export function ClientImportDialog(props: Props) {
   const { t } = useTranslation()
-  const [app, setApp] = useState<AppType>('claude')
-  const [name, setName] = useState<string>(APP_CONFIGS.claude.defaultName)
+  const targetConfig = IMPORT_TARGETS[props.target]
+  const defaultApp = targetConfig.apps[0]
+  const [app, setApp] = useState<AppType>(defaultApp)
+  const [name, setName] = useState<string>(APP_CONFIGS[defaultApp].defaultName)
   const [models, setModels] = useState<Record<string, string>>({})
   const [usageQueryEnabled, setUsageQueryEnabled] = useState(true)
   const currency = useSystemConfigStore((state) => state.config.currency)
   const usageQuerySupported = useMemo(
-    () => props.open && supportsCCSwitchUsageQuery(getServerAddress()),
-    [props.open]
+    () =>
+      props.open &&
+      targetConfig.hasUsageQuery &&
+      supportsCCSwitchUsageQuery(getServerAddress()),
+    [props.open, targetConfig.hasUsageQuery]
   )
 
   const { data: modelsData } = useQuery({
     queryKey: ['user-models-ccswitch'],
     queryFn: async () => requireServerSuccess(await getUserModels()),
-    enabled: props.open,
+    enabled: props.open && targetConfig.hasModels,
     staleTime: 5 * 60 * 1000,
   })
 
@@ -218,13 +308,13 @@ export function CCSwitchDialog(props: Props) {
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setModels({})
 
-      setApp('claude')
+      setApp(defaultApp)
 
-      setName(APP_CONFIGS.claude.defaultName)
+      setName(APP_CONFIGS[defaultApp].defaultName)
 
       setUsageQueryEnabled(true)
     }
-  }, [props.open])
+  }, [props.open, defaultApp])
 
   const currentConfig = APP_CONFIGS[app]
 
@@ -236,7 +326,7 @@ export function CCSwitchDialog(props: Props) {
   }
 
   const handleSubmit = () => {
-    if (!models.model) {
+    if (targetConfig.hasModels && !models.model) {
       toast.warning(t('Please select a primary model'))
       return
     }
@@ -259,7 +349,13 @@ export function CCSwitchDialog(props: Props) {
         unit: isCNY ? 'CNY' : 'USD',
       })
     }
-    const url = buildCCSwitchURL(app, name, models, key, usageScript)
+    const url = targetConfig.buildURL({
+      app,
+      name,
+      models,
+      apiKey: key,
+      usageScript,
+    })
     window.open(url, '_blank')
     props.onOpenChange(false)
   }
@@ -268,7 +364,7 @@ export function CCSwitchDialog(props: Props) {
     <Dialog
       open={props.open}
       onOpenChange={props.onOpenChange}
-      title={t('Import to CC Switch')}
+      title={t(targetConfig.title)}
       contentClassName='sm:max-w-md'
       contentHeight='auto'
       bodyClassName='space-y-4'
@@ -277,7 +373,7 @@ export function CCSwitchDialog(props: Props) {
           <Button variant='outline' onClick={() => props.onOpenChange(false)}>
             {t('Cancel')}
           </Button>
-          <Button onClick={handleSubmit}>{t('Open CC Switch')}</Button>
+          <Button onClick={handleSubmit}>{t(targetConfig.submitLabel)}</Button>
         </>
       }
     >
@@ -289,16 +385,11 @@ export function CCSwitchDialog(props: Props) {
             onValueChange={handleAppChange}
             className='flex gap-4'
           >
-            {(
-              Object.entries(APP_CONFIGS) as [
-                AppType,
-                (typeof APP_CONFIGS)[AppType],
-              ][]
-            ).map(([key, cfg]) => (
+            {targetConfig.apps.map((key) => (
               <div key={key} className='flex items-center gap-2'>
                 <RadioGroupItem value={key} id={`app-${key}`} />
                 <Label htmlFor={`app-${key}`} className='cursor-pointer'>
-                  {cfg.label}
+                  {APP_CONFIGS[key].label}
                 </Label>
               </div>
             ))}
@@ -306,56 +397,62 @@ export function CCSwitchDialog(props: Props) {
         </div>
 
         <div className='space-y-2'>
-          <Label htmlFor='cc-switch-name'>{t('Name')}</Label>
+          <Label htmlFor='client-import-name'>{t('Name')}</Label>
           <Input
-            id='cc-switch-name'
+            id='client-import-name'
             value={name}
             onChange={(event) => setName(event.target.value)}
             placeholder={currentConfig.defaultName}
           />
         </div>
 
-        {currentConfig.modelFields.map((field) => (
-          <div key={field.key} className='space-y-2'>
-            <Label htmlFor={`cc-switch-${field.key}`} required={field.required}>
-              {t(field.labelKey)}
-            </Label>
-            <Combobox
-              id={`cc-switch-${field.key}`}
-              aria-label={t(field.labelKey)}
-              options={modelOptions}
-              value={models[field.key] || ''}
-              onValueChange={(v) =>
-                setModels((prev) => ({ ...prev, [field.key]: v ?? '' }))
-              }
-              placeholder={t('Select or enter model name')}
-              emptyText={t('No models found')}
+        {targetConfig.hasModels &&
+          currentConfig.modelFields.map((field) => (
+            <div key={field.key} className='space-y-2'>
+              <Label
+                htmlFor={`client-import-${field.key}`}
+                required={field.required}
+              >
+                {t(field.labelKey)}
+              </Label>
+              <Combobox
+                id={`client-import-${field.key}`}
+                aria-label={t(field.labelKey)}
+                options={modelOptions}
+                value={models[field.key] || ''}
+                onValueChange={(v) =>
+                  setModels((prev) => ({ ...prev, [field.key]: v ?? '' }))
+                }
+                placeholder={t('Select or enter model name')}
+                emptyText={t('No models found')}
+              />
+            </div>
+          ))}
+
+        {targetConfig.hasUsageQuery && (
+          <div className='flex items-start justify-between gap-4'>
+            <div className='space-y-1'>
+              <Label htmlFor='cc-switch-usage-query'>
+                {t('Also configure usage query')}
+              </Label>
+              <p
+                id='cc-switch-usage-query-description'
+                className='text-muted-foreground text-xs'
+              >
+                {usageQuerySupported
+                  ? t('Lets CC Switch show the remaining quota after import.')
+                  : t('CC Switch can only query usage for HTTPS sites.')}
+              </p>
+            </div>
+            <Switch
+              id='cc-switch-usage-query'
+              aria-describedby='cc-switch-usage-query-description'
+              checked={usageQuerySupported && usageQueryEnabled}
+              disabled={!usageQuerySupported}
+              onCheckedChange={setUsageQueryEnabled}
             />
           </div>
-        ))}
-
-        <div className='flex items-start justify-between gap-4'>
-          <div className='space-y-1'>
-            <Label htmlFor='cc-switch-usage-query'>
-              {t('Also configure usage query')}
-            </Label>
-            <p
-              id='cc-switch-usage-query-description'
-              className='text-muted-foreground text-xs'
-            >
-              {usageQuerySupported
-                ? t('Lets CC Switch show the remaining quota after import.')
-                : t('CC Switch can only query usage for HTTPS sites.')}
-            </p>
-          </div>
-          <Switch
-            id='cc-switch-usage-query'
-            aria-describedby='cc-switch-usage-query-description'
-            checked={usageQuerySupported && usageQueryEnabled}
-            disabled={!usageQuerySupported}
-            onCheckedChange={setUsageQueryEnabled}
-          />
-        </div>
+        )}
       </div>
     </Dialog>
   )
