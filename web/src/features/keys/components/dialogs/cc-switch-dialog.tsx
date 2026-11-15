@@ -27,8 +27,13 @@ import { Combobox } from '@/components/ui/combobox'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
+import { Switch } from '@/components/ui/switch'
 import { getUserModels } from '@/lib/api'
 import { requireServerSuccess } from '@/lib/server-error-message'
+import {
+  DEFAULT_CURRENCY_CONFIG,
+  useSystemConfigStore,
+} from '@/stores/system-config-store'
 
 const APP_CONFIGS = {
   claude: {
@@ -68,11 +73,96 @@ function getServerAddress(): string {
   return window.location.origin
 }
 
+/**
+ * CC Switch only runs usage queries against HTTPS endpoints, with an exception
+ * for loopback hosts during local development.
+ */
+function supportsCCSwitchUsageQuery(serverAddress: string): boolean {
+  try {
+    const url = new URL(serverAddress)
+    if (url.protocol === 'https:') return true
+    return ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)
+  } catch {
+    return false
+  }
+}
+
+interface UsageScriptCurrency {
+  /** Internal quota units that equal one USD */
+  quotaPerUnit: number
+  /** Multiplier applied to USD amounts */
+  exchangeRate: number
+  unit: 'USD' | 'CNY'
+}
+
+/**
+ * Builds the CC Switch usage query script for this site's
+ * `GET /api/usage/token/` endpoint. CC Switch substitutes `{{baseUrl}}` with
+ * the provider endpoint and `{{apiKey}}` with the provider key, then runs the
+ * script in a QuickJS sandbox, so it stays ASCII-only and avoids modern syntax.
+ * Quota values are converted with the site's currency settings.
+ */
+function buildTokenUsageScript(currency: UsageScriptCurrency): string {
+  return `({
+  request: {
+    url: "{{baseUrl}}".replace(/\\/+$/, "").replace(/\\/v1$/, "") + "/api/usage/token/",
+    method: "GET",
+    headers: {
+      "Authorization": "Bearer {{apiKey}}",
+      "User-Agent": "cc-switch/1.0"
+    }
+  },
+  extractor: function (response) {
+    var quotaPerUnit = ${currency.quotaPerUnit};
+    var exchangeRate = ${currency.exchangeRate};
+    function toAmount(quota) {
+      return (Number(quota) || 0) / quotaPerUnit * exchangeRate;
+    }
+    if (!response || response.code !== true || !response.data) {
+      return {
+        isValid: false,
+        invalidMessage: response && typeof response.message === "string" && response.message
+          ? response.message
+          : "Failed to query API key usage"
+      };
+    }
+    var data = response.data;
+    if (data.expires_at > 0 && data.expires_at * 1000 < Date.now()) {
+      return {
+        isValid: false,
+        invalidMessage: "API key has expired"
+      };
+    }
+    var result = { isValid: true, unit: "${currency.unit}" };
+    if (typeof data.name === "string" && data.name) {
+      result.planName = data.name;
+    }
+    if (!data.unlimited_quota) {
+      result.remaining = toAmount(data.total_available);
+      result.used = toAmount(data.total_used);
+      result.total = toAmount(data.total_granted);
+      return result;
+    }
+    if (data.user_quota) {
+      var userRemaining = Number(data.user_quota.total_available) || 0;
+      var userUsed = Number(data.user_quota.total_used) || 0;
+      result.remaining = toAmount(userRemaining);
+      result.used = toAmount(userUsed);
+      result.total = toAmount(userRemaining + userUsed);
+      return result;
+    }
+    result.used = toAmount(data.total_used);
+    return result;
+  }
+})`
+}
+
 function buildCCSwitchURL(
   app: string,
   name: string,
   models: Record<string, string>,
-  apiKey: string
+  apiKey: string,
+  usageScript: string | null
 ): string {
   const serverAddress = getServerAddress()
   const endpoint = app === 'codex' ? `${serverAddress}/v1` : serverAddress
@@ -87,6 +177,9 @@ function buildCCSwitchURL(
   }
   params.set('homepage', serverAddress)
   params.set('enabled', 'true')
+  if (usageScript) {
+    params.set('usageScript', btoa(usageScript))
+  }
   return `ccswitch://v1/import?${params.toString()}`
 }
 
@@ -101,6 +194,12 @@ export function CCSwitchDialog(props: Props) {
   const [app, setApp] = useState<AppType>('claude')
   const [name, setName] = useState<string>(APP_CONFIGS.claude.defaultName)
   const [models, setModels] = useState<Record<string, string>>({})
+  const [usageQueryEnabled, setUsageQueryEnabled] = useState(true)
+  const currency = useSystemConfigStore((state) => state.config.currency)
+  const usageQuerySupported = useMemo(
+    () => props.open && supportsCCSwitchUsageQuery(getServerAddress()),
+    [props.open]
+  )
 
   const { data: modelsData } = useQuery({
     queryKey: ['user-models-ccswitch'],
@@ -122,6 +221,8 @@ export function CCSwitchDialog(props: Props) {
       setApp('claude')
 
       setName(APP_CONFIGS.claude.defaultName)
+
+      setUsageQueryEnabled(true)
     }
   }, [props.open])
 
@@ -142,7 +243,23 @@ export function CCSwitchDialog(props: Props) {
     const key = props.tokenKey.startsWith('sk-')
       ? props.tokenKey
       : `sk-${props.tokenKey}`
-    const url = buildCCSwitchURL(app, name, models, key)
+    let usageScript: string | null = null
+    if (usageQuerySupported && usageQueryEnabled) {
+      const isCNY = currency?.quotaDisplayType === 'CNY'
+      const usdExchangeRate =
+        currency?.usdExchangeRate && currency.usdExchangeRate > 0
+          ? currency.usdExchangeRate
+          : DEFAULT_CURRENCY_CONFIG.usdExchangeRate
+      usageScript = buildTokenUsageScript({
+        quotaPerUnit:
+          currency?.quotaPerUnit && currency.quotaPerUnit > 0
+            ? currency.quotaPerUnit
+            : DEFAULT_CURRENCY_CONFIG.quotaPerUnit,
+        exchangeRate: isCNY ? usdExchangeRate : 1,
+        unit: isCNY ? 'CNY' : 'USD',
+      })
+    }
+    const url = buildCCSwitchURL(app, name, models, key, usageScript)
     window.open(url, '_blank')
     props.onOpenChange(false)
   }
@@ -216,6 +333,29 @@ export function CCSwitchDialog(props: Props) {
             />
           </div>
         ))}
+
+        <div className='flex items-start justify-between gap-4'>
+          <div className='space-y-1'>
+            <Label htmlFor='cc-switch-usage-query'>
+              {t('Also configure usage query')}
+            </Label>
+            <p
+              id='cc-switch-usage-query-description'
+              className='text-muted-foreground text-xs'
+            >
+              {usageQuerySupported
+                ? t('Lets CC Switch show the remaining quota after import.')
+                : t('CC Switch can only query usage for HTTPS sites.')}
+            </p>
+          </div>
+          <Switch
+            id='cc-switch-usage-query'
+            aria-describedby='cc-switch-usage-query-description'
+            checked={usageQuerySupported && usageQueryEnabled}
+            disabled={!usageQuerySupported}
+            onCheckedChange={setUsageQueryEnabled}
+          />
+        </div>
       </div>
     </Dialog>
   )
