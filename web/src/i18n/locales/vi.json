@@ -1,5 +1,6 @@
 {
   "translation": {
+    "{{name}} · Unified API for Claude, Codex, Gemini and OpenAI-compatible models": "{{name}} · API hợp nhất cho Claude, Codex, Gemini và các mô hình tương thích OpenAI",
     "360": "360",
     "1000": "1000",
     "10000": "10000",
@@ -190,6 +191,7 @@
     "A valid site exchange rate is required.": "Vui lòng đặt tỷ giá hợp lệ cho trang web.",
     "A vendor with this name already exists.": "Nhà cung cấp có tên này đã tồn tại.",
     "About": "Giới thiệu",
+    "About · {{name}}": "Giới thiệu · {{name}}",
     "About {{days}} days left": "Còn khoảng {{days}} ngày",
     "About pricing currency": "Về tiền tệ định giá",
     "Accept Unpriced Models": "Chấp nhận các Mô hình chưa định giá",
@@ -3939,6 +3941,7 @@
     "Model mapping must be valid JSON format": "Ánh xạ mô hình phải có định dạng JSON hợp lệ",
     "Model mapping values must be strings": "Giá trị ánh xạ mô hình phải là chuỗi",
     "Model mappings are being edited in the floating panel.": "Ánh xạ mô hình đang được chỉnh sửa trong bảng nổi.",
+    "Model marketplace and pricing · {{name}}": "Danh mục mô hình và bảng giá · {{name}}",
     "Model metadata": "Siêu dữ liệu mô hình",
     "Model metadata saved": "Đã lưu siêu dữ liệu mô hình",
     "Model name": "Tên mẫu",
@@ -5108,6 +5111,7 @@
     "Priority order for tokens in the auto group. The system tries groups from top to bottom.": "Thứ tự ưu tiên cho token trong nhóm auto. Hệ thống thử các nhóm từ trên xuống dưới.",
     "Privacy": "Quyền riêng tư",
     "Privacy Policy": "Chính sách quyền riêng tư",
+    "Privacy policy · {{name}}": "Chính sách quyền riêng tư · {{name}}",
     "Private Deployment URL": "URL Triển khai Riêng",
     "Processed requests": "Yêu cầu đã xử lý",
     "Processing OAuth response...": "Đang xử lý phản hồi OAuth...",
@@ -7264,6 +7268,7 @@
     "User {{id}}": "Người dùng {{id}}",
     "User Agent": "Tác nhân người dùng",
     "User Agreement": "Thỏa thuận người dùng",
+    "User agreement · {{name}}": "Thỏa thuận người dùng · {{name}}",
     "User Analytics": "Thống kê người dùng",
     "User Consumption Ranking": "Xếp hạng tiêu thụ",
     "User Consumption Trend": "Xu hướng tiêu thụ",

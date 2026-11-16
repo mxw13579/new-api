@@ -1,5 +1,6 @@
 {
   "translation": {
+    "{{name}} · Unified API for Claude, Codex, Gemini and OpenAI-compatible models": "{{name}} · Claude、Codex、Gemini と OpenAI 互換モデルの統合 API",
     "360": "360",
     "1000": "1000",
     "10000": "10000",
@@ -190,6 +191,7 @@
     "A valid site exchange rate is required.": "有効なサイトの為替レートを設定してください。",
     "A vendor with this name already exists.": "この名前のプロバイダーは既に存在します。",
     "About": "このサービスについて",
+    "About · {{name}}": "概要 · {{name}}",
     "About {{days}} days left": "約 {{days}} 日分",
     "About pricing currency": "価格設定の通貨について",
     "Accept Unpriced Models": "価格設定されていないモデルを許可",
@@ -3939,6 +3941,7 @@
     "Model mapping must be valid JSON format": "モデルマッピングは有効なJSON形式である必要があります",
     "Model mapping values must be strings": "モデルマッピングの値は文字列である必要があります",
     "Model mappings are being edited in the floating panel.": "モデルマッピングはフローティングパネルで編集中です。",
+    "Model marketplace and pricing · {{name}}": "モデル一覧と料金 · {{name}}",
     "Model metadata": "モデルのメタデータ",
     "Model metadata saved": "モデルのメタデータを保存しました",
     "Model name": "モデル名",
@@ -5108,6 +5111,7 @@
     "Priority order for tokens in the auto group. The system tries groups from top to bottom.": "auto グループのトークンの優先順位。システムは上から順にグループを試します。",
     "Privacy": "プライバシー",
     "Privacy Policy": "プライバシーポリシー",
+    "Privacy policy · {{name}}": "プライバシーポリシー · {{name}}",
     "Private Deployment URL": "プライベートデプロイメントURL",
     "Processed requests": "処理済みリクエスト",
     "Processing OAuth response...": "OAuth応答を処理中...",
@@ -7264,6 +7268,7 @@
     "User {{id}}": "ユーザー {{id}}",
     "User Agent": "ユーザーエージェント",
     "User Agreement": "ユーザー利用規約",
+    "User agreement · {{name}}": "利用規約 · {{name}}",
     "User Analytics": "ユーザー統計",
     "User Consumption Ranking": "ユーザー消費ランキング",
     "User Consumption Trend": "ユーザー消費トレンド",

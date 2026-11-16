@@ -1,5 +1,6 @@
 {
   "translation": {
+    "{{name}} · Unified API for Claude, Codex, Gemini and OpenAI-compatible models": "{{name}} · Единый API для Claude, Codex, Gemini и моделей, совместимых с OpenAI",
     "360": "360",
     "1000": "1000",
     "10000": "10000",
@@ -190,6 +191,7 @@
     "A valid site exchange rate is required.": "Укажите действительный курс валюты сайта.",
     "A vendor with this name already exists.": "Поставщик с таким именем уже существует.",
     "About": "О проекте",
+    "About · {{name}}": "О сервисе · {{name}}",
     "About {{days}} days left": "Примерно {{days}} дней",
     "About pricing currency": "О валюте цен",
     "Accept Unpriced Models": "Принимать модели без цены",
@@ -3939,6 +3941,7 @@
     "Model mapping must be valid JSON format": "Сопоставление моделей должно быть в действительном формате JSON",
     "Model mapping values must be strings": "Значения сопоставления моделей должны быть строками",
     "Model mappings are being edited in the floating panel.": "Сопоставления моделей редактируются в плавающей панели.",
+    "Model marketplace and pricing · {{name}}": "Каталог моделей и цены · {{name}}",
     "Model metadata": "Метаданные модели",
     "Model metadata saved": "Метаданные модели сохранены",
     "Model name": "Имя модели",
@@ -5108,6 +5111,7 @@
     "Priority order for tokens in the auto group. The system tries groups from top to bottom.": "Порядок приоритета для токенов группы auto. Система перебирает группы сверху вниз.",
     "Privacy": "Конфиденциальность",
     "Privacy Policy": "Политика конфиденциальности",
+    "Privacy policy · {{name}}": "Политика конфиденциальности · {{name}}",
     "Private Deployment URL": "URL частного развертывания",
     "Processed requests": "Обработанные запросы",
     "Processing OAuth response...": "Обработка ответа OAuth...",
@@ -7264,6 +7268,7 @@
     "User {{id}}": "Пользователь {{id}}",
     "User Agent": "Пользовательский агент",
     "User Agreement": "Пользовательское соглашение",
+    "User agreement · {{name}}": "Пользовательское соглашение · {{name}}",
     "User Analytics": "Аналитика пользователей",
     "User Consumption Ranking": "Рейтинг потребления",
     "User Consumption Trend": "Тренд потребления",

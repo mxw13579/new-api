@@ -1,5 +1,6 @@
 {
   "translation": {
+    "{{name}} · Unified API for Claude, Codex, Gemini and OpenAI-compatible models": "{{name}} · API unifiée pour Claude, Codex, Gemini et les modèles compatibles OpenAI",
     "360": "360",
     "1000": "1000",
     "10000": "10000",
@@ -190,6 +191,7 @@
     "A valid site exchange rate is required.": "Configurez un taux de change valide pour le site.",
     "A vendor with this name already exists.": "Un fournisseur porte déjà ce nom.",
     "About": "À propos",
+    "About · {{name}}": "À propos · {{name}}",
     "About {{days}} days left": "Environ {{days}} jours restants",
     "About pricing currency": "À propos de la devise de tarification",
     "Accept Unpriced Models": "Accepter les modèles non tarifés",
@@ -3939,6 +3941,7 @@
     "Model mapping must be valid JSON format": "Le mapping des modèles doit être au format JSON valide",
     "Model mapping values must be strings": "Les valeurs du mappage de modèles doivent être des chaînes",
     "Model mappings are being edited in the floating panel.": "Les correspondances de modèles sont en cours de modification dans le panneau flottant.",
+    "Model marketplace and pricing · {{name}}": "Catalogue des modèles et tarifs · {{name}}",
     "Model metadata": "Métadonnées du modèle",
     "Model metadata saved": "Métadonnées enregistrées",
     "Model name": "Nom du modèle",
@@ -5108,6 +5111,7 @@
     "Priority order for tokens in the auto group. The system tries groups from top to bottom.": "Ordre de priorité pour les jetons du groupe auto. Le système essaie les groupes de haut en bas.",
     "Privacy": "Confidentialité",
     "Privacy Policy": "Politique de confidentialité",
+    "Privacy policy · {{name}}": "Politique de confidentialité · {{name}}",
     "Private Deployment URL": "URL de déploiement privé",
     "Processed requests": "Requêtes traitées",
     "Processing OAuth response...": "Traitement de la réponse OAuth...",
@@ -7264,6 +7268,7 @@
     "User {{id}}": "Utilisateur {{id}}",
     "User Agent": "Agent utilisateur",
     "User Agreement": "Accord utilisateur",
+    "User agreement · {{name}}": "Conditions d'utilisation · {{name}}",
     "User Analytics": "Statistiques utilisateur",
     "User Consumption Ranking": "Classement de consommation",
     "User Consumption Trend": "Tendance de consommation",

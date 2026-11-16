@@ -1,5 +1,6 @@
 {
   "translation": {
+    "{{name}} · Unified API for Claude, Codex, Gemini and OpenAI-compatible models": "{{name}} · Unified API for Claude, Codex, Gemini and OpenAI-compatible models",
     "360": "360",
     "1000": "1000",
     "10000": "10000",
@@ -190,6 +191,7 @@
     "A valid site exchange rate is required.": "A valid site exchange rate is required.",
     "A vendor with this name already exists.": "A vendor with this name already exists.",
     "About": "About",
+    "About · {{name}}": "About · {{name}}",
     "About {{days}} days left": "About {{days}} days left",
     "About pricing currency": "About pricing currency",
     "Accept Unpriced Models": "Accept Unpriced Models",
@@ -3939,6 +3941,7 @@
     "Model mapping must be valid JSON format": "Model mapping must be valid JSON format",
     "Model mapping values must be strings": "Model mapping values must be strings",
     "Model mappings are being edited in the floating panel.": "Model mappings are being edited in the floating panel.",
+    "Model marketplace and pricing · {{name}}": "Model marketplace and pricing · {{name}}",
     "Model metadata": "Model metadata",
     "Model metadata saved": "Model metadata saved",
     "Model name": "Model name",
@@ -5108,6 +5111,7 @@
     "Priority order for tokens in the auto group. The system tries groups from top to bottom.": "Priority order for tokens in the auto group. The system tries groups from top to bottom.",
     "Privacy": "Privacy",
     "Privacy Policy": "Privacy Policy",
+    "Privacy policy · {{name}}": "Privacy policy · {{name}}",
     "Private Deployment URL": "Private Deployment URL",
     "Processed requests": "Processed requests",
     "Processing OAuth response...": "Processing OAuth response...",
@@ -7264,6 +7268,7 @@
     "User {{id}}": "User {{id}}",
     "User Agent": "User Agent",
     "User Agreement": "User Agreement",
+    "User agreement · {{name}}": "User agreement · {{name}}",
     "User Analytics": "User Analytics",
     "User Consumption Ranking": "User Consumption Ranking",
     "User Consumption Trend": "User Consumption Trend",

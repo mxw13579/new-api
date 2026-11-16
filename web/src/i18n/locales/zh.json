@@ -1,5 +1,6 @@
 {
   "translation": {
+    "{{name}} · Unified API for Claude, Codex, Gemini and OpenAI-compatible models": "{{name}} · Claude、Codex、Gemini 与 OpenAI 兼容模型的统一 API",
     "360": "360",
     "1000": "1000",
     "10000": "10000",
@@ -190,6 +191,7 @@
     "A valid site exchange rate is required.": "请先设置有效的站点货币汇率。",
     "A vendor with this name already exists.": "此供应商名称已存在。",
     "About": "关于",
+    "About · {{name}}": "关于 · {{name}}",
     "About {{days}} days left": "约剩 {{days}} 天",
     "About pricing currency": "关于定价货币",
     "Accept Unpriced Models": "接受未定价模型",
@@ -3939,6 +3941,7 @@
     "Model mapping must be valid JSON format": "模型映射必须是有效的 JSON 格式",
     "Model mapping values must be strings": "模型映射的值必须是字符串",
     "Model mappings are being edited in the floating panel.": "模型映射正在悬浮面板中编辑。",
+    "Model marketplace and pricing · {{name}}": "模型广场与价格 · {{name}}",
     "Model metadata": "模型资料",
     "Model metadata saved": "模型资料已保存",
     "Model name": "模型名称",
@@ -5108,6 +5111,7 @@
     "Priority order for tokens in the auto group. The system tries groups from top to bottom.": "auto 分组令牌的优先顺序。系统会从上到下依次尝试各分组。",
     "Privacy": "隐私",
     "Privacy Policy": "隐私政策",
+    "Privacy policy · {{name}}": "隐私政策 · {{name}}",
     "Private Deployment URL": "私有部署 URL",
     "Processed requests": "已处理请求",
     "Processing OAuth response...": "正在处理 OAuth 响应...",
@@ -7264,6 +7268,7 @@
     "User {{id}}": "用户 {{id}}",
     "User Agent": "用户代理",
     "User Agreement": "用户协议",
+    "User agreement · {{name}}": "用户协议 · {{name}}",
     "User Analytics": "用户统计",
     "User Consumption Ranking": "用户消耗排行",
     "User Consumption Trend": "用户消耗趋势",
