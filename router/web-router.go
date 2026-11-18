@@ -57,7 +57,7 @@ var frontendRouteSegments = []string{
 	// _authenticated group.
 	"admin-invoices", "channels", "chat", "chat2link", "dashboard", "errors",
 	"invoice-settings", "invoices", "keys", "models", "playground", "profile",
-	"redemption-codes", "security", "subscriptions", "system-info",
+	"redemption-codes", "request-processing", "security", "subscriptions", "system-info",
 	"system-settings", "task-plugins", "usage-logs", "users", "wallet",
 	// Legacy paths redirected by web/src/lib/legacy-route.ts.
 	"console", "login", "forbidden",
