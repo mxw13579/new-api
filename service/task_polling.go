@@ -87,19 +87,19 @@ func reportFinalTask(task *model.Task) {
 // reason; failedIDs are the rows it changed, so a task another path finished
 // first is not reported. The bulk update keeps quota for reconciliation
 // (sweepUnrefundedFailedTasks), so the report carries the final cost: zero for
-// a refund reconciliation will make, the kept quota for one it never refunds.
-func reportFailedTasks(tasks []*model.Task, failedIDs []int64, reason string) {
+// a refund reconciliation will make, the kept quota for one it never refunds,
+// and the finishTime the bulk update stored.
+func reportFailedTasks(tasks []*model.Task, failedIDs []int64, reason string, finishTime int64) {
 	pending := make(map[int64]bool, len(failedIDs))
 	for _, id := range failedIDs {
 		pending[id] = true
 	}
-	now := time.Now().Unix()
 	for _, task := range tasks {
 		if task == nil || !pending[task.ID] || task.PrivateData.RequestPlugins == nil {
 			continue
 		}
 		delete(pending, task.ID)
-		task.Status, task.Progress, task.FailReason, task.FinishTime = model.TaskStatusFailure, "100%", reason, now
+		task.Status, task.Progress, task.FailReason, task.FinishTime = model.TaskStatusFailure, "100%", reason, finishTime
 		isLegacy := task.SubmitTime > 0 && task.SubmitTime < model.TaskRefundLegacyCutoff
 		if task.Quota > 0 && !isLegacy && !task.PrivateData.FailureChargeRetained {
 			task.Quota = 0
@@ -242,12 +242,13 @@ func RunTaskPollingOnce(ctx context.Context, report func(processed, total int)) 
 		if len(nullTaskIds) > 0 {
 			summary.NullTasksFailed += len(nullTaskIds)
 			reason := "Failed to query the upstream task status"
-			failedIDs, err := model.FailUnfinishedTasksByID(nullTaskIds, reason)
+			finishTime := time.Now().Unix()
+			failedIDs, err := model.FailUnfinishedTasksByID(nullTaskIds, reason, finishTime)
 			if err != nil {
 				logger.LogError(ctx, common.LogText("Fix null task_id task error: %v", err))
 			} else {
 				logger.LogInfo(ctx, common.LogText("Fix null task_id task success: %v", nullTaskIds))
-				reportFailedTasks(nullTasks, failedIDs, reason)
+				reportFailedTasks(nullTasks, failedIDs, reason, finishTime)
 			}
 		}
 		if len(taskChannelM) == 0 {
@@ -316,11 +317,12 @@ func updateBatchTasks(ctx context.Context, adaptor BatchTaskPollingAdaptor, chan
 			}
 		}
 		reason := "Failed to get the channel information. Please contact the administrator"
-		failedIDs, err = model.FailUnfinishedTasksByID(failedIDs, reason)
+		finishTime := time.Now().Unix()
+		failedIDs, err = model.FailUnfinishedTasksByID(failedIDs, reason, finishTime)
 		if err != nil {
 			common.SysLog(common.LogText("UpdateSunoTask error: %v", err))
 		} else {
-			reportFailedTasks(bulkFailedTasks(taskIds, taskM), failedIDs, reason)
+			reportFailedTasks(bulkFailedTasks(taskIds, taskM), failedIDs, reason, finishTime)
 		}
 		return err
 	}
@@ -520,11 +522,12 @@ func updateVideoTasks(ctx context.Context, platform constant.TaskPlatform, chann
 			}
 		}
 		reason := "Failed to get the channel information. Please contact the administrator"
-		failedIDs, errUpdate := model.FailUnfinishedTasksByID(failedIDs, reason)
+		finishTime := time.Now().Unix()
+		failedIDs, errUpdate := model.FailUnfinishedTasksByID(failedIDs, reason, finishTime)
 		if errUpdate != nil {
 			common.SysLog(common.LogText("UpdateVideoTask error: %v", errUpdate))
 		} else {
-			reportFailedTasks(bulkFailedTasks(taskIds, taskM), failedIDs, reason)
+			reportFailedTasks(bulkFailedTasks(taskIds, taskM), failedIDs, reason, finishTime)
 		}
 		return fmt.Errorf("CacheGetChannel failed: %w", err)
 	}

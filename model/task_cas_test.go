@@ -269,7 +269,8 @@ func TestFailUnfinishedTasksByID_PreservesTerminalBilling(t *testing.T) {
 	for _, task := range tasks {
 		insertTask(t, task)
 	}
-	failed, err := FailUnfinishedTasksByID([]int64{tasks[0].ID, tasks[1].ID, tasks[2].ID, tasks[0].ID}, "missing channel")
+	const finishTime int64 = 1_700_000_000
+	failed, err := FailUnfinishedTasksByID([]int64{tasks[0].ID, tasks[1].ID, tasks[2].ID, tasks[0].ID}, "missing channel", finishTime)
 	require.NoError(t, err)
 	assert.Equal(t, []int64{tasks[0].ID}, failed, "only the row this call moved to FAILURE, once")
 	var found []Task
@@ -278,7 +279,7 @@ func TestFailUnfinishedTasksByID_PreservesTerminalBilling(t *testing.T) {
 	assert.EqualValues(t, TaskStatusFailure, found[0].Status)
 	assert.Equal(t, "100%", found[0].Progress)
 	assert.Equal(t, "missing channel", found[0].FailReason)
-	assert.Positive(t, found[0].FinishTime)
+	assert.Equal(t, finishTime, found[0].FinishTime)
 	assert.Equal(t, 100, found[0].Quota, "pending refund stays durable")
 	assert.False(t, found[0].PrivateData.FailureChargeRetained)
 	assert.Equal(t, *tasks[1], found[1])

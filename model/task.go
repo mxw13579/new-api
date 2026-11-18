@@ -753,12 +753,12 @@ func (t *Task) UpdateWithStatus(fromStatus TaskStatus) (bool, error) {
 // Quota stays intact for the existing refund reconciliation path. It returns
 // the ids this call moved to FAILURE, so only those tasks report a final
 // state; each row is its own conditional UPDATE because a single statement
-// cannot name its changed rows on every supported database.
-func FailUnfinishedTasksByID(ids []int64, reason string) ([]int64, error) {
+// cannot name its changed rows on every supported database. Every changed
+// row gets finishTime, which the caller also reports.
+func FailUnfinishedTasksByID(ids []int64, reason string, finishTime int64) ([]int64, error) {
 	if len(ids) == 0 {
 		return nil, nil
 	}
-	finishTime := time.Now().Unix()
 	var failed []int64
 	err := DB.Transaction(func(tx *gorm.DB) error {
 		for _, id := range ids {

@@ -1493,8 +1493,10 @@ func TestBulkFailureReportsOnlyFailedRowsWithFinalCost(t *testing.T) {
 			const userID, channelID, reserved, initialQuota = 540, 99540, 1_000, 10_000
 			seedUser(t, userID, initialQuota)
 			var reported []report
+			reportedFinishTimes := make(map[int64]int64)
 			ReportTaskFunc = func(task *model.Task) {
 				reported = append(reported, report{task.ID, task.Status, task.FailReason, task.Quota})
+				reportedFinishTimes[task.ID] = task.FinishTime
 			}
 			newTask := func(name string, submitTime int64) *model.Task {
 				task := makeTask(userID, channelID, reserved, 0, BillingSourceWallet, 0)
@@ -1553,6 +1555,8 @@ func TestBulkFailureReportsOnlyFailedRowsWithFinalCost(t *testing.T) {
 				assert.EqualValues(t, model.TaskStatusFailure, stored.Status)
 				assert.Equal(t, reason, stored.FailReason)
 				assert.Equal(t, reserved, stored.Quota, "the bulk update leaves the refund to reconciliation")
+				assert.Positive(t, stored.FinishTime)
+				assert.Equal(t, stored.FinishTime, reportedFinishTimes[task.ID], "the report carries the stored finish time")
 			}
 
 			// A later pass and the refund itself report nothing more.

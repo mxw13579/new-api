@@ -101,6 +101,9 @@ func TestSystemTaskHistoryDatabaseMatrix(t *testing.T) {
 			db := useSystemTaskMatrixDB(t, dialect)
 
 			tasks := []SystemTask{
+				// A backfill run refers to its apply tasks by task_id, so no manual cleanup removes them.
+				{TaskID: "evidence-old-failed", Type: constant.InvoicePaymentEvidenceTaskType, Status: SystemTaskStatusFailed},
+				{TaskID: "evidence-latest", Type: constant.InvoicePaymentEvidenceTaskType, Status: SystemTaskStatusSucceeded},
 				{TaskID: "model-failed-old", Type: SystemTaskTypeModelUpdate, Status: SystemTaskStatusFailed},
 				{TaskID: "model-success", Type: SystemTaskTypeModelUpdate, Status: SystemTaskStatusSucceeded},
 				{TaskID: "channel-failed", Type: SystemTaskTypeChannelTest, Status: SystemTaskStatusFailed},
@@ -134,22 +137,25 @@ func TestSystemTaskHistoryDatabaseMatrix(t *testing.T) {
 			assert.EqualValues(t, 2, deleted)
 			_, total, err = ListSystemTasks(SystemTaskFilter{Scope: "history"}, 0, 20)
 			require.NoError(t, err)
-			assert.EqualValues(t, 4, total, "other types and statuses are untouched")
+			assert.EqualValues(t, 6, total, "other types and statuses are untouched")
 
 			deleted, err = DeleteSystemTaskHistory(SystemTaskFilter{Scope: "active", Status: SystemTaskStatusRunning})
 			require.NoError(t, err)
 			assert.Zero(t, deleted, "caller cannot override the terminal-status restriction")
+			deleted, err = DeleteSystemTaskHistory(SystemTaskFilter{Type: constant.InvoicePaymentEvidenceTaskType})
+			require.NoError(t, err)
+			assert.Zero(t, deleted, "naming a referenced type does not delete its rows")
 			deleted, err = DeleteSystemTaskHistory(SystemTaskFilter{})
 			require.NoError(t, err)
 			assert.EqualValues(t, 2, deleted)
 			remaining, total, err := ListSystemTasks(SystemTaskFilter{}, 0, 100)
 			require.NoError(t, err)
-			assert.EqualValues(t, 4, total)
+			assert.EqualValues(t, 6, total)
 			var remainingIDs []string
 			for _, task := range remaining {
 				remainingIDs = append(remainingIDs, task.TaskID)
 			}
-			assert.ElementsMatch(t, []string{"model-latest", "channel-pending", "channel-running", "log-only-history"}, remainingIDs)
+			assert.ElementsMatch(t, []string{"evidence-old-failed", "evidence-latest", "model-latest", "channel-pending", "channel-running", "log-only-history"}, remainingIDs)
 			latest, err := GetLatestSystemTasks([]string{SystemTaskTypeModelUpdate, SystemTaskTypeChannelTest, SystemTaskTypeLogCleanup})
 			require.NoError(t, err)
 			assert.Equal(t, "model-latest", latest[SystemTaskTypeModelUpdate].TaskID)
@@ -158,6 +164,14 @@ func TestSystemTaskHistoryDatabaseMatrix(t *testing.T) {
 			deleted, err = DeleteSystemTaskHistory(SystemTaskFilter{})
 			require.NoError(t, err)
 			assert.Zero(t, deleted, "repeated cleanup preserves the scheduler's latest runs")
+
+			// An empty list must not turn into NOT IN (NULL), which deletes nothing.
+			previousReferenced := systemTaskTypesReferencedByID
+			systemTaskTypesReferencedByID = nil
+			t.Cleanup(func() { systemTaskTypesReferencedByID = previousReferenced })
+			deleted, err = DeleteSystemTaskHistory(SystemTaskFilter{})
+			require.NoError(t, err)
+			assert.EqualValues(t, 1, deleted, "an unreferenced old row is history again")
 		})
 	}
 }
@@ -205,6 +219,14 @@ func TestDeleteFinishedSystemTasksDatabaseMatrix(t *testing.T) {
 			deleted, err = DeleteFinishedSystemTasks(context.Background(), cutoff)
 			require.NoError(t, err)
 			assert.Zero(t, deleted)
+
+			// An empty list must not turn into NOT IN (NULL), which deletes nothing.
+			previousReferenced := systemTaskTypesReferencedByID
+			systemTaskTypesReferencedByID = nil
+			t.Cleanup(func() { systemTaskTypesReferencedByID = previousReferenced })
+			deleted, err = DeleteFinishedSystemTasks(context.Background(), cutoff)
+			require.NoError(t, err)
+			assert.EqualValues(t, 1, deleted, "only the newest row of the formerly referenced type stays")
 		})
 	}
 }

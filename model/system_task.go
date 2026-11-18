@@ -37,12 +37,22 @@ const (
 var ErrSystemTaskLockLost = errors.New("system task lock lost")
 
 // systemTaskTypesReferencedByID lists the task types whose rows other records
-// point at by task_id. The daily history cleanup keeps their rows: deleting one
-// breaks the record that refers to it. Add a type here when a new record
-// stores system task ids.
+// point at by task_id. Neither the daily nor the manual history cleanup deletes
+// their rows: deleting one breaks the record that refers to it. Add a type here
+// when a new record stores system task ids.
 var systemTaskTypesReferencedByID = []string{
 	// InvoicePaymentEvidenceBackfillRun.ActiveTaskID and LastTaskID.
 	constant.InvoicePaymentEvidenceTaskType,
+}
+
+// excludeReferencedSystemTasks keeps both history cleanups away from the rows
+// of systemTaskTypesReferencedByID. GORM expands an empty list to
+// NOT IN (NULL), which matches no row, so an empty list adds no condition.
+func excludeReferencedSystemTasks(query *gorm.DB) *gorm.DB {
+	if len(systemTaskTypesReferencedByID) == 0 {
+		return query
+	}
+	return query.Where("type NOT IN ?", systemTaskTypesReferencedByID)
 }
 
 // SystemTask is one run of a background job, or one sync task (see
@@ -244,8 +254,10 @@ func ListSystemTasks(filter SystemTaskFilter, offset, limit int) ([]*SystemTask,
 }
 
 // DeleteSystemTaskHistory preserves the latest row of every type because the
-// scheduler uses it to determine when the next run is due. Active rows and rows
-// created after this cleanup's snapshot are never removed.
+// scheduler uses it to determine when the next run is due. Active rows, rows
+// created after this cleanup's snapshot and rows of
+// systemTaskTypesReferencedByID are never removed, even when the filter names
+// that type.
 func DeleteSystemTaskHistory(filter SystemTaskFilter) (int64, error) {
 	var latestIDs []int64
 	if err := DB.Model(&SystemTask{}).Select("MAX(id)").Group("type").Pluck("MAX(id)", &latestIDs).Error; err != nil {
@@ -259,7 +271,8 @@ func DeleteSystemTaskHistory(filter SystemTaskFilter) (int64, error) {
 		newestID = max(newestID, id)
 	}
 	filter.Scope = "history"
-	result := filter.query().Where("id < ? AND id NOT IN ?", newestID, latestIDs).Delete(&SystemTask{})
+	query := excludeReferencedSystemTasks(filter.query().Where("id < ? AND id NOT IN ?", newestID, latestIDs))
+	result := query.Delete(&SystemTask{})
 	return result.RowsAffected, result.Error
 }
 
@@ -352,8 +365,8 @@ func DeleteFinishedSystemTasks(ctx context.Context, cutoff int64) (int64, error)
 		if err := ctx.Err(); err != nil {
 			return deleted, err
 		}
-		query := DB.Model(&SystemTask{}).Where("status IN ? AND updated_at < ?", []SystemTaskStatus{SystemTaskStatusSucceeded, SystemTaskStatusFailed}, cutoff).
-			Where("type NOT IN ?", systemTaskTypesReferencedByID)
+		query := excludeReferencedSystemTasks(DB.Model(&SystemTask{}).
+			Where("status IN ? AND updated_at < ?", []SystemTaskStatus{SystemTaskStatusSucceeded, SystemTaskStatusFailed}, cutoff))
 		if len(newestIDs) > 0 {
 			query = query.Where("id NOT IN ?", newestIDs)
 		}
