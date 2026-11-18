@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/glebarez/sqlite"
 
 	"github.com/stretchr/testify/assert"
@@ -179,10 +180,18 @@ func TestDeleteFinishedSystemTasksDatabaseMatrix(t *testing.T) {
 				{TaskID: "sync-at-cutoff", Type: SyncTaskType(SyncTopicChannels), Status: SystemTaskStatusSucceeded, CreatedAt: 10, UpdatedAt: cutoff},
 				{TaskID: "sync-newest", Type: SyncTaskType(SyncTopicChannels), Status: SystemTaskStatusFailed, CreatedAt: 10, UpdatedAt: 10},
 				{TaskID: "log-newest", Type: SystemTaskTypeLogCleanup, Status: SystemTaskStatusFailed, CreatedAt: 10, UpdatedAt: 10},
+				{TaskID: "fee-newest", Type: InvoiceFeeRefundSettlementTaskType, Status: SystemTaskStatusSucceeded, CreatedAt: 10, UpdatedAt: 10},
 			}
 			deletedRows := []SystemTask{
 				{TaskID: "log-old-failed", Type: SystemTaskTypeLogCleanup, Status: SystemTaskStatusFailed, CreatedAt: 10, UpdatedAt: 10},
+				{TaskID: "fee-old-succeeded", Type: InvoiceFeeRefundSettlementTaskType, Status: SystemTaskStatusSucceeded, CreatedAt: 10, UpdatedAt: 10},
 			}
+			// A backfill run refers to its apply tasks by task_id, so they outlive the retention.
+			referenced := []SystemTask{
+				{TaskID: "evidence-old-failed", Type: constant.InvoicePaymentEvidenceTaskType, Status: SystemTaskStatusFailed, CreatedAt: 10, UpdatedAt: 10},
+				{TaskID: "evidence-old-succeeded", Type: constant.InvoicePaymentEvidenceTaskType, Status: SystemTaskStatusSucceeded, CreatedAt: 10, UpdatedAt: 10},
+			}
+			require.NoError(t, db.Create(&referenced).Error)
 			require.NoError(t, db.Create(&deletedRows).Error)
 			require.NoError(t, db.Create(&kept).Error)
 
@@ -191,7 +200,7 @@ func TestDeleteFinishedSystemTasksDatabaseMatrix(t *testing.T) {
 			assert.EqualValues(t, len(old)+len(deletedRows), deleted)
 			var remaining []string
 			require.NoError(t, db.Model(&SystemTask{}).Order("id").Pluck("task_id", &remaining).Error)
-			assert.Equal(t, []string{"test-old-pending", "test-old-running", "sync-at-cutoff", "sync-newest", "log-newest"}, remaining)
+			assert.Equal(t, []string{"evidence-old-failed", "evidence-old-succeeded", "test-old-pending", "test-old-running", "sync-at-cutoff", "sync-newest", "log-newest", "fee-newest"}, remaining)
 
 			deleted, err = DeleteFinishedSystemTasks(context.Background(), cutoff)
 			require.NoError(t, err)

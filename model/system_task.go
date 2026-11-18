@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 
 	"gorm.io/gorm"
 )
@@ -34,6 +35,15 @@ const (
 )
 
 var ErrSystemTaskLockLost = errors.New("system task lock lost")
+
+// systemTaskTypesReferencedByID lists the task types whose rows other records
+// point at by task_id. The daily history cleanup keeps their rows: deleting one
+// breaks the record that refers to it. Add a type here when a new record
+// stores system task ids.
+var systemTaskTypesReferencedByID = []string{
+	// InvoicePaymentEvidenceBackfillRun.ActiveTaskID and LastTaskID.
+	constant.InvoicePaymentEvidenceTaskType,
+}
 
 // SystemTask is one run of a background job, or one sync task (see
 // SyncTaskType). The (type, id) index answers "newest row of a type" without
@@ -331,7 +341,7 @@ func GetLatestSystemTasks(taskTypes []string) (map[string]*SystemTask, error) {
 // DeleteFinishedSystemTasks deletes, in batches, the succeeded and failed rows
 // last updated before cutoff. The newest row of every type stays: the
 // scheduler and the node sync read it. A row that becomes the newest later is
-// newer than cutoff.
+// newer than cutoff. Rows of systemTaskTypesReferencedByID are never deleted.
 func DeleteFinishedSystemTasks(ctx context.Context, cutoff int64) (int64, error) {
 	var newestIDs []int64
 	if err := DB.Model(&SystemTask{}).Group("type").Pluck("MAX(id)", &newestIDs).Error; err != nil {
@@ -342,7 +352,8 @@ func DeleteFinishedSystemTasks(ctx context.Context, cutoff int64) (int64, error)
 		if err := ctx.Err(); err != nil {
 			return deleted, err
 		}
-		query := DB.Model(&SystemTask{}).Where("status IN ? AND updated_at < ?", []SystemTaskStatus{SystemTaskStatusSucceeded, SystemTaskStatusFailed}, cutoff)
+		query := DB.Model(&SystemTask{}).Where("status IN ? AND updated_at < ?", []SystemTaskStatus{SystemTaskStatusSucceeded, SystemTaskStatusFailed}, cutoff).
+			Where("type NOT IN ?", systemTaskTypesReferencedByID)
 		if len(newestIDs) > 0 {
 			query = query.Where("id NOT IN ?", newestIDs)
 		}
