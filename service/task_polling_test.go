@@ -1467,3 +1467,104 @@ func TestTaskReportsOnceAtTheFinalState(t *testing.T) {
 	sweepTimedOutTasks(context.Background())
 	assert.Equal(t, []string{"report_once:SUCCESS", "fails:FAILURE", "times_out:FAILURE"}, reported)
 }
+
+// A bulk failure reports only the rows it moved to FAILURE, once, with the
+// stored reason and the final cost: zero for a pending refund, the kept quota
+// for a legacy task reconciliation never refunds.
+func TestBulkFailureReportsOnlyFailedRowsWithFinalCost(t *testing.T) {
+	previousLimit, previousTimeout := constant.TaskQueryLimit, constant.TaskTimeoutMinutes
+	previousCache, previousReport := common.MemoryCacheEnabled, ReportTaskFunc
+	constant.TaskQueryLimit, constant.TaskTimeoutMinutes = 10, 0
+	common.MemoryCacheEnabled = false
+	t.Cleanup(func() {
+		constant.TaskQueryLimit, constant.TaskTimeoutMinutes = previousLimit, previousTimeout
+		common.MemoryCacheEnabled, ReportTaskFunc = previousCache, previousReport
+	})
+	type report struct {
+		id     int64
+		status model.TaskStatus
+		reason string
+		quota  int
+	}
+
+	for _, path := range []string{"missing video channel", "null task ID"} {
+		t.Run(path, func(t *testing.T) {
+			truncate(t)
+			const userID, channelID, reserved, initialQuota = 540, 99540, 1_000, 10_000
+			seedUser(t, userID, initialQuota)
+			var reported []report
+			ReportTaskFunc = func(task *model.Task) {
+				reported = append(reported, report{task.ID, task.Status, task.FailReason, task.Quota})
+			}
+			newTask := func(name string, submitTime int64) *model.Task {
+				task := makeTask(userID, channelID, reserved, 0, BillingSourceWallet, 0)
+				task.TaskID, task.Platform, task.SubmitTime = name, "integration-plugin", submitTime
+				task.PrivateData.RequestPlugins = &model.TaskRequestPlugins{Instances: []string{"audit"}}
+				if path == "null task ID" {
+					task.TaskID = ""
+				}
+				require.NoError(t, model.DB.Create(task).Error)
+				return task
+			}
+			live := newTask("live", time.Now().Unix())
+			legacy := newTask("legacy", model.TaskRefundLegacyCutoff-1)
+			won := newTask("won_elsewhere", time.Now().Unix())
+			completeElsewhere := func() {
+				winner := *won
+				winner.Status, winner.Progress = model.TaskStatusSuccess, "100%"
+				ok, err := winner.UpdateWithStatus(model.TaskStatusInProgress)
+				require.NoError(t, err)
+				require.True(t, ok)
+			}
+
+			reason := "Failed to get the channel information. Please contact the administrator"
+			bulkFail := func() {
+				tasks := map[string]*model.Task{"live": live, "legacy": legacy, "won_elsewhere": won}
+				require.Error(t, updateVideoTasks(context.Background(), live.Platform, channelID,
+					[]string{"live", "legacy", "won_elsewhere", "live"}, tasks))
+			}
+			if path == "null task ID" {
+				reason = "Failed to query the upstream task status"
+				previous := GetTaskAdaptorFunc
+				GetTaskAdaptorFunc = func(constant.TaskPlatform) TaskPollingAdaptor { return &scriptedPollingAdaptor{} }
+				t.Cleanup(func() { GetTaskAdaptorFunc = previous })
+				completed := false
+				bulkFail = func() {
+					RunTaskPollingOnce(context.Background(), func(processed, total int) {
+						if processed == 0 && total == 1 && !completed {
+							completed = true
+							completeElsewhere() // after the polling query, before the bulk failure
+						}
+					})
+				}
+			} else {
+				completeElsewhere() // the poller's in-memory snapshot stays stale
+			}
+
+			bulkFail()
+			expected := []report{
+				{live.ID, model.TaskStatusFailure, reason, 0},
+				{legacy.ID, model.TaskStatusFailure, reason, reserved},
+			}
+			assert.Equal(t, expected, reported)
+			for _, task := range []*model.Task{live, legacy} {
+				var stored model.Task
+				require.NoError(t, model.DB.First(&stored, task.ID).Error)
+				assert.EqualValues(t, model.TaskStatusFailure, stored.Status)
+				assert.Equal(t, reason, stored.FailReason)
+				assert.Equal(t, reserved, stored.Quota, "the bulk update leaves the refund to reconciliation")
+			}
+
+			// A later pass and the refund itself report nothing more.
+			bulkFail()
+			require.NoError(t, model.DB.Model(&model.Task{}).Where("user_id = ?", userID).
+				UpdateColumn("updated_at", time.Now().Add(-time.Minute).Unix()).Error)
+			sweepUnrefundedFailedTasks(context.Background())
+			assert.Equal(t, expected, reported)
+			assert.Zero(t, getTaskQuota(t, live.ID))
+			assert.Equal(t, reserved, getTaskQuota(t, legacy.ID))
+			assert.Equal(t, reserved, getTaskQuota(t, won.ID))
+			assert.Equal(t, initialQuota+reserved, getUserQuota(t, userID))
+		})
+	}
+}

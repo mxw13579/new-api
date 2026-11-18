@@ -750,18 +750,38 @@ func (t *Task) UpdateWithStatus(fromStatus TaskStatus) (bool, error) {
 
 // FailUnfinishedTasksByID conditionally fails only nonterminal rows. A stale
 // polling batch must never turn a concurrent success into a refundable failure.
-// Quota stays intact for the existing refund reconciliation path.
-func FailUnfinishedTasksByID(ids []int64, reason string) error {
+// Quota stays intact for the existing refund reconciliation path. It returns
+// the ids this call moved to FAILURE, so only those tasks report a final
+// state; each row is its own conditional UPDATE because a single statement
+// cannot name its changed rows on every supported database.
+func FailUnfinishedTasksByID(ids []int64, reason string) ([]int64, error) {
 	if len(ids) == 0 {
-		return nil
+		return nil, nil
 	}
-	return DB.Model(&Task{}).
-		Where("id IN ?", ids).
-		Where("status NOT IN ?", []string{TaskStatusFailure, TaskStatusSuccess}).
-		Updates(map[string]any{
-			"status": TaskStatusFailure, "progress": "100%",
-			"finish_time": time.Now().Unix(), "fail_reason": reason,
-		}).Error
+	finishTime := time.Now().Unix()
+	var failed []int64
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		for _, id := range ids {
+			result := tx.Model(&Task{}).
+				Where("id = ?", id).
+				Where("status NOT IN ?", []string{TaskStatusFailure, TaskStatusSuccess}).
+				Updates(map[string]any{
+					"status": TaskStatusFailure, "progress": "100%",
+					"finish_time": finishTime, "fail_reason": reason,
+				})
+			if result.Error != nil {
+				return result.Error
+			}
+			if result.RowsAffected > 0 {
+				failed = append(failed, id)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return failed, nil
 }
 
 // TaskBulkUpdateByID performs an unconditional bulk UPDATE by primary key IDs.

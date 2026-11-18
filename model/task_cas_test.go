@@ -269,7 +269,9 @@ func TestFailUnfinishedTasksByID_PreservesTerminalBilling(t *testing.T) {
 	for _, task := range tasks {
 		insertTask(t, task)
 	}
-	require.NoError(t, FailUnfinishedTasksByID([]int64{tasks[0].ID, tasks[1].ID, tasks[2].ID}, "missing channel"))
+	failed, err := FailUnfinishedTasksByID([]int64{tasks[0].ID, tasks[1].ID, tasks[2].ID, tasks[0].ID}, "missing channel")
+	require.NoError(t, err)
+	assert.Equal(t, []int64{tasks[0].ID}, failed, "only the row this call moved to FAILURE, once")
 	var found []Task
 	require.NoError(t, DB.Order("id").Find(&found).Error)
 	require.Len(t, found, 3)
