@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -171,26 +172,35 @@ func TestSyncColdLogs(t *testing.T) {
 	// Id 3 is younger than the safety window but below id 4, so it is copied.
 	require.NoError(t, hot.Model(&Log{}).Where("id = ?", 3).Update("created_at", now-10).Error)
 	require.NoError(t, hot.Create(&Log{Id: 5, CreatedAt: now - 100, RequestId: "r5"}).Error)
+	addHotLogs := func(t *testing.T, from, to int) {
+		for id := from; id <= to; id++ {
+			require.NoError(t, hot.Create(&Log{Id: id, CreatedAt: now - 1000, RequestId: fmt.Sprintf("r%d", id)}).Error)
+		}
+	}
+	syncedState := func(t *testing.T) LogColdSyncState {
+		state, found, err := coldLogSyncState(ctx)
+		require.NoError(t, err)
+		require.True(t, found)
+		return state
+	}
 
 	result, err := SyncColdLogs(ctx, now)
 	require.NoError(t, err)
-	assert.Equal(t, ColdLogSyncResult{SyncedId: 4, Copied: 4, Lag: 1}, result)
+	assert.Equal(t, ColdLogSyncResult{SyncedId: 4, SyncedCreatedAt: now - 1000, Copied: 4, Lag: 1, LagSeconds: 1000}, result)
 	assert.Equal(t, []int{1, 2, 3, 4}, logIds(t, cold), "id 5 is inside the safety window")
 
 	result, err = SyncColdLogs(ctx, now+400)
 	require.NoError(t, err)
-	assert.Equal(t, ColdLogSyncResult{SyncedId: 5, Copied: 1, Lag: 0}, result)
+	assert.Equal(t, ColdLogSyncResult{SyncedId: 5, SyncedCreatedAt: now - 100, Copied: 1, Lag: 0, LagSeconds: 500}, result)
 
 	t.Run("rows left above the progress are rewritten", func(t *testing.T) {
-		for id := 6; id <= 8; id++ {
-			require.NoError(t, hot.Create(&Log{Id: id, CreatedAt: now - 1000, RequestId: fmt.Sprintf("r%d", id)}).Error)
-		}
+		addHotLogs(t, 6, 8)
 		// A run that wrote id 6 and part of id 7 but never advanced the progress.
-		require.NoError(t, cold.Create(&[]Log{{Id: 6, RequestId: "r6"}, {Id: 7, RequestId: "partial"}}).Error)
+		require.NoError(t, cold.Create(&[]Log{{Id: 6, CreatedAt: now - 1000, RequestId: "r6"}, {Id: 7, CreatedAt: now - 1000, RequestId: "partial"}}).Error)
 
 		result, err := SyncColdLogs(ctx, now+400)
 		require.NoError(t, err)
-		assert.Equal(t, ColdLogSyncResult{SyncedId: 8, Copied: 3, Lag: 0}, result)
+		assert.Equal(t, ColdLogSyncResult{SyncedId: 8, SyncedCreatedAt: now - 1000, Copied: 3, Lag: 0, LagSeconds: 1400}, result)
 		assert.Equal(t, []int{1, 2, 3, 4, 5, 6, 7, 8}, logIds(t, cold))
 		var archived Log
 		require.NoError(t, cold.Where("id = ?", 7).First(&archived).Error)
@@ -198,9 +208,7 @@ func TestSyncColdLogs(t *testing.T) {
 	})
 
 	t.Run("a failed write keeps the progress and a rerun completes", func(t *testing.T) {
-		for id := 9; id <= 12; id++ {
-			require.NoError(t, hot.Create(&Log{Id: id, CreatedAt: now - 1000, RequestId: fmt.Sprintf("r%d", id)}).Error)
-		}
+		addHotLogs(t, 9, 12)
 		writes, failWrite := 0, 2
 		require.NoError(t, cold.Callback().Create().Before("gorm:create").Register("test:fail_cold_write", func(db *gorm.DB) {
 			writes++
@@ -213,42 +221,80 @@ func TestSyncColdLogs(t *testing.T) {
 		result, err := SyncColdLogs(ctx, now+400)
 		require.Error(t, err)
 		assert.Equal(t, int64(10), result.SyncedId)
-		syncedId, found, err := coldLogSyncedId(ctx)
-		require.NoError(t, err)
-		assert.True(t, found)
-		assert.Equal(t, int64(10), syncedId)
+		assert.Equal(t, int64(10), syncedState(t).SyncedId)
 
 		result, err = SyncColdLogs(ctx, now+400)
 		require.NoError(t, err)
-		assert.Equal(t, ColdLogSyncResult{SyncedId: 12, Copied: 2, Lag: 0}, result)
+		assert.EqualValues(t, 12, result.SyncedId)
+		assert.EqualValues(t, 2, result.Copied)
 		assert.Equal(t, []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}, logIds(t, cold))
+	})
+
+	t.Run("a write the archive silently drops does not advance the progress", func(t *testing.T) {
+		addHotLogs(t, 13, 14)
+		// Stands in for an archive that discards a block as a duplicate.
+		require.NoError(t, cold.Callback().Create().After("gorm:create").Register("test:drop_cold_row", func(db *gorm.DB) {
+			_, err := db.Statement.ConnPool.ExecContext(db.Statement.Context, "DELETE FROM logs WHERE id = ?", 14)
+			db.AddError(err)
+		}))
+		_, err := SyncColdLogs(ctx, now+400)
+		require.ErrorContains(t, err, "holds 1 logs for ids 13 to 14 after writing 2")
+		assert.EqualValues(t, 12, syncedState(t).SyncedId)
+		require.NoError(t, cold.Callback().Create().Remove("test:drop_cold_row"))
+
+		result, err := SyncColdLogs(ctx, now+400)
+		require.NoError(t, err)
+		assert.EqualValues(t, 14, result.SyncedId)
+		assert.Equal(t, []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14}, logIds(t, cold))
+	})
+
+	t.Run("a run gives up when another run moves the progress", func(t *testing.T) {
+		addHotLogs(t, 15, 16)
+		require.NoError(t, cold.Create(&Log{Id: 15, CreatedAt: now - 1000, RequestId: "r15"}).Error)
+		moved := false
+		// Another runner advances the progress right after this run finds the leftover.
+		require.NoError(t, cold.Callback().Query().After("gorm:query").Register("test:move_progress", func(db *gorm.DB) {
+			if moved || !strings.Contains(db.Statement.SQL.String(), "id > ") {
+				return
+			}
+			moved = true
+			db.AddError(hot.Model(&LogColdSyncState{}).Where("name = ?", logColdSyncStateName).Update("synced_id", 15).Error)
+		}))
+		t.Cleanup(func() { assert.NoError(t, cold.Callback().Query().Remove("test:move_progress")) })
+
+		_, err := SyncColdLogs(ctx, now+400)
+		require.ErrorContains(t, err, "progress changed during the run")
+		assert.Equal(t, []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}, logIds(t, cold), "the other run's rows are kept")
+		assert.EqualValues(t, 15, syncedState(t).SyncedId)
 	})
 
 	t.Run("an archive without progress is left alone", func(t *testing.T) {
 		require.NoError(t, hot.Where("1 = 1").Delete(&LogColdSyncState{}).Error)
 		_, err := SyncColdLogs(ctx, now+400)
 		require.Error(t, err)
-		assert.Len(t, logIds(t, cold), 12)
+		assert.Len(t, logIds(t, cold), 15)
 	})
 }
 
 func TestHotLogCleanupKeepsUnsyncedAndRecentLogs(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().Unix()
-	seed := func(t *testing.T, cleanup bool) *gorm.DB {
-		hot, _ := newSQLiteColdLogStores(t, 30, cleanup)
-		require.NoError(t, hot.Create(&[]Log{
+	seed := func(t *testing.T, cleanup bool) (*gorm.DB, *gorm.DB) {
+		hot, cold := newSQLiteColdLogStores(t, 30, cleanup)
+		logs := []Log{
 			{Id: 1, CreatedAt: now - 40*testDay},           // archived, past retention + 1 day
 			{Id: 2, CreatedAt: now - 30*testDay - 3600},    // archived, inside the extra day
 			{Id: 3, CreatedAt: now - 40*testDay},           // past retention, not archived yet
 			{Id: 4, CreatedAt: now - 40*testDay - testDay}, // past retention, not archived yet
-		}).Error)
-		require.NoError(t, hot.Create(&LogColdSyncState{Name: logColdSyncStateName, SyncedId: 2}).Error)
-		return hot
+		}
+		require.NoError(t, hot.Create(&logs).Error)
+		require.NoError(t, cold.Create(logs[:2]).Error)
+		require.NoError(t, hot.Create(&LogColdSyncState{Name: logColdSyncStateName, SyncedId: 2, SyncedCreatedAt: logs[1].CreatedAt}).Error)
+		return hot, cold
 	}
 
 	t.Run("scheduled cleanup", func(t *testing.T) {
-		hot := seed(t, true)
+		hot, _ := seed(t, true)
 		logHotCleanupBatchSize = 1
 		deleted, err := CleanupHotLogs(ctx, now)
 		require.NoError(t, err)
@@ -257,25 +303,50 @@ func TestHotLogCleanupKeepsUnsyncedAndRecentLogs(t *testing.T) {
 	})
 
 	t.Run("scheduled cleanup off", func(t *testing.T) {
-		hot := seed(t, false)
+		hot, _ := seed(t, false)
 		deleted, err := CleanupHotLogs(ctx, now)
 		require.NoError(t, err)
 		assert.Zero(t, deleted)
 		assert.Equal(t, []int{1, 2, 3, 4}, logIds(t, hot))
 	})
 
-	t.Run("manual cleanup", func(t *testing.T) {
-		hot := seed(t, false)
+	t.Run("manual cleanup stops at the hot retention boundary", func(t *testing.T) {
+		hot, _ := seed(t, false)
+		assert.Equal(t, now-31*testDay, LogCleanupTarget(now, now))
+		assert.Equal(t, now-40*testDay, LogCleanupTarget(now-40*testDay, now))
 		remaining, err := CountOldLog(ctx, now)
 		require.NoError(t, err)
-		assert.EqualValues(t, 2, remaining)
+		assert.EqualValues(t, 1, remaining)
 		deleted, err := DeleteOldLogBatch(ctx, now, 1)
 		require.NoError(t, err)
 		assert.EqualValues(t, 1, deleted)
-		deleted, err = DeleteOldLogBatch(ctx, now, 100)
+		assert.Equal(t, []int{2, 3, 4}, logIds(t, hot), "logs inside the retention and unarchived logs survive")
+	})
+
+	t.Run("manual cleanup without routing keeps the target", func(t *testing.T) {
+		hot, _ := seed(t, false)
+		logHotRetentionDays = 0
+		assert.Equal(t, now, LogCleanupTarget(now, now))
+		remaining, err := CountOldLog(ctx, now)
 		require.NoError(t, err)
-		assert.EqualValues(t, 1, deleted)
+		assert.EqualValues(t, 2, remaining)
+		deleted, err := DeleteOldLogBatch(ctx, now, 100)
+		require.NoError(t, err)
+		assert.EqualValues(t, 2, deleted)
 		assert.Equal(t, []int{3, 4}, logIds(t, hot), "unarchived logs survive the manual cleanup")
+	})
+
+	t.Run("an emptied archive stops the sync and every deletion", func(t *testing.T) {
+		hot, cold := seed(t, true)
+		require.NoError(t, cold.Where("1 = 1").Delete(&Log{}).Error)
+		_, err := SyncColdLogs(ctx, now)
+		require.ErrorContains(t, err, "does not hold synced log id 2")
+		_, err = CleanupHotLogs(ctx, now)
+		require.ErrorContains(t, err, "does not hold synced log id 2")
+		_, err = DeleteOldLogBatch(ctx, now, 100)
+		require.ErrorContains(t, err, "does not hold synced log id 2")
+		assert.Equal(t, []int{1, 2, 3, 4}, logIds(t, hot))
+		assert.Empty(t, logIds(t, cold), "nothing is copied over the gap")
 	})
 }
 
@@ -355,6 +426,7 @@ func TestColdLogStorageOnPostgresAndClickHouse(t *testing.T) {
 	require.NoError(t, err)
 	assert.EqualValues(t, 3, result.Copied)
 	assert.EqualValues(t, 1, result.Lag)
+	assert.EqualValues(t, 1000, result.LagSeconds)
 	var archived []Log
 	require.NoError(t, LOG_COLD_DB.Order("id").Find(&archived).Error)
 	require.Len(t, archived, 3)
@@ -363,7 +435,7 @@ func TestColdLogStorageOnPostgresAndClickHouse(t *testing.T) {
 	assert.Equal(t, "vip", archived[0].Group)
 
 	// A leftover row above the progress is removed with a ClickHouse mutation.
-	require.NoError(t, LOG_COLD_DB.Create(&Log{Id: archived[2].Id + 1, RequestId: "fresh"}).Error)
+	require.NoError(t, LOG_COLD_DB.Create(&Log{Id: archived[2].Id + 1, CreatedAt: now - 10, RequestId: "fresh"}).Error)
 	result, err = SyncColdLogs(ctx, now+400)
 	require.NoError(t, err)
 	assert.EqualValues(t, 1, result.Copied)
@@ -397,10 +469,68 @@ func TestColdLogStorageOnPostgresAndClickHouse(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{"fresh", "recent-1"}, requestIdsOf(logs))
 
+	// The manual cleanup cannot reach into the hot retention.
 	remaining, err := CountOldLog(ctx, now+1)
 	require.NoError(t, err)
-	assert.EqualValues(t, 2, remaining)
+	assert.Zero(t, remaining)
 	deleted, err = DeleteOldLogBatch(ctx, now+1, 1)
 	require.NoError(t, err)
-	assert.EqualValues(t, 1, deleted, "the manual cleanup deletes one batch per call on PostgreSQL")
+	assert.Zero(t, deleted)
+	var hotCount int64
+	require.NoError(t, hot.Model(&Log{}).Count(&hotCount).Error)
+	assert.EqualValues(t, 2, hotCount)
+
+	// Make the plain MergeTree archive deduplicate inserts like a replicated or
+	// cloud table, and show identical blocks are dropped unless the archive
+	// write turns deduplication off.
+	type dedupProbe struct{ Id int64 }
+	require.NoError(t, LOG_COLD_DB.Exec("CREATE TABLE dedup_probe (id Int64) ENGINE = MergeTree ORDER BY id SETTINGS non_replicated_deduplication_window = 100").Error)
+	probeCount := func() int64 {
+		var count int64
+		require.NoError(t, LOG_COLD_DB.Table("dedup_probe").Count(&count).Error)
+		return count
+	}
+	for range 2 {
+		require.NoError(t, LOG_COLD_DB.Table("dedup_probe").Create(&[]dedupProbe{{Id: 1}, {Id: 2}}).Error)
+	}
+	assert.EqualValues(t, 2, probeCount(), "the second identical block is deduplicated")
+	require.NoError(t, LOG_COLD_DB.WithContext(coldLogInsertContext(ctx)).Table("dedup_probe").Create(&[]dedupProbe{{Id: 1}, {Id: 2}}).Error)
+	assert.EqualValues(t, 4, probeCount(), "the archive write context turns deduplication off")
+
+	// A batch the server stored while the client saw an error is deleted and
+	// rewritten as the same block; the rewrite must not be dropped. A plain
+	// MergeTree forgets a block's hash once its part is dropped, so this cannot
+	// replay a replicated table keeping the hash; the probe above shows the
+	// archive write turns deduplication off on the server.
+	require.NoError(t, LOG_COLD_DB.Exec("ALTER TABLE logs MODIFY SETTING non_replicated_deduplication_window = 1000").Error)
+	require.NoError(t, hot.Create(&[]Log{
+		{UserId: 3, Username: "carol", CreatedAt: now - 1000, Type: LogTypeConsume, RequestId: "late-1"},
+		{UserId: 3, Username: "carol", CreatedAt: now - 1000, Type: LogTypeConsume, RequestId: "late-2"},
+	}).Error)
+	state, _, err := coldLogSyncState(ctx)
+	require.NoError(t, err)
+	var batch []*Log
+	require.NoError(t, hot.Where("id > ?", state.SyncedId).Order("id").Limit(2).Find(&batch).Error)
+	require.Len(t, batch, 2)
+	for range 2 {
+		require.NoError(t, LOG_COLD_DB.Create(&batch).Error)
+	}
+	require.NoError(t, LOG_COLD_DB.Model(&Log{}).Count(&coldCount).Error)
+	assert.EqualValues(t, 6, coldCount, "the archive now deduplicates an identical batch")
+	result, err = SyncColdLogs(ctx, now+400)
+	require.NoError(t, err)
+	assert.EqualValues(t, 2, result.Copied)
+	require.NoError(t, LOG_COLD_DB.Model(&Log{}).Count(&coldCount).Error)
+	assert.EqualValues(t, 6, coldCount)
+
+	// An emptied archive stops the sync and every hot deletion.
+	require.NoError(t, LOG_COLD_DB.Exec("TRUNCATE TABLE logs").Error)
+	_, err = SyncColdLogs(ctx, now+400)
+	require.ErrorContains(t, err, "does not hold synced log id")
+	_, err = CleanupHotLogs(ctx, now+400*testDay)
+	require.ErrorContains(t, err, "does not hold synced log id")
+	_, err = DeleteOldLogBatch(ctx, now+400*testDay, 100)
+	require.ErrorContains(t, err, "does not hold synced log id")
+	require.NoError(t, hot.Model(&Log{}).Count(&hotCount).Error)
+	assert.EqualValues(t, 4, hotCount)
 }

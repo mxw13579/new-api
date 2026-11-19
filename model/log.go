@@ -854,15 +854,18 @@ func SumUsedToken(logType int, startTimestamp int64, endTimestamp int64, modelNa
 }
 
 // CountOldLog counts the logs the manual cleanup may delete. With a cold
-// archive configured it counts only hot logs already copied to the archive.
+// archive configured it counts only hot logs already copied to the archive,
+// before the cutoff LogCleanupTarget allows.
 func CountOldLog(ctx context.Context, targetTimestamp int64) (int64, error) {
-	tx := LOG_DB.WithContext(ctx).Model(&Log{}).Where("created_at < ?", targetTimestamp)
-	if LOG_COLD_DB != nil {
-		syncedId, _, err := coldLogSyncedId(ctx)
+	tx := LOG_DB.WithContext(ctx).Model(&Log{})
+	if LOG_COLD_DB == nil {
+		tx = tx.Where("created_at < ?", targetTimestamp)
+	} else {
+		state, _, err := coldLogSyncState(ctx)
 		if err != nil {
 			return 0, err
 		}
-		tx = tx.Where("id <= ?", syncedId)
+		tx = tx.Where("created_at < ? AND id <= ?", LogCleanupTarget(targetTimestamp, common.GetTimestamp()), state.SyncedId)
 	}
 	var total int64
 	if err := tx.Count(&total).Error; err != nil {
@@ -873,7 +876,10 @@ func CountOldLog(ctx context.Context, targetTimestamp int64) (int64, error) {
 
 // DeleteOldLogBatch deletes logs older than targetTimestamp for the manual
 // cleanup. With a cold archive configured it deletes from the hot store only,
-// never a log not yet copied to the archive, and at most limit rows per call.
+// never a log not yet copied to the archive nor one after the cutoff
+// LogCleanupTarget allows, and it removes every such log in one call, in
+// batches of at least LOG_HOT_CLEANUP_BATCH_SIZE, like the ClickHouse branch
+// below.
 func DeleteOldLogBatch(ctx context.Context, targetTimestamp int64, limit int) (int64, error) {
 	if limit <= 0 {
 		limit = 100
@@ -883,11 +889,7 @@ func DeleteOldLogBatch(ctx context.Context, targetTimestamp int64, limit int) (i
 	}
 
 	if LOG_COLD_DB != nil {
-		syncedId, _, err := coldLogSyncedId(ctx)
-		if err != nil {
-			return 0, err
-		}
-		return deleteSyncedHotLogBatch(ctx, targetTimestamp, syncedId, limit)
+		return deleteArchivedHotLogs(ctx, LogCleanupTarget(targetTimestamp, common.GetTimestamp()), max(limit, logHotCleanupBatchSize))
 	}
 
 	if common.UsingLogDatabase(common.DatabaseTypeClickHouse) {

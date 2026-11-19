@@ -244,3 +244,42 @@ func TestAcquireLogExportLock(t *testing.T) {
 		})
 	}
 }
+
+// TestLogSearchWithoutStartStaysOnHotStore checks that a user search without a
+// start, which the longest log time range fills in with a start far before the
+// hot retention, still reads the hot store instead of the cold archive.
+func TestLogSearchWithoutStartStaysOnHotStore(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	hot, _ := newAuditTestDatabase(t, "sqlite", "")
+	cold, _ := newAuditTestDatabase(t, "sqlite", "")
+	useLogExportDatabases(t, hot, hot, common.DatabaseTypeSQLite, common.DatabaseTypeSQLite)
+	require.NoError(t, hot.AutoMigrate(&model.Channel{}, &model.Log{}))
+	require.NoError(t, cold.AutoMigrate(&model.Log{}))
+	t.Setenv("LOG_HOT_RETENTION_DAYS", "30")
+	model.UseLogColdDB(cold)
+	t.Cleanup(func() { model.UseLogColdDB(nil) })
+	logSetting := operation_setting.GetLogSetting()
+	previousExport := logSetting.UserExportEnabled
+	logSetting.UserExportEnabled = true
+	t.Cleanup(func() { logSetting.UserExportEnabled = previousExport })
+
+	now := time.Now().Unix()
+	require.NoError(t, hot.Create(&model.Log{UserId: 1, CreatedAt: now - 60, Type: model.LogTypeConsume, Quota: 10, RequestId: "hot"}).Error)
+	require.NoError(t, cold.Create(&model.Log{Id: 1, UserId: 1, CreatedAt: now - 60, Type: model.LogTypeConsume, Quota: 1000, RequestId: "cold"}).Error)
+	listedRequestIds := func(query string) []any {
+		listed := callLogHandler(t, GetUserLogs, 1, common.RoleCommonUser, query)[0]
+		require.Equal(t, true, listed["success"])
+		ids := []any{}
+		for _, item := range listed["data"].(map[string]any)["items"].([]any) {
+			ids = append(ids, item.(map[string]any)["request_id"])
+		}
+		return ids
+	}
+
+	assert.Equal(t, []any{"cold"}, listedRequestIds(fmt.Sprintf("start_timestamp=%d", now-60*24*3600)), "an explicit old start reads the archive")
+	assert.Equal(t, []any{"hot"}, listedRequestIds(""))
+	assert.Equal(t, []any{"hot"}, exportedRequestIds(callLogHandler(t, ExportUserLogs, 1, common.RoleCommonUser, "")))
+	stat := callLogHandler(t, GetLogsSelfStat, 1, common.RoleCommonUser, "")[0]
+	require.Equal(t, true, stat["success"])
+	assert.EqualValues(t, 10, stat["data"].(map[string]any)["quota"])
+}

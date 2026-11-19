@@ -103,8 +103,11 @@ type LogCleanupState struct {
 	Remaining int64 `json:"remaining"`
 }
 
+// LogCleanupResult reports a finished log cleanup. TargetTimestamp is the
+// cutoff actually used, reported while a cold log archive is configured.
 type LogCleanupResult struct {
-	DeletedCount int64 `json:"deleted_count"`
+	DeletedCount    int64 `json:"deleted_count"`
+	TargetTimestamp int64 `json:"target_timestamp,omitempty"`
 }
 
 var (
@@ -363,6 +366,10 @@ func runLogCleanupTask(ctx context.Context, task *model.SystemTask, runnerID str
 	if payload.BatchSize <= 0 {
 		payload.BatchSize = logCleanupBatchSize
 	}
+	if target := model.LogCleanupTarget(payload.TargetTimestamp, common.GetTimestamp()); target != payload.TargetTimestamp {
+		common.SysLog(common.LogText("log cleanup target %d moved to %d to keep the hot log retention", payload.TargetTimestamp, target))
+		payload.TargetTimestamp = target
+	}
 
 	state := LogCleanupState{}
 	if err := task.DecodeState(&state); err != nil {
@@ -435,6 +442,9 @@ func runLogCleanupTask(ctx context.Context, task *model.SystemTask, runnerID str
 	}
 
 	result := LogCleanupResult{DeletedCount: state.Processed}
+	if model.ColdLogSyncEnabled() {
+		result.TargetTimestamp = payload.TargetTimestamp
+	}
 	if err := model.FinishSystemTask(task.TaskID, runnerID, model.SystemTaskStatusSucceeded, result, ""); err != nil {
 		logSystemTaskLockError(ctx, task, err)
 	}
