@@ -15,12 +15,12 @@ import (
 	"gorm.io/gorm"
 )
 
-func applyExplicitLogTextFilter(tx *gorm.DB, column string, value string) (*gorm.DB, error) {
+func applyExplicitLogTextFilter(tx *gorm.DB, clickHouse bool, column string, value string) (*gorm.DB, error) {
 	if value == "" {
 		return tx, nil
 	}
 	if strings.Contains(value, "%") {
-		condition, pattern, err := buildLogLikeCondition(column, value)
+		condition, pattern, err := buildLogLikeCondition(clickHouse, column, value)
 		if err != nil {
 			return nil, err
 		}
@@ -29,8 +29,8 @@ func applyExplicitLogTextFilter(tx *gorm.DB, column string, value string) (*gorm
 	return tx.Where(column+" = ?", value), nil
 }
 
-func buildLogLikeCondition(column string, value string) (string, string, error) {
-	if common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
+func buildLogLikeCondition(clickHouse bool, column string, value string) (string, string, error) {
+	if clickHouse {
 		pattern, err := sanitizeClickHouseLikePattern(value)
 		if err != nil {
 			return "", "", err
@@ -102,6 +102,20 @@ func createLog(log *Log) error {
 	return LOG_DB.Create(log).Error
 }
 
+// logStore is the logs table one search reads: the hot LOG_DB, or the cold
+// ClickHouse archive (see log_cold_storage.go). SQL syntax follows the store a
+// search actually uses, not the configured log database type alone.
+type logStore struct {
+	db         *gorm.DB
+	clickHouse bool
+	groupCol   string
+	cold       bool
+}
+
+func hotLogStore() logStore {
+	return logStore{db: LOG_DB, clickHouse: common.UsingLogDatabase(common.DatabaseTypeClickHouse), groupCol: logGroupCol}
+}
+
 func clickHouseLogOrder(prefix string) string {
 	return prefix + "created_at desc, " + prefix + "request_id desc"
 }
@@ -137,11 +151,12 @@ func FormatRootLogs(logs []*Log) {
 }
 
 func GetLogByTokenId(tokenId int) (logs []*Log, err error) {
+	store := hotLogStore()
 	order := "id desc"
-	if common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
+	if store.clickHouse {
 		order = clickHouseLogOrder("")
 	}
-	err = LOG_DB.Model(&Log{}).Where("token_id = ?", tokenId).Order(order).Limit(common.MaxRecentItems).Find(&logs).Error
+	err = store.db.Model(&Log{}).Where("token_id = ?", tokenId).Order(order).Limit(common.MaxRecentItems).Find(&logs).Error
 	formatUserLogs(logs, 0)
 	return logs, err
 }
@@ -479,28 +494,47 @@ func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
 
 // LogFilter is the usage-log search shared by the log list and the log export.
 // Username and Channel are administrator filters.
+//
+// StartFilledByRange marks a StartTimestamp filled in from the longest log time
+// range rather than given by the caller. Such a search stays on the hot log
+// store even though its start reaches back past the hot retention.
 type LogFilter struct {
-	Type              int
-	StartTimestamp    int64
-	EndTimestamp      int64
-	ModelName         string
-	Username          string
-	TokenName         string
-	Channel           int
-	Group             string
-	RequestId         string
-	UpstreamRequestId string
+	Type               int
+	StartTimestamp     int64
+	EndTimestamp       int64
+	ModelName          string
+	Username           string
+	TokenName          string
+	Channel            int
+	Group              string
+	RequestId          string
+	UpstreamRequestId  string
+	StartFilledByRange bool
 }
 
-func (f LogFilter) apply(tx *gorm.DB) (*gorm.DB, error) {
+// store picks the log store for the search from the start the caller gave.
+func (f LogFilter) store() logStore {
+	if f.StartFilledByRange {
+		return hotLogStore()
+	}
+	return logStoreForStart(f.StartTimestamp)
+}
+
+// fallsBackToCold reports whether a request id search that found nothing in
+// the hot store is repeated on the cold archive.
+func (f LogFilter) fallsBackToCold(store logStore) bool {
+	return !store.cold && coldLogRoutingEnabled() && (f.RequestId != "" || f.UpstreamRequestId != "")
+}
+
+func (f LogFilter) apply(store logStore, tx *gorm.DB) (*gorm.DB, error) {
 	var err error
 	if f.Type != LogTypeUnknown {
 		tx = tx.Where("logs.type = ?", f.Type)
 	}
-	if tx, err = applyExplicitLogTextFilter(tx, "logs.model_name", f.ModelName); err != nil {
+	if tx, err = applyExplicitLogTextFilter(tx, store.clickHouse, "logs.model_name", f.ModelName); err != nil {
 		return nil, err
 	}
-	if tx, err = applyExplicitLogTextFilter(tx, "logs.username", f.Username); err != nil {
+	if tx, err = applyExplicitLogTextFilter(tx, store.clickHouse, "logs.username", f.Username); err != nil {
 		return nil, err
 	}
 	if f.TokenName != "" {
@@ -522,30 +556,19 @@ func (f LogFilter) apply(tx *gorm.DB) (*gorm.DB, error) {
 		tx = tx.Where("logs.channel_id = ?", f.Channel)
 	}
 	if f.Group != "" {
-		tx = tx.Where("logs."+logGroupCol+" = ?", f.Group)
+		tx = tx.Where("logs."+store.groupCol+" = ?", f.Group)
 	}
 	return tx, nil
 }
 
 func GetAllLogs(filter LogFilter, startIdx int, num int) (logs []*Log, total int64, err error) {
-	tx, err := filter.apply(LOG_DB)
+	store := filter.store()
+	logs, total, err = findAllLogs(store, filter, startIdx, num)
+	if err == nil && total == 0 && filter.fallsBackToCold(store) {
+		logs, total, err = findAllLogs(coldLogStore(), filter, startIdx, num)
+	}
 	if err != nil {
 		return nil, 0, err
-	}
-	err = tx.Model(&Log{}).Count(&total).Error
-	if err != nil {
-		return nil, 0, err
-	}
-	order := "logs.created_at desc, logs.id desc"
-	if common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
-		order = clickHouseLogOrder("logs.")
-	}
-	err = tx.Order(order).Limit(num).Offset(startIdx).Find(&logs).Error
-	if err != nil {
-		return nil, 0, err
-	}
-	if common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
-		assignDisplayLogIds(logs, startIdx)
 	}
 
 	channelIds := types.NewSet[int]()
@@ -591,10 +614,48 @@ func GetAllLogs(filter LogFilter, startIdx int, num int) (logs []*Log, total int
 	return logs, total, err
 }
 
+// findAllLogs reads one page of the administrator log list from store.
+func findAllLogs(store logStore, filter LogFilter, startIdx int, num int) (logs []*Log, total int64, err error) {
+	tx, err := filter.apply(store, store.db)
+	if err != nil {
+		return nil, 0, err
+	}
+	err = tx.Model(&Log{}).Count(&total).Error
+	if err != nil {
+		return nil, 0, err
+	}
+	order := "logs.created_at desc, logs.id desc"
+	if store.clickHouse {
+		order = clickHouseLogOrder("logs.")
+	}
+	err = tx.Order(order).Limit(num).Offset(startIdx).Find(&logs).Error
+	if err != nil {
+		return nil, 0, err
+	}
+	if store.clickHouse {
+		assignDisplayLogIds(logs, startIdx)
+	}
+	return logs, total, nil
+}
+
 const logSearchCountLimit = 10000
 
 func GetUserLogs(userId int, filter LogFilter, startIdx int, num int) (logs []*Log, total int64, err error) {
-	tx, err := filter.apply(LOG_DB.Where("logs.user_id = ?", userId))
+	store := filter.store()
+	logs, total, err = findUserLogs(store, userId, filter, startIdx, num)
+	if err == nil && total == 0 && filter.fallsBackToCold(store) {
+		logs, total, err = findUserLogs(coldLogStore(), userId, filter, startIdx, num)
+	}
+	if err != nil {
+		return nil, 0, err
+	}
+	formatUserLogs(logs, startIdx)
+	return logs, total, nil
+}
+
+// findUserLogs reads one page of a user's own log list from store.
+func findUserLogs(store logStore, userId int, filter LogFilter, startIdx int, num int) (logs []*Log, total int64, err error) {
+	tx, err := filter.apply(store, store.db.Where("logs.user_id = ?", userId))
 	if err != nil {
 		return nil, 0, err
 	}
@@ -604,7 +665,7 @@ func GetUserLogs(userId int, filter LogFilter, startIdx int, num int) (logs []*L
 		return nil, 0, common.NewMessage("Failed to query logs")
 	}
 	order := "logs.id desc"
-	if common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
+	if store.clickHouse {
 		order = clickHouseLogOrder("logs.")
 	}
 	err = tx.Order(order).Limit(num).Offset(startIdx).Find(&logs).Error
@@ -612,25 +673,19 @@ func GetUserLogs(userId int, filter LogFilter, startIdx int, num int) (logs []*L
 		common.SysError(common.LogText("failed to search user logs: %s", err.Error()))
 		return nil, 0, common.NewMessage("Failed to query logs")
 	}
-
-	formatUserLogs(logs, startIdx)
-	return logs, total, err
+	return logs, total, nil
 }
 
 // StreamAllLogs calls fn with each log matching filter, newest first, as an
 // administrator with role sees it. Rows are read one at a time, so an export
 // never holds the whole result in memory.
 func StreamAllLogs(ctx context.Context, filter LogFilter, role int, fn func(*Log) error) error {
-	tx, err := filter.apply(LOG_DB.WithContext(ctx))
-	if err != nil {
-		return err
-	}
 	visibility := logOtherVisibilityAdmin
 	if role >= common.RoleRootUser {
 		visibility = logOtherVisibilityRoot
 	}
 	channelNames := make(map[int]string)
-	return streamLogs(tx, "logs.created_at desc, logs.id desc", func(log *Log) error {
+	return streamFilteredLogs(ctx, 0, filter, "logs.created_at desc, logs.id desc", func(log *Log) error {
 		if log.ChannelId != 0 {
 			name, ok := channelNames[log.ChannelId]
 			if !ok {
@@ -649,12 +704,8 @@ func StreamAllLogs(ctx context.Context, filter LogFilter, role int, fn func(*Log
 // StreamUserLogs is StreamAllLogs for one user's own logs, shaped like the
 // user log list.
 func StreamUserLogs(ctx context.Context, userId int, filter LogFilter, fn func(*Log) error) error {
-	tx, err := filter.apply(LOG_DB.WithContext(ctx).Where("logs.user_id = ?", userId))
-	if err != nil {
-		return err
-	}
 	count := 0
-	return streamLogs(tx, "logs.id desc", func(log *Log) error {
+	return streamFilteredLogs(ctx, userId, filter, "logs.id desc", func(log *Log) error {
 		count++
 		log.Id = count
 		log.ChannelName = ""
@@ -663,25 +714,48 @@ func StreamUserLogs(ctx context.Context, userId int, filter LogFilter, fn func(*
 	})
 }
 
-func streamLogs(tx *gorm.DB, order string, fn func(*Log) error) error {
-	if common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
+// streamFilteredLogs streams the logs matching filter from the store the
+// filter picks, and repeats a request id search on the cold archive when the
+// hot store had no match. A userId of 0 streams every user's logs.
+func streamFilteredLogs(ctx context.Context, userId int, filter LogFilter, order string, fn func(*Log) error) error {
+	store := filter.store()
+	streamed, err := streamLogs(ctx, store, userId, filter, order, fn)
+	if err != nil || streamed > 0 || !filter.fallsBackToCold(store) {
+		return err
+	}
+	_, err = streamLogs(ctx, coldLogStore(), userId, filter, order, fn)
+	return err
+}
+
+func streamLogs(ctx context.Context, store logStore, userId int, filter LogFilter, order string, fn func(*Log) error) (int, error) {
+	tx := store.db.WithContext(ctx)
+	if userId != 0 {
+		tx = tx.Where("logs.user_id = ?", userId)
+	}
+	tx, err := filter.apply(store, tx)
+	if err != nil {
+		return 0, err
+	}
+	if store.clickHouse {
 		order = clickHouseLogOrder("logs.")
 	}
 	rows, err := tx.Model(&Log{}).Order(order).Rows()
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer rows.Close()
+	streamed := 0
 	for rows.Next() {
 		var log Log
-		if err := LOG_DB.ScanRows(rows, &log); err != nil {
-			return err
+		if err := store.db.ScanRows(rows, &log); err != nil {
+			return streamed, err
 		}
+		streamed++
 		if err := fn(&log); err != nil {
-			return err
+			return streamed, err
 		}
 	}
-	return rows.Err()
+	return streamed, rows.Err()
 }
 
 type Stat struct {
@@ -690,16 +764,22 @@ type Stat struct {
 	Tpm   int `json:"tpm"`
 }
 
-func SumUsedQuota(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, channel int, group string) (stat Stat, err error) {
-	tx := LOG_DB.Table("logs").Select("COALESCE(sum(quota), 0) quota")
+// SumUsedQuota sums the consumed quota of the matching logs. startFilledByRange
+// marks a startTimestamp filled in from the longest log time range rather than
+// given by the caller, which keeps the sum on the hot log store. RPM and TPM
+// cover the last 60 seconds and always read the hot store.
+func SumUsedQuota(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, channel int, group string, startFilledByRange bool) (stat Stat, err error) {
+	store := LogFilter{StartTimestamp: startTimestamp, StartFilledByRange: startFilledByRange}.store()
+	hot := hotLogStore()
+	tx := store.db.Table("logs").Select("COALESCE(sum(quota), 0) quota")
 
 	// 为rpm和tpm创建单独的查询
-	rpmTpmQuery := LOG_DB.Table("logs").Select("count(*) rpm, COALESCE(sum(prompt_tokens), 0) + COALESCE(sum(completion_tokens), 0) tpm")
+	rpmTpmQuery := hot.db.Table("logs").Select("count(*) rpm, COALESCE(sum(prompt_tokens), 0) + COALESCE(sum(completion_tokens), 0) tpm")
 
-	if tx, err = applyExplicitLogTextFilter(tx, "username", username); err != nil {
+	if tx, err = applyExplicitLogTextFilter(tx, store.clickHouse, "username", username); err != nil {
 		return stat, err
 	}
-	if rpmTpmQuery, err = applyExplicitLogTextFilter(rpmTpmQuery, "username", username); err != nil {
+	if rpmTpmQuery, err = applyExplicitLogTextFilter(rpmTpmQuery, hot.clickHouse, "username", username); err != nil {
 		return stat, err
 	}
 	if tokenName != "" {
@@ -712,10 +792,10 @@ func SumUsedQuota(logType int, startTimestamp int64, endTimestamp int64, modelNa
 	if endTimestamp != 0 {
 		tx = tx.Where("created_at <= ?", endTimestamp)
 	}
-	if tx, err = applyExplicitLogTextFilter(tx, "model_name", modelName); err != nil {
+	if tx, err = applyExplicitLogTextFilter(tx, store.clickHouse, "model_name", modelName); err != nil {
 		return stat, err
 	}
-	if rpmTpmQuery, err = applyExplicitLogTextFilter(rpmTpmQuery, "model_name", modelName); err != nil {
+	if rpmTpmQuery, err = applyExplicitLogTextFilter(rpmTpmQuery, hot.clickHouse, "model_name", modelName); err != nil {
 		return stat, err
 	}
 	if channel != 0 {
@@ -723,8 +803,8 @@ func SumUsedQuota(logType int, startTimestamp int64, endTimestamp int64, modelNa
 		rpmTpmQuery = rpmTpmQuery.Where("channel_id = ?", channel)
 	}
 	if group != "" {
-		tx = tx.Where(logGroupCol+" = ?", group)
-		rpmTpmQuery = rpmTpmQuery.Where(logGroupCol+" = ?", group)
+		tx = tx.Where(store.groupCol+" = ?", group)
+		rpmTpmQuery = rpmTpmQuery.Where(hot.groupCol+" = ?", group)
 	}
 
 	tx = tx.Where("type = ?", LogTypeConsume)
@@ -753,7 +833,7 @@ func SumUsedQuota(logType int, startTimestamp int64, endTimestamp int64, modelNa
 }
 
 func SumUsedToken(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string) (token int) {
-	tx := LOG_DB.Table("logs").Select("COALESCE(sum(prompt_tokens), 0) + COALESCE(sum(completion_tokens), 0)")
+	tx := logStoreForStart(startTimestamp).db.Table("logs").Select("COALESCE(sum(prompt_tokens), 0) + COALESCE(sum(completion_tokens), 0)")
 	if username != "" {
 		tx = tx.Where("username = ?", username)
 	}
@@ -773,20 +853,41 @@ func SumUsedToken(logType int, startTimestamp int64, endTimestamp int64, modelNa
 	return token
 }
 
+// CountOldLog counts the logs the manual cleanup may delete. With a cold
+// archive configured it counts only hot logs already copied to the archive.
 func CountOldLog(ctx context.Context, targetTimestamp int64) (int64, error) {
+	tx := LOG_DB.WithContext(ctx).Model(&Log{}).Where("created_at < ?", targetTimestamp)
+	if LOG_COLD_DB != nil {
+		syncedId, _, err := coldLogSyncedId(ctx)
+		if err != nil {
+			return 0, err
+		}
+		tx = tx.Where("id <= ?", syncedId)
+	}
 	var total int64
-	if err := LOG_DB.WithContext(ctx).Model(&Log{}).Where("created_at < ?", targetTimestamp).Count(&total).Error; err != nil {
+	if err := tx.Count(&total).Error; err != nil {
 		return 0, err
 	}
 	return total, nil
 }
 
+// DeleteOldLogBatch deletes logs older than targetTimestamp for the manual
+// cleanup. With a cold archive configured it deletes from the hot store only,
+// never a log not yet copied to the archive, and at most limit rows per call.
 func DeleteOldLogBatch(ctx context.Context, targetTimestamp int64, limit int) (int64, error) {
 	if limit <= 0 {
 		limit = 100
 	}
 	if nil != ctx.Err() {
 		return 0, ctx.Err()
+	}
+
+	if LOG_COLD_DB != nil {
+		syncedId, _, err := coldLogSyncedId(ctx)
+		if err != nil {
+			return 0, err
+		}
+		return deleteSyncedHotLogBatch(ctx, targetTimestamp, syncedId, limit)
 	}
 
 	if common.UsingLogDatabase(common.DatabaseTypeClickHouse) {

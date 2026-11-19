@@ -81,6 +81,7 @@ func GetUserLogs(c *gin.Context) {
 			common.ApiError(c, err)
 			return
 		}
+		filter.StartFilledByRange = filter.StartTimestamp == 0
 		filter.StartTimestamp = startTimestamp
 	}
 	logs, total, err := model.GetUserLogs(c.GetInt("id"), filter, pageInfo.GetStartIdx(), pageInfo.GetPageSize())
@@ -119,6 +120,7 @@ func exportLogs(c *gin.Context, all bool) {
 		common.ApiError(c, err)
 		return
 	}
+	filter.StartFilledByRange = filter.StartTimestamp == 0
 	filter.StartTimestamp = startTimestamp
 
 	userId := c.GetInt("id")
@@ -209,7 +211,7 @@ func GetLogsStat(c *gin.Context) {
 	modelName := c.Query("model_name")
 	channel, _ := strconv.Atoi(c.Query("channel"))
 	group := c.Query("group")
-	stat, err := model.SumUsedQuota(logType, startTimestamp, endTimestamp, modelName, username, tokenName, channel, group)
+	stat, err := model.SumUsedQuota(logType, startTimestamp, endTimestamp, modelName, username, tokenName, channel, group, false)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -232,8 +234,10 @@ func GetLogsSelfStat(c *gin.Context) {
 	logType, _ := strconv.Atoi(c.Query("type"))
 	startTimestamp, _ := strconv.ParseInt(c.Query("start_timestamp"), 10, 64)
 	endTimestamp, _ := strconv.ParseInt(c.Query("end_timestamp"), 10, 64)
+	startFilledByRange := false
 	if c.GetInt("role") < common.RoleAdminUser {
 		var err error
+		startFilledByRange = startTimestamp == 0
 		if startTimestamp, err = limitLogTimeRange(startTimestamp, endTimestamp); err != nil {
 			common.ApiError(c, err)
 			return
@@ -243,7 +247,7 @@ func GetLogsSelfStat(c *gin.Context) {
 	modelName := c.Query("model_name")
 	channel, _ := strconv.Atoi(c.Query("channel"))
 	group := c.Query("group")
-	quotaNum, err := model.SumUsedQuota(logType, startTimestamp, endTimestamp, modelName, username, tokenName, channel, group)
+	quotaNum, err := model.SumUsedQuota(logType, startTimestamp, endTimestamp, modelName, username, tokenName, channel, group, startFilledByRange)
 	if err != nil {
 		common.ApiError(c, err)
 		return

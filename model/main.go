@@ -807,6 +807,11 @@ func closeDB(db *gorm.DB) error {
 }
 
 func CloseDB() error {
+	if LOG_COLD_DB != nil {
+		if err := closeDB(LOG_COLD_DB); err != nil {
+			return err
+		}
+	}
 	if LOG_DB != DB {
 		err := closeDB(LOG_DB)
 		if err != nil {

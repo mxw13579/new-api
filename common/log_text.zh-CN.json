@@ -868,5 +868,12 @@
   "zhipu_image_missing_url": "智谱图片接口没有返回 URL",
   "¥%.6f quota": "¥%.6f 额度",
   "＄%.6f quota": "＄%.6f 额度",
-  "plugin scheduled failed: plugin=%s channel_id=%d key_index=%d category=%s": "插件定时任务失败：plugin=%s channel_id=%d key_index=%d category=%s"
+  "plugin scheduled failed: plugin=%s channel_id=%d key_index=%d category=%s": "插件定时任务失败：plugin=%s channel_id=%d key_index=%d category=%s",
+  "LOG_HOT_CLEANUP_ENABLED is ignored because LOG_HOT_RETENTION_DAYS is not set": "未设置 LOG_HOT_RETENTION_DAYS，已忽略 LOG_HOT_CLEANUP_ENABLED",
+  "using ClickHouse as cold log archive: hot retention %d days, hot cleanup %t": "冷日志归档使用 ClickHouse：热库保留 %d 天，热库清理 %t",
+  "cold log sync: deleting %d archived logs above synced id %d left by a failed run": "冷日志同步：删除失败运行遗留的 %d 条已同步 id %d 之后的归档日志",
+  "cold log sync: synced id %d, copied %d, behind %d": "冷日志同步：已同步到 id %d，本轮复制 %d 条，落后 %d 条",
+  "hot log cleanup: deleted %d logs created before %d up to synced id %d": "热库日志清理：删除 %d 条创建于 %d 之前且 id 不超过已同步 id %d 的日志",
+  "cold log sync failed at synced id %d: %s": "冷日志同步失败，已同步到 id %d: %s",
+  "hot log cleanup failed after deleting %d logs: %s": "热库日志清理在删除 %d 条后失败: %s"
 }

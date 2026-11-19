@@ -28,7 +28,59 @@ func scheduledSystemTaskHandlers() []service.SystemTaskHandler {
 		systemTaskCleanupHandler{},
 		service.NewInvoicePaymentEvidenceApplyHandler(), service.NewInvoiceFeeRefundSettlementHandler(),
 		service.NewInvoiceDocumentCleanupHandler(),
+		coldLogSyncHandler{}, hotLogCleanupHandler{},
 	}
+}
+
+// coldLogSyncHandler copies new hot logs to the cold archive every minute
+// while LOG_COLD_SQL_DSN is set. A failed run is logged and retried by the
+// next one.
+type coldLogSyncHandler struct{}
+
+func (coldLogSyncHandler) Type() string { return model.SystemTaskTypeColdLogSync }
+
+func (coldLogSyncHandler) Enabled() bool { return model.ColdLogSyncEnabled() }
+
+func (coldLogSyncHandler) Interval() time.Duration { return time.Minute }
+
+func (coldLogSyncHandler) NewPayload() any { return nil }
+
+func (coldLogSyncHandler) Run(ctx context.Context, task *model.SystemTask, runnerID string) {
+	result, err := model.SyncColdLogs(ctx, common.GetTimestamp())
+	if ctx.Err() != nil {
+		return
+	}
+	status := model.SystemTaskStatusSucceeded
+	if err != nil {
+		common.SysError(common.LogText("cold log sync failed at synced id %d: %s", result.SyncedId, err.Error()))
+		status = model.SystemTaskStatusFailed
+	}
+	finishSystemTaskHandler(task, runnerID, status, result, err)
+}
+
+// hotLogCleanupHandler deletes archived hot logs past the hot retention every
+// hour while LOG_HOT_CLEANUP_ENABLED is on.
+type hotLogCleanupHandler struct{}
+
+func (hotLogCleanupHandler) Type() string { return model.SystemTaskTypeHotLogCleanup }
+
+func (hotLogCleanupHandler) Enabled() bool { return model.HotLogCleanupEnabled() }
+
+func (hotLogCleanupHandler) Interval() time.Duration { return time.Hour }
+
+func (hotLogCleanupHandler) NewPayload() any { return nil }
+
+func (hotLogCleanupHandler) Run(ctx context.Context, task *model.SystemTask, runnerID string) {
+	deleted, err := model.CleanupHotLogs(ctx, common.GetTimestamp())
+	if ctx.Err() != nil {
+		return
+	}
+	status := model.SystemTaskStatusSucceeded
+	if err != nil {
+		common.SysError(common.LogText("hot log cleanup failed after deleting %d logs: %s", deleted, err.Error()))
+		status = model.SystemTaskStatusFailed
+	}
+	finishSystemTaskHandler(task, runnerID, status, map[string]int64{"deleted_count": deleted}, err)
 }
 
 // systemTaskCleanupHandler deletes, once a day, the finished system tasks

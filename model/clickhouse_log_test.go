@@ -108,7 +108,7 @@ func TestBuildLogLikeConditionUsesStandardEscape(t *testing.T) {
 	})
 	common.SetLogDatabaseType(common.DatabaseTypeSQLite)
 
-	condition, pattern, err := buildLogLikeCondition("logs.model_name", "gpt_4%")
+	condition, pattern, err := buildLogLikeCondition(common.UsingLogDatabase(common.DatabaseTypeClickHouse), "logs.model_name", "gpt_4%")
 
 	require.NoError(t, err)
 	assert.Equal(t, "logs.model_name LIKE ? ESCAPE '!'", condition)
@@ -122,7 +122,7 @@ func TestBuildLogLikeConditionUsesClickHouseEscaping(t *testing.T) {
 	})
 	common.SetLogDatabaseType(common.DatabaseTypeClickHouse)
 
-	condition, pattern, err := buildLogLikeCondition("logs.model_name", `gpt_4\mini%`)
+	condition, pattern, err := buildLogLikeCondition(common.UsingLogDatabase(common.DatabaseTypeClickHouse), "logs.model_name", `gpt_4\mini%`)
 
 	require.NoError(t, err)
 	assert.Equal(t, "logs.model_name LIKE ?", condition)
