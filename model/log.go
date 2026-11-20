@@ -121,18 +121,6 @@ func clickHouseLogOrder(prefix string) string {
 	return prefix + "created_at desc, " + prefix + "request_id desc"
 }
 
-// clickHouseListOrder is the newest-first order of log lists and exports on a
-// ClickHouse store. The cold archive keeps the hot store's ids, so they break
-// ties between logs of the same second and request id and pages stay stable.
-// A ClickHouse LOG_DB keeps the plain order, as its ids do not carry that meaning.
-func (s logStore) clickHouseListOrder() string {
-	order := clickHouseLogOrder("logs.")
-	if s.cold {
-		order += ", logs.id desc"
-	}
-	return order
-}
-
 func assignDisplayLogIds(logs []*Log, startIdx int) {
 	for i := range logs {
 		logs[i].Id = startIdx + i + 1
@@ -646,7 +634,7 @@ func findAllLogs(store logStore, filter LogFilter, startIdx int, num int) (logs 
 	}
 	order := "logs.created_at desc, logs.id desc"
 	if store.clickHouse {
-		order = store.clickHouseListOrder()
+		order = clickHouseLogOrder("logs.")
 	}
 	err = tx.Order(order).Limit(num).Offset(startIdx).Find(&logs).Error
 	if err != nil {
@@ -694,7 +682,7 @@ func findUserLogs(store logStore, userId int, filter LogFilter, startIdx int, nu
 	}
 	order := "logs.id desc"
 	if store.clickHouse {
-		order = store.clickHouseListOrder()
+		order = clickHouseLogOrder("logs.")
 	}
 	err = tx.Order(order).Limit(num).Offset(startIdx).Find(&logs).Error
 	if err != nil {
@@ -777,7 +765,7 @@ func streamLogs(ctx context.Context, store logStore, userId int, filter LogFilte
 		return 0, err
 	}
 	if store.clickHouse {
-		order = store.clickHouseListOrder()
+		order = clickHouseLogOrder("logs.")
 	}
 	rows, err := tx.Model(&Log{}).Order(order).Rows()
 	if err != nil {
