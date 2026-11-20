@@ -2,6 +2,7 @@ package model
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"time"
 
@@ -513,9 +514,11 @@ type LogFilter struct {
 }
 
 // store picks the log store for the search from the start the caller gave.
-func (f LogFilter) store() logStore {
+// It fails when the search belongs on the cold archive and the archive is not
+// connected.
+func (f LogFilter) store() (logStore, error) {
 	if f.StartFilledByRange {
-		return hotLogStore()
+		return hotLogStore(), nil
 	}
 	return logStoreForStart(f.StartTimestamp)
 }
@@ -562,10 +565,15 @@ func (f LogFilter) apply(store logStore, tx *gorm.DB) (*gorm.DB, error) {
 }
 
 func GetAllLogs(filter LogFilter, startIdx int, num int) (logs []*Log, total int64, err error) {
-	store := filter.store()
+	store, err := filter.store()
+	if err != nil {
+		return nil, 0, err
+	}
 	logs, total, err = findAllLogs(store, filter, startIdx, num)
 	if err == nil && total == 0 && filter.fallsBackToCold(store) {
-		logs, total, err = findAllLogs(coldLogStore(), filter, startIdx, num)
+		if store, err = coldLogStore(); err == nil {
+			logs, total, err = findAllLogs(store, filter, startIdx, num)
+		}
 	}
 	if err != nil {
 		return nil, 0, err
@@ -641,10 +649,18 @@ func findAllLogs(store logStore, filter LogFilter, startIdx int, num int) (logs 
 const logSearchCountLimit = 10000
 
 func GetUserLogs(userId int, filter LogFilter, startIdx int, num int) (logs []*Log, total int64, err error) {
-	store := filter.store()
-	logs, total, err = findUserLogs(store, userId, filter, startIdx, num)
+	store, err := filter.store()
+	if err == nil {
+		logs, total, err = findUserLogs(store, userId, filter, startIdx, num)
+	}
 	if err == nil && total == 0 && filter.fallsBackToCold(store) {
-		logs, total, err = findUserLogs(coldLogStore(), userId, filter, startIdx, num)
+		if store, err = coldLogStore(); err == nil {
+			logs, total, err = findUserLogs(store, userId, filter, startIdx, num)
+		}
+	}
+	if errors.Is(err, errLogColdArchiveUnavailable) {
+		common.SysError(common.LogText("failed to search user logs: %s", err.Error()))
+		return nil, 0, common.NewMessage("Failed to query logs")
 	}
 	if err != nil {
 		return nil, 0, err
@@ -718,12 +734,18 @@ func StreamUserLogs(ctx context.Context, userId int, filter LogFilter, fn func(*
 // filter picks, and repeats a request id search on the cold archive when the
 // hot store had no match. A userId of 0 streams every user's logs.
 func streamFilteredLogs(ctx context.Context, userId int, filter LogFilter, order string, fn func(*Log) error) error {
-	store := filter.store()
+	store, err := filter.store()
+	if err != nil {
+		return err
+	}
 	streamed, err := streamLogs(ctx, store, userId, filter, order, fn)
 	if err != nil || streamed > 0 || !filter.fallsBackToCold(store) {
 		return err
 	}
-	_, err = streamLogs(ctx, coldLogStore(), userId, filter, order, fn)
+	if store, err = coldLogStore(); err != nil {
+		return err
+	}
+	_, err = streamLogs(ctx, store, userId, filter, order, fn)
 	return err
 }
 
@@ -769,7 +791,11 @@ type Stat struct {
 // given by the caller, which keeps the sum on the hot log store. RPM and TPM
 // cover the last 60 seconds and always read the hot store.
 func SumUsedQuota(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, channel int, group string, startFilledByRange bool) (stat Stat, err error) {
-	store := LogFilter{StartTimestamp: startTimestamp, StartFilledByRange: startFilledByRange}.store()
+	store, err := LogFilter{StartTimestamp: startTimestamp, StartFilledByRange: startFilledByRange}.store()
+	if err != nil {
+		common.SysError(common.LogText("failed to query log stat: %s", err.Error()))
+		return stat, common.NewMessage("Failed to query statistics")
+	}
 	hot := hotLogStore()
 	tx := store.db.Table("logs").Select("COALESCE(sum(quota), 0) quota")
 
@@ -833,7 +859,11 @@ func SumUsedQuota(logType int, startTimestamp int64, endTimestamp int64, modelNa
 }
 
 func SumUsedToken(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string) (token int) {
-	tx := logStoreForStart(startTimestamp).db.Table("logs").Select("COALESCE(sum(prompt_tokens), 0) + COALESCE(sum(completion_tokens), 0)")
+	store, err := logStoreForStart(startTimestamp)
+	if err != nil {
+		return 0
+	}
+	tx := store.db.Table("logs").Select("COALESCE(sum(prompt_tokens), 0) + COALESCE(sum(completion_tokens), 0)")
 	if username != "" {
 		tx = tx.Where("username = ?", username)
 	}
@@ -855,12 +885,16 @@ func SumUsedToken(logType int, startTimestamp int64, endTimestamp int64, modelNa
 
 // CountOldLog counts the logs the manual cleanup may delete. With a cold
 // archive configured it counts only hot logs already copied to the archive,
-// before the cutoff LogCleanupTarget allows.
+// before the cutoff LogCleanupTarget allows, and fails while the archive is not
+// connected.
 func CountOldLog(ctx context.Context, targetTimestamp int64) (int64, error) {
 	tx := LOG_DB.WithContext(ctx).Model(&Log{})
-	if LOG_COLD_DB == nil {
+	if !logColdConfigured {
 		tx = tx.Where("created_at < ?", targetTimestamp)
 	} else {
+		if _, err := coldLogStore(); err != nil {
+			return 0, err
+		}
 		state, _, err := coldLogSyncState(ctx)
 		if err != nil {
 			return 0, err
@@ -888,7 +922,7 @@ func DeleteOldLogBatch(ctx context.Context, targetTimestamp int64, limit int) (i
 		return 0, ctx.Err()
 	}
 
-	if LOG_COLD_DB != nil {
+	if logColdConfigured {
 		return deleteArchivedHotLogs(ctx, LogCleanupTarget(targetTimestamp, common.GetTimestamp()), max(limit, logHotCleanupBatchSize))
 	}
 

@@ -876,5 +876,6 @@
   "hot log cleanup: deleted %d archived logs created before %d": "热库日志清理：删除 %d 条创建于 %d 之前且已归档的日志",
   "log cleanup target %d moved to %d to keep the hot log retention": "为保留热库日志保留期，日志清理截止时间由 %d 调整为 %d",
   "cold log sync failed at synced id %d: %s": "冷日志同步失败，已同步到 id %d: %s",
-  "hot log cleanup failed after deleting %d logs: %s": "热库日志清理在删除 %d 条后失败: %s"
+  "hot log cleanup failed after deleting %d logs: %s": "热库日志清理在删除 %d 条后失败: %s",
+  "cold log archive is unavailable; the cold log sync retries it, hot log cleanup and archive searches fail until then: %s": "冷日志归档不可用；冷日志同步会重试连接，在此之前热库日志清理和归档查询都会失败: %s"
 }

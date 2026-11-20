@@ -38,17 +38,19 @@ func openColdLogTestSQLite(t *testing.T, name string) *gorm.DB {
 // settings for one test, restoring the previous ones afterwards.
 func useColdLogStores(t *testing.T, hot *gorm.DB, cold *gorm.DB, retentionDays int, cleanup bool) {
 	t.Helper()
-	previousLogDB, previousColdDB := LOG_DB, LOG_COLD_DB
+	previousLogDB, previousColdDB, previousConfigured, previousDSN := LOG_DB, logColdDB.Load(), logColdConfigured, logColdDSN
 	previousRetention, previousCleanup := logHotRetentionDays, logHotCleanupEnabled
 	previousSyncBatch, previousCleanupBatch, previousPause := logColdSyncBatchSize, logHotCleanupBatchSize, logHotCleanupPause
 	previousMemoryCache := common.MemoryCacheEnabled
 	t.Cleanup(func() {
-		LOG_DB, LOG_COLD_DB = previousLogDB, previousColdDB
+		LOG_DB, logColdConfigured, logColdDSN = previousLogDB, previousConfigured, previousDSN
+		logColdDB.Store(previousColdDB)
 		logHotRetentionDays, logHotCleanupEnabled = previousRetention, previousCleanup
 		logColdSyncBatchSize, logHotCleanupBatchSize, logHotCleanupPause = previousSyncBatch, previousCleanupBatch, previousPause
 		common.MemoryCacheEnabled = previousMemoryCache
 	})
-	LOG_DB, LOG_COLD_DB = hot, cold
+	LOG_DB, logColdConfigured = hot, cold != nil
+	logColdDB.Store(cold)
 	logHotRetentionDays, logHotCleanupEnabled = retentionDays, cleanup
 	logHotCleanupPause = 0
 	common.MemoryCacheEnabled = false
@@ -104,7 +106,8 @@ func TestLogSearchRoutesByCallerStart(t *testing.T) {
 				{Id: 2, UserId: 1, Username: "alice", CreatedAt: now - 120, Type: LogTypeConsume, Quota: 100, RequestId: "cold-recent"},
 			}).Error)
 			if tc.noCold {
-				LOG_COLD_DB = nil
+				logColdConfigured = false
+				logColdDB.Store(nil)
 			}
 
 			logs, total, err := GetAllLogs(tc.filter, 0, 10)
@@ -350,6 +353,155 @@ func TestHotLogCleanupKeepsUnsyncedAndRecentLogs(t *testing.T) {
 	})
 }
 
+func TestSyncColdLogsStopsWhenProgressFallsBehindArchive(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now().Unix()
+	hot, cold := newSQLiteColdLogStores(t, 30, false)
+	logColdSyncBatchSize = 2
+	for id := 1; id <= 6; id++ {
+		require.NoError(t, hot.Create(&Log{Id: id, CreatedAt: now - 1000, RequestId: fmt.Sprintf("r%d", id)}).Error)
+	}
+	_, err := SyncColdLogs(ctx, now)
+	require.NoError(t, err)
+	require.Equal(t, []int{1, 2, 3, 4, 5, 6}, logIds(t, cold))
+	setProgress := func(t *testing.T, syncedId int64, syncedCreatedAt int64) {
+		require.NoError(t, hot.Model(&LogColdSyncState{}).Where("name = ?", logColdSyncStateName).
+			Updates(map[string]any{"synced_id": syncedId, "synced_created_at": syncedCreatedAt}).Error)
+	}
+
+	// Ids 4 to 6 above the progress are more than one batch.
+	setProgress(t, 3, now-1000)
+	_, err = SyncColdLogs(ctx, now)
+	require.ErrorContains(t, err, "need manual repair")
+	assert.Equal(t, []int{1, 2, 3, 4, 5, 6}, logIds(t, cold))
+
+	setProgress(t, 0, 0)
+	_, err = SyncColdLogs(ctx, now)
+	require.ErrorContains(t, err, "need manual repair")
+	assert.Equal(t, []int{1, 2, 3, 4, 5, 6}, logIds(t, cold))
+
+	// Ids 5 and 6 fit in one batch, so they are deleted and rewritten.
+	setProgress(t, 4, now-1000)
+	result, err := SyncColdLogs(ctx, now)
+	require.NoError(t, err)
+	assert.EqualValues(t, 6, result.SyncedId)
+	assert.EqualValues(t, 2, result.Copied)
+	assert.Equal(t, []int{1, 2, 3, 4, 5, 6}, logIds(t, cold))
+
+	// A first run that wrote one batch without recording it is redone.
+	require.NoError(t, cold.Where("id > ?", 2).Delete(&Log{}).Error)
+	setProgress(t, 0, 0)
+	result, err = SyncColdLogs(ctx, now)
+	require.NoError(t, err)
+	assert.EqualValues(t, 6, result.Copied)
+	assert.Equal(t, []int{1, 2, 3, 4, 5, 6}, logIds(t, cold))
+}
+
+func TestHotLogCleanupChecksEachBatchInArchive(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now().Unix()
+	seed := func(t *testing.T) *gorm.DB {
+		hot, cold := newSQLiteColdLogStores(t, 30, true)
+		logHotCleanupBatchSize = 2
+		var logs []Log
+		for id := 1; id <= 6; id++ {
+			logs = append(logs, Log{Id: id, CreatedAt: now - 40*testDay + int64(id)})
+		}
+		require.NoError(t, hot.Create(&logs).Error)
+		require.NoError(t, cold.Create(&logs).Error)
+		require.NoError(t, hot.Create(&LogColdSyncState{Name: logColdSyncStateName, SyncedId: 6, SyncedCreatedAt: logs[5].CreatedAt}).Error)
+		// The archive lost ids 3 and 4 but still holds the progress.
+		require.NoError(t, cold.Where("id IN ?", []int{3, 4}).Delete(&Log{}).Error)
+		return hot
+	}
+
+	t.Run("scheduled cleanup", func(t *testing.T) {
+		hot := seed(t)
+		deleted, err := CleanupHotLogs(ctx, now)
+		require.ErrorContains(t, err, "holds 0 of the 2 hot logs with ids 3 to 4")
+		assert.EqualValues(t, 2, deleted)
+		assert.Equal(t, []int{3, 4, 5, 6}, logIds(t, hot))
+	})
+
+	t.Run("manual cleanup", func(t *testing.T) {
+		hot := seed(t)
+		deleted, err := DeleteOldLogBatch(ctx, now, 1)
+		require.ErrorContains(t, err, "holds 0 of the 2 hot logs with ids 3 to 4")
+		assert.EqualValues(t, 2, deleted)
+		assert.Equal(t, []int{3, 4, 5, 6}, logIds(t, hot))
+	})
+}
+
+func TestColdLogArchiveUnavailable(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now().Unix()
+	hot, cold := newSQLiteColdLogStores(t, 30, true)
+	previousMaster := common.IsMasterNode
+	t.Cleanup(func() { common.IsMasterNode = previousMaster })
+	common.IsMasterNode = true
+	t.Setenv("LOG_SQL_DSN", "")
+	t.Setenv("LOG_COLD_SQL_DSN", "clickhouse://127.0.0.1:1/default?dial_timeout=1s")
+	t.Setenv("LOG_HOT_RETENTION_DAYS", "30")
+	t.Setenv("LOG_HOT_CLEANUP_ENABLED", "true")
+	t.Setenv("LOG_HOT_CLEANUP_BATCH_SIZE", "1")
+
+	// An unreachable archive does not fail startup, but it stays not connected.
+	require.NoError(t, InitLogColdDB())
+	assert.True(t, ColdLogSyncEnabled())
+	assert.True(t, HotLogCleanupEnabled())
+	assert.Nil(t, logColdDB.Load())
+
+	logs := []Log{
+		{Id: 1, UserId: 1, CreatedAt: now - 40*testDay, Type: LogTypeConsume, Quota: 7, RequestId: "old"},
+		{Id: 2, UserId: 1, CreatedAt: now - 1000, Type: LogTypeConsume, Quota: 3, RequestId: "recent"},
+	}
+	require.NoError(t, hot.Create(&logs).Error)
+	require.NoError(t, cold.Create(logs[:1]).Error)
+	require.NoError(t, hot.Create(&LogColdSyncState{Name: logColdSyncStateName, SyncedId: 1, SyncedCreatedAt: logs[0].CreatedAt}).Error)
+
+	_, err := CleanupHotLogs(ctx, now)
+	require.ErrorIs(t, err, errLogColdArchiveUnavailable)
+	_, err = CountOldLog(ctx, now)
+	require.ErrorIs(t, err, errLogColdArchiveUnavailable)
+	_, err = DeleteOldLogBatch(ctx, now, 100)
+	require.ErrorIs(t, err, errLogColdArchiveUnavailable)
+	assert.Equal(t, []int{1, 2}, logIds(t, hot), "no hot log is deleted while the archive is not connected")
+
+	oldSearch := LogFilter{StartTimestamp: now - 60*testDay}
+	_, _, err = GetAllLogs(oldSearch, 0, 10)
+	require.ErrorIs(t, err, errLogColdArchiveUnavailable)
+	_, _, err = GetAllLogs(LogFilter{RequestId: "missing"}, 0, 10)
+	require.ErrorIs(t, err, errLogColdArchiveUnavailable, "a request id fallback fails instead of reporting no match")
+	_, _, err = GetUserLogs(1, oldSearch, 0, 10)
+	require.Error(t, err)
+	require.Error(t, StreamUserLogs(ctx, 1, oldSearch, func(*Log) error { return nil }))
+	_, err = SumUsedQuota(LogTypeUnknown, oldSearch.StartTimestamp, 0, "", "", "", 0, "", false)
+	require.Error(t, err)
+	recent, _, err := GetAllLogs(LogFilter{}, 0, 10)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"recent", "old"}, requestIdsOf(recent), "hot searches keep working")
+
+	_, err = SyncColdLogs(ctx, now)
+	require.ErrorIs(t, err, errLogColdArchiveUnavailable)
+
+	// Once the archive is connected the sync and the cleanup resume.
+	logColdDB.Store(cold)
+	result, err := SyncColdLogs(ctx, now)
+	require.NoError(t, err)
+	assert.EqualValues(t, 2, result.SyncedId)
+	assert.Equal(t, []int{1, 2}, logIds(t, cold))
+	deleted, err := CleanupHotLogs(ctx, now)
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, deleted)
+	assert.Equal(t, []int{2}, logIds(t, hot))
+
+	t.Setenv("LOG_SQL_DSN", "clickhouse://127.0.0.1:1/default")
+	require.ErrorContains(t, InitLogColdDB(), "cannot be used together with LOG_SQL_DSN")
+	t.Setenv("LOG_SQL_DSN", "")
+	t.Setenv("LOG_COLD_SQL_DSN", "postgres://127.0.0.1:1/logs")
+	require.ErrorContains(t, InitLogColdDB(), "only supports ClickHouse")
+}
+
 // TestColdLogStorageOnPostgresAndClickHouse runs the hot/cold flow on a real
 // PostgreSQL hot store and a real ClickHouse archive. Set TEST_POSTGRES_DSN and
 // TEST_CLICKHOUSE_DSN to loopback instances to run it.
@@ -394,8 +546,8 @@ func TestColdLogStorageOnPostgresAndClickHouse(t *testing.T) {
 		common.SetDatabaseTypes(previousMain, previousLog)
 		initCol()
 		common.IsMasterNode = previousMaster
-		if LOG_COLD_DB != nil {
-			assert.NoError(t, closeDB(LOG_COLD_DB))
+		if coldDB := logColdDB.Load(); coldDB != nil {
+			assert.NoError(t, closeDB(coldDB))
 		}
 	})
 	common.SetDatabaseTypes(common.DatabaseTypePostgreSQL, common.DatabaseTypePostgreSQL)
@@ -410,9 +562,12 @@ func TestColdLogStorageOnPostgresAndClickHouse(t *testing.T) {
 	t.Setenv("LOG_HOT_CLEANUP_BATCH_SIZE", "1")
 	// Startup runs twice to show the archive and progress tables are created idempotently.
 	require.NoError(t, InitLogColdDB())
-	require.NoError(t, closeDB(LOG_COLD_DB))
+	require.NoError(t, closeDB(logColdDB.Load()))
+	logColdDB.Store(nil)
 	require.NoError(t, InitLogColdDB())
 	logHotCleanupPause = 0
+	coldDB := logColdDB.Load()
+	require.NotNil(t, coldDB)
 
 	now := time.Now().Unix()
 	require.NoError(t, hot.Create(&[]Log{
@@ -428,19 +583,19 @@ func TestColdLogStorageOnPostgresAndClickHouse(t *testing.T) {
 	assert.EqualValues(t, 1, result.Lag)
 	assert.EqualValues(t, 1000, result.LagSeconds)
 	var archived []Log
-	require.NoError(t, LOG_COLD_DB.Order("id").Find(&archived).Error)
+	require.NoError(t, coldDB.Order("id").Find(&archived).Error)
 	require.Len(t, archived, 3)
 	assert.Equal(t, "old-1", archived[0].RequestId)
 	assert.True(t, archived[0].IsStream)
 	assert.Equal(t, "vip", archived[0].Group)
 
 	// A leftover row above the progress is removed with a ClickHouse mutation.
-	require.NoError(t, LOG_COLD_DB.Create(&Log{Id: archived[2].Id + 1, CreatedAt: now - 10, RequestId: "fresh"}).Error)
+	require.NoError(t, coldDB.Create(&Log{Id: archived[2].Id + 1, CreatedAt: now - 10, RequestId: "fresh"}).Error)
 	result, err = SyncColdLogs(ctx, now+400)
 	require.NoError(t, err)
 	assert.EqualValues(t, 1, result.Copied)
 	var coldCount int64
-	require.NoError(t, LOG_COLD_DB.Model(&Log{}).Count(&coldCount).Error)
+	require.NoError(t, coldDB.Model(&Log{}).Count(&coldCount).Error)
 	assert.EqualValues(t, 4, coldCount)
 
 	oldStart := now - 60*testDay
@@ -484,17 +639,17 @@ func TestColdLogStorageOnPostgresAndClickHouse(t *testing.T) {
 	// cloud table, and show identical blocks are dropped unless the archive
 	// write turns deduplication off.
 	type dedupProbe struct{ Id int64 }
-	require.NoError(t, LOG_COLD_DB.Exec("CREATE TABLE dedup_probe (id Int64) ENGINE = MergeTree ORDER BY id SETTINGS non_replicated_deduplication_window = 100").Error)
+	require.NoError(t, coldDB.Exec("CREATE TABLE dedup_probe (id Int64) ENGINE = MergeTree ORDER BY id SETTINGS non_replicated_deduplication_window = 100").Error)
 	probeCount := func() int64 {
 		var count int64
-		require.NoError(t, LOG_COLD_DB.Table("dedup_probe").Count(&count).Error)
+		require.NoError(t, coldDB.Table("dedup_probe").Count(&count).Error)
 		return count
 	}
 	for range 2 {
-		require.NoError(t, LOG_COLD_DB.Table("dedup_probe").Create(&[]dedupProbe{{Id: 1}, {Id: 2}}).Error)
+		require.NoError(t, coldDB.Table("dedup_probe").Create(&[]dedupProbe{{Id: 1}, {Id: 2}}).Error)
 	}
 	assert.EqualValues(t, 2, probeCount(), "the second identical block is deduplicated")
-	require.NoError(t, LOG_COLD_DB.WithContext(coldLogInsertContext(ctx)).Table("dedup_probe").Create(&[]dedupProbe{{Id: 1}, {Id: 2}}).Error)
+	require.NoError(t, coldDB.WithContext(coldLogInsertContext(ctx)).Table("dedup_probe").Create(&[]dedupProbe{{Id: 1}, {Id: 2}}).Error)
 	assert.EqualValues(t, 4, probeCount(), "the archive write context turns deduplication off")
 
 	// A batch the server stored while the client saw an error is deleted and
@@ -502,7 +657,7 @@ func TestColdLogStorageOnPostgresAndClickHouse(t *testing.T) {
 	// MergeTree forgets a block's hash once its part is dropped, so this cannot
 	// replay a replicated table keeping the hash; the probe above shows the
 	// archive write turns deduplication off on the server.
-	require.NoError(t, LOG_COLD_DB.Exec("ALTER TABLE logs MODIFY SETTING non_replicated_deduplication_window = 1000").Error)
+	require.NoError(t, coldDB.Exec("ALTER TABLE logs MODIFY SETTING non_replicated_deduplication_window = 1000").Error)
 	require.NoError(t, hot.Create(&[]Log{
 		{UserId: 3, Username: "carol", CreatedAt: now - 1000, Type: LogTypeConsume, RequestId: "late-1"},
 		{UserId: 3, Username: "carol", CreatedAt: now - 1000, Type: LogTypeConsume, RequestId: "late-2"},
@@ -513,18 +668,66 @@ func TestColdLogStorageOnPostgresAndClickHouse(t *testing.T) {
 	require.NoError(t, hot.Where("id > ?", state.SyncedId).Order("id").Limit(2).Find(&batch).Error)
 	require.Len(t, batch, 2)
 	for range 2 {
-		require.NoError(t, LOG_COLD_DB.Create(&batch).Error)
+		require.NoError(t, coldDB.Create(&batch).Error)
 	}
-	require.NoError(t, LOG_COLD_DB.Model(&Log{}).Count(&coldCount).Error)
+	require.NoError(t, coldDB.Model(&Log{}).Count(&coldCount).Error)
 	assert.EqualValues(t, 6, coldCount, "the archive now deduplicates an identical batch")
 	result, err = SyncColdLogs(ctx, now+400)
 	require.NoError(t, err)
 	assert.EqualValues(t, 2, result.Copied)
-	require.NoError(t, LOG_COLD_DB.Model(&Log{}).Count(&coldCount).Error)
+	require.NoError(t, coldDB.Model(&Log{}).Count(&coldCount).Error)
 	assert.EqualValues(t, 6, coldCount)
 
+	// A lost connection fails cleanups and archive searches until the sync
+	// connects the archive again.
+	require.NoError(t, closeDB(coldDB))
+	logColdDB.Store(nil)
+	_, err = CleanupHotLogs(ctx, now+400*testDay)
+	require.ErrorIs(t, err, errLogColdArchiveUnavailable)
+	_, _, err = GetAllLogs(LogFilter{StartTimestamp: oldStart}, 0, 10)
+	require.ErrorIs(t, err, errLogColdArchiveUnavailable)
+	_, err = SyncColdLogs(ctx, now+400)
+	require.NoError(t, err)
+	coldDB = logColdDB.Load()
+	require.NotNil(t, coldDB)
+
+	// A progress moved back by more than one batch stops the sync without
+	// deleting archived logs.
+	state, _, err = coldLogSyncState(ctx)
+	require.NoError(t, err)
+	var rewound Log
+	require.NoError(t, hot.Where("id < ?", state.SyncedId-2).Order("id desc").First(&rewound).Error)
+	require.NoError(t, hot.Model(&LogColdSyncState{}).Where("name = ?", logColdSyncStateName).
+		Updates(map[string]any{"synced_id": rewound.Id, "synced_created_at": rewound.CreatedAt}).Error)
+	_, err = SyncColdLogs(ctx, now+400)
+	require.ErrorContains(t, err, "need manual repair")
+	require.NoError(t, coldDB.Model(&Log{}).Count(&coldCount).Error)
+	assert.EqualValues(t, 6, coldCount)
+	require.NoError(t, hot.Model(&LogColdSyncState{}).Where("name = ?", logColdSyncStateName).
+		Updates(map[string]any{"synced_id": state.SyncedId, "synced_created_at": state.SyncedCreatedAt}).Error)
+	result, err = SyncColdLogs(ctx, now+400)
+	require.NoError(t, err)
+	assert.Zero(t, result.Copied)
+
+	// A hot log missing from the archive keeps its whole batch in the hot store.
+	var firstHot Log
+	require.NoError(t, hot.Order("id").First(&firstHot).Error)
+	require.NoError(t, coldDB.Exec("ALTER TABLE logs DELETE WHERE id = ? SETTINGS mutations_sync = 1", firstHot.Id).Error)
+	deleted, err = CleanupHotLogs(ctx, now+400*testDay)
+	require.ErrorContains(t, err, "they are kept and the cleanup stops")
+	assert.Zero(t, deleted)
+	// Without routing the manual cleanup target is not held back to the hot
+	// retention, so it reaches these recent logs.
+	logHotRetentionDays = 0
+	deleted, err = DeleteOldLogBatch(ctx, now+400*testDay, 100)
+	logHotRetentionDays = 30
+	require.ErrorContains(t, err, "they are kept and the cleanup stops")
+	assert.Zero(t, deleted)
+	require.NoError(t, hot.Model(&Log{}).Count(&hotCount).Error)
+	assert.EqualValues(t, 4, hotCount)
+
 	// An emptied archive stops the sync and every hot deletion.
-	require.NoError(t, LOG_COLD_DB.Exec("TRUNCATE TABLE logs").Error)
+	require.NoError(t, coldDB.Exec("TRUNCATE TABLE logs").Error)
 	_, err = SyncColdLogs(ctx, now+400)
 	require.ErrorContains(t, err, "does not hold synced log id")
 	_, err = CleanupHotLogs(ctx, now+400*testDay)

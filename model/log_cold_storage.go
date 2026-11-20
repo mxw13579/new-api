@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -23,10 +25,27 @@ import (
 //   - LOG_HOT_CLEANUP_ENABLED=true deletes hot logs past the retention that
 //     the archive already holds.
 //
-// With none of them set nothing here runs and LOG_COLD_DB stays nil.
+// With none of them set nothing here runs.
+//
+// Configuring the archive and reaching it are kept apart. logColdConfigured is
+// set once at startup and decides every behavior above; logColdDB holds the
+// connection, which stays nil while the archive cannot be reached. Until it is
+// connected the sync retries it every run, hot deletions refuse to run, and
+// searches that belong on the archive fail.
 
-// LOG_COLD_DB is the cold ClickHouse archive, or nil when none is configured.
-var LOG_COLD_DB *gorm.DB
+var (
+	// logColdConfigured reports that LOG_COLD_SQL_DSN is set. It is written at
+	// startup only.
+	logColdConfigured bool
+	logColdDSN        string
+	// logColdDB is the connected cold archive. Request goroutines read it while
+	// the sync installs it, so it is only touched through Load and Store.
+	logColdDB atomic.Pointer[gorm.DB]
+	// logColdConnectMu keeps two connects from opening two pools.
+	logColdConnectMu sync.Mutex
+
+	errLogColdArchiveUnavailable = errors.New("cold log archive is configured but not connected")
+)
 
 const (
 	defaultLogColdSyncBatchSize   = 10000
@@ -80,9 +99,10 @@ type ColdLogSyncResult struct {
 	LagSeconds      int64 `json:"lag_seconds"`
 }
 
-// InitLogColdDB connects the cold archive named by LOG_COLD_SQL_DSN. Call it
-// after InitLogDB. The master node creates the archive table and the sync
-// progress table.
+// InitLogColdDB configures the cold archive named by LOG_COLD_SQL_DSN. Call it
+// after InitLogDB. An invalid configuration fails startup; an archive that
+// cannot be reached or set up is logged and left to the sync to connect. The
+// master node creates the sync progress table and the archive table.
 func InitLogColdDB() error {
 	dsn := os.Getenv("LOG_COLD_SQL_DSN")
 	if dsn == "" {
@@ -94,54 +114,92 @@ func InitLogColdDB() error {
 	if !isClickHouseDSN(dsn) {
 		return errors.New("LOG_COLD_SQL_DSN only supports ClickHouse")
 	}
-	db, err := gorm.Open(clickhouse.Open(normalizeClickHouseDSN(dsn)), newGormConfig(false))
+	if common.IsMasterNode {
+		if err := LOG_DB.AutoMigrate(&LogColdSyncState{}); err != nil {
+			return err
+		}
+	}
+	configureLogColdStorage(true, nil)
+	logColdDSN = dsn
+	common.SysLog(common.LogText("using ClickHouse as cold log archive: hot retention %d days, hot cleanup %t", logHotRetentionDays, logHotCleanupEnabled))
+	if _, err := connectLogColdDB(); err != nil {
+		common.SysError(common.LogText("cold log archive is unavailable; the cold log sync retries it, hot log cleanup and archive searches fail until then: %s", err.Error()))
+	}
+	return nil
+}
+
+// connectLogColdDB returns the cold archive connection, opening it from
+// LOG_COLD_SQL_DSN when it is not open yet. On the master node the archive
+// table is created first; a connection whose table cannot be created is closed
+// and not installed, so the next sync run tries again.
+func connectLogColdDB() (*gorm.DB, error) {
+	logColdConnectMu.Lock()
+	defer logColdConnectMu.Unlock()
+	if db := logColdDB.Load(); db != nil {
+		return db, nil
+	}
+	db, err := gorm.Open(clickhouse.Open(normalizeClickHouseDSN(logColdDSN)), newGormConfig(false))
 	if err != nil {
-		return err
+		// gorm.Open keeps the pool it opened when the ping fails.
+		if db != nil && db.ConnPool != nil {
+			_ = closeDB(db)
+		}
+		return nil, err
 	}
 	if common.DebugEnabled {
 		db = db.Debug()
 	}
 	sqlDB, err := db.DB()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	sqlDB.SetMaxIdleConns(common.GetEnvOrDefault("SQL_MAX_IDLE_CONNS", 100))
 	sqlDB.SetMaxOpenConns(common.GetEnvOrDefault("SQL_MAX_OPEN_CONNS", 1000))
 	sqlDB.SetConnMaxLifetime(time.Second * time.Duration(common.GetEnvOrDefault("SQL_MAX_LIFETIME", 60)))
-
 	if common.IsMasterNode {
 		if err := db.Exec(clickHouseLogCreateTableSQL(0)).Error; err != nil {
-			return err
-		}
-		if err := LOG_DB.AutoMigrate(&LogColdSyncState{}); err != nil {
-			return err
+			_ = sqlDB.Close()
+			return nil, err
 		}
 	}
-	UseLogColdDB(db)
-	common.SysLog(common.LogText("using ClickHouse as cold log archive: hot retention %d days, hot cleanup %t", logHotRetentionDays, logHotCleanupEnabled))
-	return nil
+	logColdDB.Store(db)
+	return db, nil
 }
 
-// UseLogColdDB installs db as the cold log archive and reads the cold storage
-// settings from the environment. A nil db turns cold storage off.
+// UseLogColdDB installs db as the connected cold log archive and reads the
+// cold storage settings from the environment. A nil db turns cold storage off.
 func UseLogColdDB(db *gorm.DB) {
-	LOG_COLD_DB = db
+	configureLogColdStorage(db != nil, db)
+}
+
+// configureLogColdStorage records whether a cold archive is configured,
+// installs its connection (nil while it is not reachable), and reads the cold
+// storage settings from the environment.
+func configureLogColdStorage(configured bool, db *gorm.DB) {
+	logColdConfigured = configured
+	logColdDB.Store(db)
 	logHotRetentionDays = max(common.GetEnvOrDefault("LOG_HOT_RETENTION_DAYS", 0), 0)
 	logHotCleanupEnabled = common.GetEnvOrDefaultBool("LOG_HOT_CLEANUP_ENABLED", false)
 	logColdSyncBatchSize = max(common.GetEnvOrDefault("LOG_COLD_SYNC_BATCH_SIZE", defaultLogColdSyncBatchSize), 1)
 	logHotCleanupBatchSize = max(common.GetEnvOrDefault("LOG_HOT_CLEANUP_BATCH_SIZE", defaultLogHotCleanupBatchSize), 1)
-	if db != nil && logHotCleanupEnabled && logHotRetentionDays == 0 {
+	if configured && logHotCleanupEnabled && logHotRetentionDays == 0 {
 		common.SysError(common.LogText("LOG_HOT_CLEANUP_ENABLED is ignored because LOG_HOT_RETENTION_DAYS is not set"))
 		logHotCleanupEnabled = false
 	}
 }
 
-func coldLogStore() logStore {
-	return logStore{db: LOG_COLD_DB, clickHouse: LOG_COLD_DB.Dialector.Name() == "clickhouse", groupCol: "`group`", cold: true}
+// coldLogStore returns the cold archive, or errLogColdArchiveUnavailable while
+// the configured archive is not connected.
+func coldLogStore() (logStore, error) {
+	db := logColdDB.Load()
+	if db == nil {
+		return logStore{}, errLogColdArchiveUnavailable
+	}
+	return logStore{db: db, clickHouse: db.Dialector.Name() == "clickhouse", groupCol: "`group`", cold: true}, nil
 }
 
 func coldLogRoutingEnabled() bool {
-	return LOG_COLD_DB != nil && logHotRetentionDays > 0
+	return logColdConfigured && logHotRetentionDays > 0
 }
 
 // hotLogRetentionBoundary is the oldest created_at the hot store keeps while
@@ -154,20 +212,24 @@ func hotLogRetentionBoundary(now int64) int64 {
 // logStoreForStart picks the store for a search starting at startTimestamp,
 // the start the caller gave. A start before the hot retention reads the cold
 // archive; any other search, including one without a start, reads the hot
-// store. Results of the two stores are never merged.
-func logStoreForStart(startTimestamp int64) logStore {
+// store. Results of the two stores are never merged, and a search for the
+// archive fails rather than reading the hot store while the archive is not
+// connected.
+func logStoreForStart(startTimestamp int64) (logStore, error) {
 	if !coldLogRoutingEnabled() || startTimestamp == 0 {
-		return hotLogStore()
+		return hotLogStore(), nil
 	}
 	if startTimestamp >= common.GetTimestamp()-int64(logHotRetentionDays)*logDaySeconds {
-		return hotLogStore()
+		return hotLogStore(), nil
 	}
 	return coldLogStore()
 }
 
 // ColdLogSyncEnabled reports whether hot logs are copied to a cold archive.
+// It stays true while the configured archive is not connected, so the sync
+// keeps trying to connect it.
 func ColdLogSyncEnabled() bool {
-	return LOG_COLD_DB != nil
+	return logColdConfigured
 }
 
 // HotLogCleanupEnabled reports whether archived hot logs past the retention
@@ -232,13 +294,22 @@ func coldLogInsertContext(ctx context.Context) context.Context {
 // exactly its rows. Archive rows above the progress are left over from a run
 // that failed after writing; they are deleted before copying, unless another
 // run moved the progress meanwhile, so a rerun neither duplicates nor skips a
-// log.
+// log. A failed run leaves at most one batch above the progress, so more
+// leftover rows than that mean the progress went back and the sync stops
+// instead of deleting archived logs. A run first connects the archive when it
+// is not connected yet.
 func SyncColdLogs(ctx context.Context, now int64) (ColdLogSyncResult, error) {
 	result := ColdLogSyncResult{}
-	if LOG_COLD_DB == nil {
+	if !logColdConfigured {
 		return result, nil
 	}
-	cold := coldLogStore()
+	if _, err := connectLogColdDB(); err != nil {
+		return result, fmt.Errorf("%w: %w", errLogColdArchiveUnavailable, err)
+	}
+	cold, err := coldLogStore()
+	if err != nil {
+		return result, err
+	}
 	state, found, err := coldLogSyncState(ctx)
 	if err != nil {
 		return result, err
@@ -268,6 +339,9 @@ func SyncColdLogs(ctx context.Context, now int64) (ColdLogSyncResult, error) {
 	scanFrom := state.SyncedCreatedAt - logColdArchiveScanMarginSeconds
 	if err := cold.db.WithContext(ctx).Model(&Log{}).Where(leftoverQuery, scanFrom, state.SyncedId).Count(&leftover).Error; err != nil {
 		return result, err
+	}
+	if leftover > int64(logColdSyncBatchSize) {
+		return result, fmt.Errorf("cold log archive holds %d logs above synced id %d, more than one sync batch of %d; %s and the archive disagree and need manual repair, nothing is deleted or copied", leftover, state.SyncedId, logColdSyncBatchSize, LogColdSyncState{}.TableName())
 	}
 	if leftover > 0 {
 		current, _, err := coldLogSyncState(ctx)
@@ -327,7 +401,7 @@ func SyncColdLogs(ctx context.Context, now int64) (ColdLogSyncResult, error) {
 		}
 		update := LOG_DB.WithContext(ctx).Model(&LogColdSyncState{}).
 			Where("name = ? AND synced_id = ?", logColdSyncStateName, state.SyncedId).
-			Updates(map[string]any{"synced_id": last.Id, "synced_created_at": last.CreatedAt, "updated_at": now})
+			Updates(map[string]any{"synced_id": last.Id, "synced_created_at": last.CreatedAt, "updated_at": common.GetTimestamp()})
 		if update.Error != nil {
 			return result, update.Error
 		}
@@ -372,14 +446,24 @@ func CleanupHotLogs(ctx context.Context, now int64) (int64, error) {
 // nothing to delete ends after one index lookup; a log with a larger id but an
 // older created_at is left for the next run. Ids are read before the delete
 // because DELETE ... LIMIT is MySQL-only and GORM drops Limit from deletes on
-// PostgreSQL and SQLite.
+// PostgreSQL and SQLite. Every batch is checked against the archive before it
+// is deleted: if the archive lacks any of its logs, the run stops with the
+// batch intact. It fails while the archive is not connected.
 func deleteArchivedHotLogs(ctx context.Context, before int64, batchSize int) (int64, error) {
+	cold, err := coldLogStore()
+	if err != nil {
+		return 0, err
+	}
 	state, _, err := coldLogSyncState(ctx)
 	if err != nil || state.SyncedId == 0 {
 		return 0, err
 	}
-	if err := verifyColdArchiveHoldsProgress(ctx, coldLogStore(), state); err != nil {
+	if err := verifyColdArchiveHoldsProgress(ctx, cold, state); err != nil {
 		return 0, err
+	}
+	distinctIds := "COUNT(DISTINCT id)"
+	if cold.clickHouse {
+		distinctIds = "uniqExact(id)"
 	}
 	var newest []int64
 	if err := LOG_DB.WithContext(ctx).Model(&Log{}).Where("created_at < ?", before).
@@ -392,13 +476,30 @@ func deleteArchivedHotLogs(ctx context.Context, before int64, batchSize int) (in
 	upper := min(newest[0], state.SyncedId)
 	var deleted, lastId int64
 	for {
-		var ids []int64
-		if err := LOG_DB.WithContext(ctx).Model(&Log{}).Where("id > ? AND id <= ? AND created_at < ?", lastId, upper, before).
-			Order("id").Limit(batchSize).Pluck("id", &ids).Error; err != nil {
+		var batch []struct {
+			Id        int64
+			CreatedAt int64
+		}
+		if err := LOG_DB.WithContext(ctx).Model(&Log{}).Select("id, created_at").Where("id > ? AND id <= ? AND created_at < ?", lastId, upper, before).
+			Order("id").Limit(batchSize).Find(&batch).Error; err != nil {
 			return deleted, err
 		}
-		if len(ids) == 0 {
+		if len(batch) == 0 {
 			return deleted, nil
+		}
+		ids := make([]int64, len(batch))
+		oldest, newest := batch[0].CreatedAt, batch[0].CreatedAt
+		for i, log := range batch {
+			ids[i] = log.Id
+			oldest, newest = min(oldest, log.CreatedAt), max(newest, log.CreatedAt)
+		}
+		var archived int64
+		if err := cold.db.WithContext(ctx).Model(&Log{}).Select(distinctIds).
+			Where("created_at >= ? AND created_at <= ? AND id IN ?", oldest, newest, ids).Scan(&archived).Error; err != nil {
+			return deleted, err
+		}
+		if archived != int64(len(ids)) {
+			return deleted, fmt.Errorf("cold log archive holds %d of the %d hot logs with ids %d to %d; they are kept and the cleanup stops", archived, len(ids), ids[0], ids[len(ids)-1])
 		}
 		result := LOG_DB.WithContext(ctx).Where("id IN ?", ids).Delete(&Log{})
 		deleted += result.RowsAffected
