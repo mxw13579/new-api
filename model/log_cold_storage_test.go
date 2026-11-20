@@ -171,6 +171,52 @@ func TestLogRequestIdSearchFallsBackToCold(t *testing.T) {
 	assert.Zero(t, total)
 }
 
+func TestColdLogListPagesBreakTiesById(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now().Unix()
+	_, cold := newSQLiteColdLogStores(t, 30, false)
+	// Logs of one request in the same second, plus legacy logs without a
+	// request id, tie on created_at and request_id; the quota marks each id.
+	require.NoError(t, cold.Create(&[]Log{
+		{Id: 1, UserId: 1, CreatedAt: now - 60, Type: LogTypeConsume, Quota: 1, RequestId: "same"},
+		{Id: 2, UserId: 1, CreatedAt: now - 60, Type: LogTypeConsume, Quota: 2, RequestId: "same"},
+		{Id: 3, UserId: 1, CreatedAt: now - 60, Type: LogTypeConsume, Quota: 3, RequestId: "same"},
+		{Id: 4, UserId: 1, CreatedAt: now - 90, Type: LogTypeConsume, Quota: 4},
+		{Id: 5, UserId: 1, CreatedAt: now - 90, Type: LogTypeConsume, Quota: 5},
+	}).Error)
+	// The archive is ClickHouse in production; this SQLite copy takes its order.
+	store := logStore{db: cold, clickHouse: true, groupCol: "`group`", cold: true}
+	quotasOf := func(logs []*Log) []int {
+		quotas := make([]int, 0, len(logs))
+		for _, log := range logs {
+			quotas = append(quotas, log.Quota)
+		}
+		return quotas
+	}
+	want := []int{3, 2, 1, 5, 4}
+
+	firstPage, total, err := findAllLogs(store, LogFilter{}, 0, 3)
+	require.NoError(t, err)
+	assert.EqualValues(t, 5, total)
+	secondPage, _, err := findAllLogs(store, LogFilter{}, 3, 3)
+	require.NoError(t, err)
+	assert.Equal(t, want, append(quotasOf(firstPage), quotasOf(secondPage)...))
+
+	firstPage, _, err = findUserLogs(store, 1, LogFilter{}, 0, 2)
+	require.NoError(t, err)
+	secondPage, _, err = findUserLogs(store, 1, LogFilter{}, 2, 3)
+	require.NoError(t, err)
+	assert.Equal(t, want, append(quotasOf(firstPage), quotasOf(secondPage)...))
+
+	var exported []int
+	_, err = streamLogs(ctx, store, 0, LogFilter{}, "", func(log *Log) error {
+		exported = append(exported, log.Quota)
+		return nil
+	})
+	require.NoError(t, err)
+	assert.Equal(t, want, exported)
+}
+
 func TestSyncColdLogs(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().Unix()
