@@ -30,8 +30,9 @@ import (
 // Configuring the archive and reaching it are kept apart. logColdConfigured is
 // set once at startup and decides every behavior above; logColdDB holds the
 // connection, which stays nil while the archive cannot be reached. Until it is
-// connected the sync retries it every run, hot deletions refuse to run, and
-// searches that belong on the archive fail.
+// connected the sync retries it every run, a search that needs the archive
+// starts a background connect at most once every logColdReconnectInterval, hot
+// deletions refuse to run, and searches that belong on the archive fail.
 
 var (
 	// logColdConfigured reports that LOG_COLD_SQL_DSN is set. It is written at
@@ -43,6 +44,12 @@ var (
 	logColdDB atomic.Pointer[gorm.DB]
 	// logColdConnectMu keeps two connects from opening two pools.
 	logColdConnectMu sync.Mutex
+	// logColdReconnectAt is when a search last started a background connect, in
+	// Unix nanoseconds. A compare-and-swap on it admits one search per interval,
+	// so searches never wait on each other or on the dial.
+	logColdReconnectAt atomic.Int64
+	// logColdReconnect connects the archive for a search; tests replace it.
+	logColdReconnect = connectLogColdDB
 
 	errLogColdArchiveUnavailable = errors.New("cold log archive is configured but not connected")
 )
@@ -50,6 +57,10 @@ var (
 const (
 	defaultLogColdSyncBatchSize   = 10000
 	defaultLogHotCleanupBatchSize = 5000
+	// maxLogHotCleanupBatchSize keeps the archive check of a cleanup batch, an
+	// id IN (...) list, within ClickHouse's default 256 KiB max_query_size.
+	maxLogHotCleanupBatchSize = 10000
+	logColdReconnectInterval  = 30 * time.Second
 )
 
 var (
@@ -123,7 +134,7 @@ func InitLogColdDB() error {
 	logColdDSN = dsn
 	common.SysLog(common.LogText("using ClickHouse as cold log archive: hot retention %d days, hot cleanup %t", logHotRetentionDays, logHotCleanupEnabled))
 	if _, err := connectLogColdDB(); err != nil {
-		common.SysError(common.LogText("cold log archive is unavailable; the cold log sync retries it, hot log cleanup and archive searches fail until then: %s", err.Error()))
+		common.SysError(common.LogText("cold log archive is unavailable; it is reconnected in the background, hot log cleanup and archive searches fail until then: %s", err.Error()))
 	}
 	return nil
 }
@@ -189,10 +200,25 @@ func configureLogColdStorage(configured bool, db *gorm.DB) {
 }
 
 // coldLogStore returns the cold archive, or errLogColdArchiveUnavailable while
-// the configured archive is not connected.
+// the configured archive is not connected. A slave node runs no sync, so while
+// the archive is not connected the first call in each logColdReconnectInterval
+// starts a connect in the background; the call itself still fails at once, and
+// calls after the connect succeeds use the archive.
 func coldLogStore() (logStore, error) {
 	db := logColdDB.Load()
 	if db == nil {
+		now := time.Now().UnixNano()
+		last := logColdReconnectAt.Load()
+		if logColdConfigured && now-last >= int64(logColdReconnectInterval) && logColdReconnectAt.CompareAndSwap(last, now) {
+			connect := logColdReconnect
+			go func() {
+				if _, err := connect(); err != nil {
+					common.SysError(common.LogText("cold log archive reconnect failed: %s", err.Error()))
+					return
+				}
+				common.SysLog(common.LogText("cold log archive reconnected"))
+			}()
+		}
 		return logStore{}, errLogColdArchiveUnavailable
 	}
 	return logStore{db: db, clickHouse: db.Dialector.Name() == "clickhouse", groupCol: "`group`", cold: true}, nil
@@ -294,10 +320,11 @@ func coldLogInsertContext(ctx context.Context) context.Context {
 // exactly its rows. Archive rows above the progress are left over from a run
 // that failed after writing; they are deleted before copying, unless another
 // run moved the progress meanwhile, so a rerun neither duplicates nor skips a
-// log. A failed run leaves at most one batch above the progress, so more
-// leftover rows than that mean the progress went back and the sync stops
-// instead of deleting archived logs. A run first connects the archive when it
-// is not connected yet.
+// log. A failed run leaves at most one batch above the progress, and the hot
+// store still holds every log of that batch, so more leftover rows than that,
+// or a leftover log the hot store no longer has, mean the progress went back
+// and the sync stops instead of deleting archived logs. A run first connects
+// the archive when it is not connected yet.
 func SyncColdLogs(ctx context.Context, now int64) (ColdLogSyncResult, error) {
 	result := ColdLogSyncResult{}
 	if !logColdConfigured {
@@ -334,16 +361,34 @@ func SyncColdLogs(ctx context.Context, now int64) (ColdLogSyncResult, error) {
 		return result, err
 	}
 
-	var leftover int64
 	leftoverQuery := "created_at >= ? AND id > ?"
-	scanFrom := state.SyncedCreatedAt - logColdArchiveScanMarginSeconds
-	if err := cold.db.WithContext(ctx).Model(&Log{}).Where(leftoverQuery, scanFrom, state.SyncedId).Count(&leftover).Error; err != nil {
+	leftoverArgs := []any{state.SyncedCreatedAt - logColdArchiveScanMarginSeconds, state.SyncedId}
+	if state.SyncedId == 0 {
+		// A progress reset to 0 can keep an old synced_created_at, which would
+		// hide most of the archive from the count, so the whole archive is counted.
+		leftoverQuery, leftoverArgs = "id > ?", []any{int64(0)}
+	}
+	var leftover int64
+	if err := cold.db.WithContext(ctx).Model(&Log{}).Where(leftoverQuery, leftoverArgs...).Count(&leftover).Error; err != nil {
 		return result, err
 	}
 	if leftover > int64(logColdSyncBatchSize) {
 		return result, fmt.Errorf("cold log archive holds %d logs above synced id %d, more than one sync batch of %d; %s and the archive disagree and need manual repair, nothing is deleted or copied", leftover, state.SyncedId, logColdSyncBatchSize, LogColdSyncState{}.TableName())
 	}
 	if leftover > 0 {
+		// A progress moved back by less than a batch can cover logs the hot
+		// cleanup already deleted; their archived rows are the only copy left.
+		var leftoverIds []int64
+		if err := cold.db.WithContext(ctx).Model(&Log{}).Distinct("id").Where(leftoverQuery, leftoverArgs...).Pluck("id", &leftoverIds).Error; err != nil {
+			return result, err
+		}
+		var hotHeld int64
+		if err := LOG_DB.WithContext(ctx).Model(&Log{}).Where("id IN ?", leftoverIds).Count(&hotHeld).Error; err != nil {
+			return result, err
+		}
+		if hotHeld != int64(len(leftoverIds)) {
+			return result, fmt.Errorf("cold log archive holds %d logs above synced id %d but the hot database keeps only %d of them; deleting them would lose the only copy, so %s and the archive need manual repair, nothing is deleted or copied", len(leftoverIds), state.SyncedId, hotHeld, LogColdSyncState{}.TableName())
+		}
 		current, _, err := coldLogSyncState(ctx)
 		if err != nil {
 			return result, err
@@ -353,9 +398,9 @@ func SyncColdLogs(ctx context.Context, now int64) (ColdLogSyncResult, error) {
 		}
 		common.SysLog(common.LogText("cold log sync: deleting %d archived logs above synced id %d left by a failed run", leftover, state.SyncedId))
 		if cold.clickHouse {
-			err = cold.db.WithContext(ctx).Exec("ALTER TABLE logs DELETE WHERE "+leftoverQuery+" SETTINGS mutations_sync = 1", scanFrom, state.SyncedId).Error
+			err = cold.db.WithContext(ctx).Exec("ALTER TABLE logs DELETE WHERE "+leftoverQuery+" SETTINGS mutations_sync = 1", leftoverArgs...).Error
 		} else {
-			err = cold.db.WithContext(ctx).Where(leftoverQuery, scanFrom, state.SyncedId).Delete(&Log{}).Error
+			err = cold.db.WithContext(ctx).Where(leftoverQuery, leftoverArgs...).Delete(&Log{}).Error
 		}
 		if err != nil {
 			return result, err
@@ -448,8 +493,10 @@ func CleanupHotLogs(ctx context.Context, now int64) (int64, error) {
 // because DELETE ... LIMIT is MySQL-only and GORM drops Limit from deletes on
 // PostgreSQL and SQLite. Every batch is checked against the archive before it
 // is deleted: if the archive lacks any of its logs, the run stops with the
-// batch intact. It fails while the archive is not connected.
+// batch intact. Batches hold at most maxLogHotCleanupBatchSize logs. It fails
+// while the archive is not connected.
 func deleteArchivedHotLogs(ctx context.Context, before int64, batchSize int) (int64, error) {
+	batchSize = min(batchSize, maxLogHotCleanupBatchSize)
 	cold, err := coldLogStore()
 	if err != nil {
 		return 0, err

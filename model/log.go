@@ -718,16 +718,22 @@ func StreamAllLogs(ctx context.Context, filter LogFilter, role int, fn func(*Log
 }
 
 // StreamUserLogs is StreamAllLogs for one user's own logs, shaped like the
-// user log list.
+// user log list. Like the user log list, it reports an archive that is not
+// connected with the generic query failure.
 func StreamUserLogs(ctx context.Context, userId int, filter LogFilter, fn func(*Log) error) error {
 	count := 0
-	return streamFilteredLogs(ctx, userId, filter, "logs.id desc", func(log *Log) error {
+	err := streamFilteredLogs(ctx, userId, filter, "logs.id desc", func(log *Log) error {
 		count++
 		log.Id = count
 		log.ChannelName = ""
 		log.Other = formatLogOtherJSON(log.Other, logOtherVisibilityUser)
 		return fn(log)
 	})
+	if errors.Is(err, errLogColdArchiveUnavailable) {
+		common.SysError(common.LogText("failed to export user logs: %s", err.Error()))
+		return common.NewMessage("Failed to query logs")
+	}
+	return err
 }
 
 // streamFilteredLogs streams the logs matching filter from the store the
