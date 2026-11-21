@@ -62,7 +62,9 @@ export default defineConfig(({ envMode }) => {
           enforce: true,
         },
         'vendor-tanstack': {
-          test: /node_modules[\\/]@tanstack[\\/]/,
+          // Table packages are only used by lazily loaded pages; leave them to the
+          // default async splitting instead of forcing them into the entry chunk.
+          test: /node_modules[\\/]@tanstack[\\/](?!(table-core|react-table)[\\/])/,
           name: 'vendor-tanstack',
           chunks: 'all',
           priority: 0,
