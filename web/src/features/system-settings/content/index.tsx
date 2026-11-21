@@ -18,8 +18,8 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { SettingsPage } from '../components/settings-page'
 import type { ContentSettings, SystemOption } from '../types'
+import { CONTENT_DEFAULT_SECTION } from './section-meta'
 import {
-  CONTENT_DEFAULT_SECTION,
   getContentSectionContent,
   getContentSectionMeta,
 } from './section-registry.tsx'

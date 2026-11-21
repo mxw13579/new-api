@@ -16,8 +16,9 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import type { TFunction } from 'i18next'
 import type { ReactNode } from 'react'
+
+import { createSectionMeta, type SectionMeta } from './section-meta'
 
 /**
  * Section definition for settings pages
@@ -27,6 +28,11 @@ export type SectionDefinition<TSettings, TExtraArgs extends unknown[] = []> = {
   titleKey: string
   build: (settings: TSettings, ...extraArgs: TExtraArgs) => ReactNode
 }
+
+export type SectionBuilder<TSettings, TExtraArgs extends unknown[] = []> = (
+  settings: TSettings,
+  ...extraArgs: TExtraArgs
+) => ReactNode
 
 /**
  * Section registry configuration
@@ -51,54 +57,64 @@ export function createSectionRegistry<
   TSettings,
   TExtraArgs extends unknown[] = [],
 >(config: SectionRegistryConfig<TSectionId, TSettings, TExtraArgs>) {
-  const { sections, defaultSection, basePath, urlStyle = 'query' } = config
+  const meta = createSectionMeta<TSectionId>({
+    ...config,
+    sections: config.sections.map((section) => ({
+      id: section.id as TSectionId,
+      titleKey: section.titleKey,
+    })),
+  })
 
-  type SectionId = TSectionId
-
-  const sectionIds = sections.map((section) => section.id) as [
-    SectionId,
-    ...SectionId[],
-  ]
-
-  /**
-   * Get navigation items for sidebar, with an optional badge per section
-   */
-  function getSectionNavItems(
-    t: TFunction,
-    badges?: Partial<Record<SectionId, string>>
-  ) {
-    return sections.map((section) => ({
-      title: t(section.titleKey),
-      url:
-        urlStyle === 'path'
-          ? `${basePath}/${section.id}`
-          : `${basePath}?section=${section.id}`,
-      badge: badges?.[section.id as SectionId],
-    }))
+  function getSectionMeta(sectionId: TSectionId) {
+    return (
+      config.sections.find((item) => item.id === sectionId) ??
+      config.sections[0]
+    )
   }
 
   /**
    * Get section content by section ID
    */
   function getSectionContent(
-    sectionId: SectionId,
+    sectionId: TSectionId,
     settings: TSettings,
     ...extraArgs: TExtraArgs
   ) {
     return getSectionMeta(sectionId).build(settings, ...extraArgs)
   }
 
-  function getSectionMeta(sectionId: SectionId) {
-    const section =
-      sections.find((item) => item.id === sectionId) ?? sections[0]
-    return section
+  return {
+    sectionIds: meta.sectionIds,
+    defaultSection: meta.defaultSection,
+    getSectionNavItems: meta.getSectionNavItems,
+    getSectionContent,
+    getSectionMeta,
+  }
+}
+
+/**
+ * Attach section panels to section data created by `createSectionMeta`.
+ * `builders` must have exactly one entry per section id, so the panel list
+ * cannot drift from the ids the sidebar and routes use.
+ */
+export function createSectionContentRegistry<
+  TSectionId extends string,
+  TSettings,
+  TExtraArgs extends unknown[] = [],
+>(
+  meta: SectionMeta<TSectionId>,
+  builders: Record<TSectionId, SectionBuilder<TSettings, TExtraArgs>>
+) {
+  function getSectionContent(
+    sectionId: TSectionId,
+    settings: TSettings,
+    ...extraArgs: TExtraArgs
+  ) {
+    return builders[meta.getSectionMeta(sectionId).id](settings, ...extraArgs)
   }
 
   return {
-    sectionIds,
-    defaultSection,
-    getSectionNavItems,
     getSectionContent,
-    getSectionMeta,
+    getSectionMeta: meta.getSectionMeta,
   }
 }
