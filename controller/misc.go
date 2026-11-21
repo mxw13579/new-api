@@ -217,13 +217,17 @@ func GetHomePageContent(c *gin.Context) {
 }
 
 func SendEmailVerification(c *gin.Context) {
+	audit := middleware.RegistrationAuditOf(c)
 	email, err := service.ValidateAccountEmail(c.Query("email"))
 	if err != nil {
+		audit.Reason = "email_invalid"
 		writeSecurityOperationError(c, err)
 		return
 	}
+	audit.Email = email
 
 	if model.IsEmailAlreadyTaken(email) {
+		audit.Reason = "email_taken"
 		common.ApiErrorT(c, "Email address is already in use")
 		return
 	}
@@ -241,6 +245,7 @@ func SendEmailVerification(c *gin.Context) {
 		i18n.T(c, i18n.MsgEmailVerificationValidity, map[string]any{"Minutes": common.VerificationValidMinutes}))
 	err = common.SendEmail(subject, email, content)
 	if err != nil {
+		audit.Reason = "send_failed"
 		common.ApiError(c, err)
 		return
 	}

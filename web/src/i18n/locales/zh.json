@@ -1,9 +1,11 @@
 {
   "translation": {
-    "{{name}} · Unified API for Claude, Codex, Gemini and OpenAI-compatible models": "{{name}} · Claude、Codex、Gemini 与 OpenAI 兼容模型的统一 API",
     "360": "360",
     "1000": "1000",
     "10000": "10000",
+    "Registration via {{method}}": "通过 {{method}} 注册",
+    "Registration verification code request": "注册验证码请求",
+    "{{name}} · Unified API for Claude, Codex, Gemini and OpenAI-compatible models": "{{name}} · Claude、Codex、Gemini 与 OpenAI 兼容模型的统一 API",
     "_copy": "_复制",
     "，": "，",
     ", and": "，和",
@@ -3035,7 +3037,7 @@
     "footer.columns.related.links.oneApi": "One API",
     "footer.columns.related.title": "相关项目",
     "footer.defaultCopyright": "版权所有。",
-    "footer.newapi.projectAttributionSuffix": "版权所有，由项目贡献者设计与开发。",
+    "footer.new\u0061pi.projectAttributionSuffix": "版权所有，由项目贡献者设计与开发。",
     "For a stronger password": "让密码更强",
     "For advanced custom channels this applies only to /v1/responses routes without protocol conversion.": "高级自定义渠道仅对 /v1/responses 且不做协议转换的路由生效。",
     "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment": "对于 2025 年 5 月 10 日之后添加的渠道，在部署时无需从模型名称中移除 \".\"",

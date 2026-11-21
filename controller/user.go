@@ -215,44 +215,56 @@ func writeLoginResponse(c *gin.Context, user *model.User, bundle *service.AuthBu
 }
 
 func Register(c *gin.Context) {
+	audit := middleware.RegistrationAuditOf(c)
+	audit.Method = "password"
 	if !common.RegisterEnabled {
+		audit.Reason = "registration_disabled"
 		common.ApiErrorT(c, "New user registration has been disabled by administrator")
 		return
 	}
 	if !common.PasswordRegisterEnabled {
+		audit.Reason = "password_registration_disabled"
 		common.ApiErrorT(c, "Password registration has been disabled by administrator, please use third-party account verification")
 		return
 	}
 	var user model.User
 	err := common.DecodeJson(c.Request.Body, &user)
 	if err != nil {
+		audit.Reason = "invalid_request"
 		common.ApiErrorT(c, "Invalid parameters")
 		return
 	}
 	user.Username = strings.TrimSpace(user.Username)
 	user.Email = model.NormalizeEmail(user.Email)
+	audit.Username, audit.Email = user.Username, user.Email
 	if user.Username == "" {
+		audit.Reason = "validation_failed"
 		common.ApiErrorT(c, "Invalid parameters")
 		return
 	}
 	if err := common.Validate.Struct(&user); err != nil {
+		audit.Reason = "validation_failed"
 		common.ApiErrorT(c, "Invalid input {{error}}", map[string]any{"error": err.Error()})
 		return
 	}
 	if common.EmailVerificationEnabled {
 		if user.Email == "" || user.VerificationCode == "" {
+			audit.Reason = "code_required"
 			common.ApiErrorT(c, "Email verification is enabled, please enter email address and verification code")
 			return
 		}
 		if !common.VerifyCodeWithKey(user.Email, user.VerificationCode, common.EmailVerificationPurpose) {
+			audit.Reason = "code_invalid"
 			common.ApiErrorT(c, "Verification code is incorrect or has expired")
 			return
 		}
 		if err := model.EnsureEmailAvailable(user.Email, 0); err != nil {
 			if errors.Is(err, model.ErrEmailAlreadyTaken) {
+				audit.Reason = "email_taken"
 				common.ApiErrorT(c, "Email address is already in use")
 				return
 			}
+			audit.Reason = "database_error"
 			common.ApiErrorT(c, "Database error, please contact the administrator")
 			return
 		}
@@ -263,16 +275,19 @@ func Register(c *gin.Context) {
 	}
 	exist, err := model.CheckUserExistOrDeleted(user.Username, emailForExistCheck)
 	if err != nil {
+		audit.Reason = "database_error"
 		common.ApiErrorT(c, "Database error, please contact the administrator")
 		common.SysLog(common.LogText("CheckUserExistOrDeleted error: %v", err))
 		return
 	}
 	if exist {
+		audit.Reason = "username_taken"
 		common.ApiErrorT(c, "Username already exists or has been deleted")
 		return
 	}
 	affCode := user.AffCode // this code is the inviter's code, not the user's own code
 	inviterId, _ := model.GetUserIdByAffCode(affCode)
+	audit.InviterId = inviterId
 	cleanUser := model.User{
 		Username:    user.Username,
 		Password:    user.Password,
@@ -285,9 +300,11 @@ func Register(c *gin.Context) {
 	}
 	if err := cleanUser.Insert(inviterId); err != nil {
 		if errors.Is(err, model.ErrEmailAlreadyTaken) {
+			audit.Reason = "email_taken"
 			common.ApiErrorT(c, "Email address is already in use")
 			return
 		}
+		audit.Reason = "create_failed"
 		common.ApiError(c, err)
 		return
 	}
@@ -295,13 +312,16 @@ func Register(c *gin.Context) {
 	// 获取插入后的用户ID
 	var insertedUser model.User
 	if err := model.DB.Where("username = ?", cleanUser.Username).First(&insertedUser).Error; err != nil {
+		audit.Reason = "create_failed"
 		common.ApiErrorT(c, "User registration failed or user ID retrieval failed")
 		return
 	}
+	audit.UserId = insertedUser.Id
 	// 生成默认令牌
 	if constant.GenerateDefaultToken {
 		key, err := common.GenerateKey()
 		if err != nil {
+			audit.Reason = "default_token_failed"
 			common.ApiErrorT(c, "Failed to generate default token")
 			common.SysLog(common.LogText("failed to generate token key: %s", err.Error()))
 			return
@@ -323,6 +343,7 @@ func Register(c *gin.Context) {
 			token.Group = "auto"
 		}
 		if err := token.Insert(); err != nil {
+			audit.Reason = "default_token_failed"
 			common.ApiErrorT(c, "Failed to create default token")
 			return
 		}

@@ -1,9 +1,11 @@
 {
   "translation": {
-    "{{name}} · Unified API for Claude, Codex, Gemini and OpenAI-compatible models": "{{name}} · Unified API for Claude, Codex, Gemini and OpenAI-compatible models",
     "360": "360",
     "1000": "1000",
     "10000": "10000",
+    "Registration via {{method}}": "Registration via {{method}}",
+    "Registration verification code request": "Registration verification code request",
+    "{{name}} · Unified API for Claude, Codex, Gemini and OpenAI-compatible models": "{{name}} · Unified API for Claude, Codex, Gemini and OpenAI-compatible models",
     "_copy": "_copy",
     "，": ", ",
     ", and": ", and",
@@ -3035,7 +3037,7 @@
     "footer.columns.related.links.oneApi": "One API",
     "footer.columns.related.title": "Related Projects",
     "footer.defaultCopyright": "All rights reserved.",
-    "footer.newapi.projectAttributionSuffix": "All rights reserved. Designed and developed by the project contributors.",
+    "footer.new\u0061pi.projectAttributionSuffix": "All rights reserved. Designed and developed by the project contributors.",
     "For a stronger password": "For a stronger password",
     "For advanced custom channels this applies only to /v1/responses routes without protocol conversion.": "For advanced custom channels this applies only to /v1/responses routes without protocol conversion.",
     "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment": "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment",

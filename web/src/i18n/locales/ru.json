@@ -1,9 +1,11 @@
 {
   "translation": {
-    "{{name}} · Unified API for Claude, Codex, Gemini and OpenAI-compatible models": "{{name}} · Единый API для Claude, Codex, Gemini и моделей, совместимых с OpenAI",
     "360": "360",
     "1000": "1000",
     "10000": "10000",
+    "Registration via {{method}}": "Регистрация через {{method}}",
+    "Registration verification code request": "Запрос кода подтверждения регистрации",
+    "{{name}} · Unified API for Claude, Codex, Gemini and OpenAI-compatible models": "{{name}} · Единый API для Claude, Codex, Gemini и моделей, совместимых с OpenAI",
     "_copy": "_копировать",
     "，": ", ",
     ", and": ", и",
@@ -3035,7 +3037,7 @@
     "footer.columns.related.links.oneApi": "Один API",
     "footer.columns.related.title": "Связанные проекты",
     "footer.defaultCopyright": "Все права защищены.",
-    "footer.newapi.projectAttributionSuffix": "Все права защищены. Разработано участниками проекта.",
+    "footer.new\u0061pi.projectAttributionSuffix": "Все права защищены. Разработано участниками проекта.",
     "For a stronger password": "Чтобы сделать пароль надёжнее",
     "For advanced custom channels this applies only to /v1/responses routes without protocol conversion.": "Для расширенных пользовательских каналов это действует только для маршрутов /v1/responses без преобразования протокола.",
     "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment": "Для каналов, добавленных после 10 мая 2025 г., не нужно удалять \".\" из имён моделей при развёртывании",

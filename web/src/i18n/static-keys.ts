@@ -927,6 +927,8 @@ export const STATIC_I18N_KEYS = [
   'Account binding',
   'Account unlinking',
   'Email confirmation code resend',
+  'Registration via {{method}}',
+  'Registration verification code request',
   // Administrative step-up titles keyed by ManageUser action.
   'Verify to disable user',
   'Verify to enable user',
