@@ -1,12 +1,26 @@
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { defineConfig, loadEnv } from '@rsbuild/core'
+import { defineConfig, loadEnv, type RsbuildPlugin } from '@rsbuild/core'
 import { pluginReact } from '@rsbuild/plugin-react'
 import { pluginTailwindcss } from '@rsbuild/plugin-tailwindcss'
 import { tanstackRouter } from '@tanstack/router-plugin/rspack'
 
+import { slimEnglishLocale } from './src/i18n/slim-english-locale.ts'
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
+
+// Ship only the English entries that differ from their keys; the rest render
+// as the key itself. Runs in dev and production builds alike.
+const pluginSlimEnglishLocale: RsbuildPlugin = {
+  name: 'new-api:slim-english-locale',
+  setup(api) {
+    api.transform(
+      { test: /[\\/]src[\\/]i18n[\\/]locales[\\/]en\.json$/ },
+      ({ code }) => JSON.stringify(slimEnglishLocale(JSON.parse(code)))
+    )
+  },
+}
 
 export default defineConfig(({ envMode }) => {
   const env = loadEnv({ mode: envMode, prefixes: ['VITE_'] })
@@ -24,7 +38,11 @@ export default defineConfig(({ envMode }) => {
   ) as Record<string, { target: string; changeOrigin: boolean }>
 
   return {
-    plugins: [pluginReact(), pluginTailwindcss({ optimize: false })],
+    plugins: [
+      pluginReact(),
+      pluginTailwindcss({ optimize: false }),
+      pluginSlimEnglishLocale,
+    ],
     // Rsbuild 2: replaces deprecated `performance.chunkSplit` (RSPack 2 aligned)
     splitChunks: {
       preset: 'default',
