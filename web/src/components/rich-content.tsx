@@ -21,7 +21,7 @@ import { Markdown } from '@/components/ui/markdown'
 
 type RichContentMode = 'markdown' | 'html'
 
-interface RichContentProps {
+export interface RichContentProps {
   content: string
   mode?: RichContentMode
   breaks?: boolean

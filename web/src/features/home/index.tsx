@@ -21,7 +21,7 @@ import { useTranslation } from 'react-i18next'
 
 import { PublicLayout } from '@/components/layout'
 import { Footer } from '@/components/layout/components/footer'
-import { RichContent } from '@/components/rich-content'
+import { LazyRichContent } from '@/components/lazy-rich-content'
 import { useTheme } from '@/context/theme-provider'
 import { isLikelyHtml } from '@/lib/content-format'
 import { useAuthStore } from '@/stores/auth-store'
@@ -97,7 +97,7 @@ export function Home() {
     if (contentIsHtml) {
       return (
         <PublicLayout showMainContainer={false}>
-          <RichContent
+          <LazyRichContent
             mode='html'
             htmlVariant='isolated'
             content={content}
@@ -110,7 +110,7 @@ export function Home() {
     return (
       <PublicLayout>
         <div className='mx-auto max-w-6xl px-4 py-8'>
-          <RichContent
+          <LazyRichContent
             mode='markdown'
             content={content}
             className='custom-home-content'
