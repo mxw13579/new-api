@@ -37,3 +37,25 @@ export async function getHomePageContent(): Promise<HomePageContentResponse> {
   })
   return res.data
 }
+
+// The request `main.tsx` starts at boot on the home path, so it runs alongside
+// `/api/status` instead of after the home route chunk mounts.
+let prefetchedHomePageContent: Promise<HomePageContentResponse> | null = null
+
+/** Start loading the home page content before the home route mounts. */
+export function prefetchHomePageContent(): void {
+  if (prefetchedHomePageContent) return
+  prefetchedHomePageContent = getHomePageContent()
+  // The home page reports failures when it takes the request.
+  prefetchedHomePageContent.catch(() => undefined)
+}
+
+/**
+ * The prefetched request if one is pending (each prefetch is used once), or a
+ * new request otherwise.
+ */
+export function takeHomePageContent(): Promise<HomePageContentResponse> {
+  const request = prefetchedHomePageContent ?? getHomePageContent()
+  prefetchedHomePageContent = null
+  return request
+}

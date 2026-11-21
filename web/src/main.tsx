@@ -21,6 +21,7 @@ import { RouterProvider, createRouter } from '@tanstack/react-router'
 import { StrictMode } from 'react'
 import ReactDOM from 'react-dom/client'
 
+import { prefetchHomePageContent } from '@/features/home/api'
 import { installBuildMetadata } from '@/lib/build-metadata'
 import { reloadOnceAfterChunkError } from '@/lib/chunk-reload'
 import { applyFaviconToDom } from '@/lib/dom-utils'
@@ -106,6 +107,9 @@ if (!rootElement) {
     /* empty */
   }
 })()
+// The home page renders its custom content first; request it now so it runs
+// alongside `/api/status` instead of after the home route chunk mounts.
+if (window.location.pathname === '/') prefetchHomePageContent()
 // Wait for the active locale chunk so the first paint is already translated.
 // `i18nReady` never rejects. A stale locale chunk (left behind by a newer
 // deployment) reloads the page once; any other or repeated failure renders
