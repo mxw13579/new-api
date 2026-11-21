@@ -46,7 +46,8 @@ afterEach(() => {
 function renderDialog(
   models = ['gpt-5.4', 'claude-sonnet-4-6'],
   target: ClientImportTarget = 'cc-switch',
-  tokenKey = 'test-only'
+  tokenKey = 'test-only',
+  unlimitedQuota?: boolean
 ) {
   queryClient.setQueryData(['user-models-ccswitch'], {
     success: true,
@@ -59,6 +60,7 @@ function renderDialog(
         open
         onOpenChange={vi.fn()}
         tokenKey={tokenKey}
+        unlimitedQuota={unlimitedQuota}
       />
       <Toaster />
     </QueryClientProvider>
@@ -712,6 +714,165 @@ describe('client imports without CC Switch usage query', () => {
       expect(openSpy).not.toHaveBeenCalled()
       expect(
         screen.getByRole('dialog', { name: 'Import to AiMaMi' })
+      ).toBeVisible()
+    })
+  })
+
+  describe('magpie', () => {
+    const MODELS_INPUT = { name: 'Leave empty to use all models of the site' }
+
+    function setCurrency(currency: Partial<typeof DEFAULT_CURRENCY_CONFIG>) {
+      useSystemConfigStore.getState().setConfig({
+        currency: { ...DEFAULT_CURRENCY_CONFIG, ...currency },
+      })
+    }
+
+    beforeEach(() => {
+      setCurrency({ quotaPerUnit: 1000000 })
+    })
+
+    afterEach(() => {
+      setCurrency({})
+    })
+
+    async function submitMagpie(
+      options: {
+        models?: string[]
+        unlimitedQuota?: boolean
+        usage?: boolean
+      } = {}
+    ) {
+      renderDialog(undefined, 'magpie', 'test-only', options.unlimitedQuota)
+      const user = userEvent.setup()
+      for (const model of options.models ?? []) {
+        await user.click(screen.getByRole('combobox', MODELS_INPUT))
+        await user.click(await screen.findByRole('option', { name: model }))
+      }
+      if (options.models) {
+        // The multi-select stays open for more picks; close it like a user.
+        await user.keyboard('{Escape}')
+      }
+      if (options.usage === false) {
+        await user.click(screen.getByRole('switch', USAGE_SWITCH))
+      }
+      await user.click(screen.getByRole('button', { name: 'Open magpie' }))
+    }
+
+    it('builds the complete magpie parameter list with all four base URLs and the balance query', async () => {
+      await submitMagpie({ models: ['gpt-5.4', 'claude-sonnet-4-6'] })
+
+      const raw = rawOpenedLink()
+      expect(raw.startsWith('magpie://import?')).toBe(true)
+      expect(raw).toContain('name=My%20Provider&')
+      expect([...openedLink().searchParams.entries()]).toEqual([
+        ['name', 'My Provider'],
+        ['key', 'sk-test-only'],
+        ['chat', `${SITE}/v1`],
+        ['responses', `${SITE}/v1`],
+        ['anthropic', SITE],
+        ['gemini', `${SITE}/v1beta`],
+        ['models', 'gpt-5.4,claude-sonnet-4-6'],
+        ['website', SITE],
+        ['balance', `${SITE}/api/usage/token/`],
+        ['balance_path', '$data.total_available / 1000000'],
+      ])
+    })
+
+    it('leaves models out when none are picked so magpie lists the site models', async () => {
+      await submitMagpie()
+
+      expect(openedLink().searchParams.has('models')).toBe(false)
+    })
+
+    it('converts the balance to CNY with the USD exchange rate for a CNY site', async () => {
+      setCurrency({
+        quotaPerUnit: 1000000,
+        quotaDisplayType: 'CNY',
+        usdExchangeRate: 7.3,
+      })
+
+      await submitMagpie()
+
+      expect(openedLink().searchParams.get('balance_path')).toBe(
+        '¥data.total_available / 1000000 * 7.3'
+      )
+    })
+
+    it('reads the account quota for an unlimited key', async () => {
+      await submitMagpie({ unlimitedQuota: true })
+
+      expect(openedLink().searchParams.get('balance_path')).toBe(
+        '$data.user_quota.total_available / 1000000'
+      )
+    })
+
+    it('omits balance parameters when the usage query switch is turned off', async () => {
+      await submitMagpie({ usage: false })
+
+      const link = openedLink()
+      expect(link.searchParams.has('balance')).toBe(false)
+      expect(link.searchParams.has('balance_path')).toBe(false)
+      expect(link.searchParams.get('website')).toBe(SITE)
+    })
+
+    it('shows the name and model picker without application choices', () => {
+      renderDialog(undefined, 'magpie')
+
+      const dialog = screen.getByRole('dialog', { name: 'Import to magpie' })
+      expect(within(dialog).queryByRole('radio')).not.toBeInTheDocument()
+      expect(within(dialog).getByRole('textbox', { name: 'Name' })).toHaveValue(
+        'My Provider'
+      )
+      expect(
+        within(dialog).getByRole('combobox', MODELS_INPUT)
+      ).toBeInTheDocument()
+      expect(
+        within(dialog).getByRole('switch', USAGE_SWITCH)
+      ).toHaveAccessibleDescription(
+        'Lets magpie show the remaining quota after import.'
+      )
+    })
+
+    it.each(['http://localhost:3000', 'http://192.168.1.10:3000'])(
+      'imports the local HTTP site %s without balance or website',
+      async (site) => {
+        localStorage.setItem('status', JSON.stringify({ server_address: site }))
+
+        await submitMagpie()
+
+        const toggle = screen.getByRole('switch', USAGE_SWITCH)
+        expect(toggle).toHaveAttribute('aria-disabled', 'true')
+        expect(toggle).toHaveAccessibleDescription(
+          'magpie can only query balance for HTTPS sites.'
+        )
+        expect([...openedLink().searchParams.keys()]).toEqual([
+          'name',
+          'key',
+          'chat',
+          'responses',
+          'anthropic',
+          'gemini',
+        ])
+        expect(openedLink().searchParams.get('chat')).toBe(`${site}/v1`)
+      }
+    )
+
+    it('warns and does not open magpie for a public HTTP site', async () => {
+      localStorage.setItem(
+        'status',
+        JSON.stringify({ server_address: 'http://api.example.com' })
+      )
+
+      await submitMagpie()
+
+      expect(
+        await screen.findByText(
+          'magpie only imports HTTPS sites, or HTTP sites on this machine or the local network.'
+        )
+      ).toBeVisible()
+      expect(openSpy).not.toHaveBeenCalled()
+      expect(
+        screen.getByRole('dialog', { name: 'Import to magpie' })
       ).toBeVisible()
     })
   })

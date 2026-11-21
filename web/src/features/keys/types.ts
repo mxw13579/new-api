@@ -108,7 +108,11 @@ export interface TokenAutoGroupsConfig {
 // ============================================================================
 
 /** Desktop clients that can import an API key through a deep link */
-export type ClientImportTarget = 'cc-switch' | 'codex-plus-plus' | 'aimami'
+export type ClientImportTarget =
+  | 'cc-switch'
+  | 'codex-plus-plus'
+  | 'aimami'
+  | 'magpie'
 
 export type ApiKeysDialogType =
   | 'create'
