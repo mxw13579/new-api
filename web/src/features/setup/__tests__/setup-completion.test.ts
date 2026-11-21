@@ -20,7 +20,7 @@ import { QueryClient } from '@tanstack/react-query'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { api } from '@/lib/api'
-import { statusQueryOptions } from '@/lib/status-query'
+import { STATUS_QUERY_KEY, statusQueryOptions } from '@/lib/status-query'
 
 import { readSetupCompleted } from '../lib/setup-completion'
 
@@ -104,6 +104,23 @@ describe('readSetupCompleted', () => {
     })
 
     await expect(readSetupCompleted(createClient())).resolves.toBe(true)
+    expect(requestedUrls(get)).toEqual(['/api/status', '/api/setup'])
+  })
+
+  it('falls back to /api/setup when the prefetched status already failed before the guard ran', async () => {
+    const get = mockServer({
+      status: new Error('Network Error'),
+      setup: { setup: true },
+    })
+    const client = createClient()
+    // main.tsx starts status before the guard runs; its first attempt fails
+    // and the query waits for a retry.
+    client.ensureQueryData(statusQueryOptions).catch(() => undefined)
+    await vi.waitFor(() =>
+      expect(client.getQueryState(STATUS_QUERY_KEY)?.fetchFailureCount).toBe(1)
+    )
+
+    await expect(readSetupCompleted(client)).resolves.toBe(true)
     expect(requestedUrls(get)).toEqual(['/api/status', '/api/setup'])
   })
 

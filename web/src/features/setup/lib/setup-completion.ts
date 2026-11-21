@@ -51,6 +51,12 @@ function readStatusOnce(queryClient: QueryClient): Promise<StatusData | null> {
     ensureStatus(queryClient)
       .then(settle)
       .catch(() => settle(null))
+    // `main.tsx` starts the request before this guard runs, so its first
+    // attempt may already have failed and be waiting to retry; joining it
+    // above sends nothing new, and no further failure event would arrive.
+    // A fresh fetch started above has reset the count to 0.
+    const current = cache.find({ queryKey: STATUS_QUERY_KEY, exact: true })
+    if (current && current.state.fetchFailureCount > 0) settle(null)
   })
 }
 
