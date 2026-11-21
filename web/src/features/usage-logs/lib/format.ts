@@ -644,5 +644,9 @@ export function renderAuditContent(
     return `${quotaOperation.summary} · ${quotaOperation.description}`
   }
   const params = { ...op.params }
+  // Older rows rejected before the handler ran carry no sign-up method.
+  if (op.action === 'user.register' && !params.method) {
+    return t('User registration')
+  }
   return t(template, params)
 }

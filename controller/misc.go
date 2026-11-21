@@ -221,6 +221,9 @@ func SendEmailVerification(c *gin.Context) {
 	email, err := service.ValidateAccountEmail(c.Query("email"))
 	if err != nil {
 		audit.Reason = "email_invalid"
+		if errors.Is(err, service.ErrAccountEmailRestricted) {
+			audit.Reason = "email_restricted"
+		}
 		writeSecurityOperationError(c, err)
 		return
 	}

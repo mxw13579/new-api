@@ -5,6 +5,7 @@
     "10000": "10000",
     "Registration via {{method}}": "{{method}} による登録",
     "Registration verification code request": "登録用確認コードのリクエスト",
+    "User registration": "ユーザー登録",
     "{{name}} · Unified API for Claude, Codex, Gemini and OpenAI-compatible models": "{{name}} · Claude、Codex、Gemini と OpenAI 互換モデルの統合 API",
     "_copy": "_copy",
     "，": "、",

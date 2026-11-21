@@ -5,6 +5,7 @@
     "10000": "10000",
     "Registration via {{method}}": "Регистрация через {{method}}",
     "Registration verification code request": "Запрос кода подтверждения регистрации",
+    "User registration": "Регистрация пользователя",
     "{{name}} · Unified API for Claude, Codex, Gemini and OpenAI-compatible models": "{{name}} · Единый API для Claude, Codex, Gemini и моделей, совместимых с OpenAI",
     "_copy": "_копировать",
     "，": ", ",

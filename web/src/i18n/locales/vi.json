@@ -5,6 +5,7 @@
     "10000": "10000",
     "Registration via {{method}}": "Đăng ký qua {{method}}",
     "Registration verification code request": "Yêu cầu mã xác minh đăng ký",
+    "User registration": "Đăng ký người dùng",
     "{{name}} · Unified API for Claude, Codex, Gemini and OpenAI-compatible models": "{{name}} · API hợp nhất cho Claude, Codex, Gemini và các mô hình tương thích OpenAI",
     "_copy": "_bản sao",
     "，": ", ",

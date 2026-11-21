@@ -929,6 +929,33 @@ it('summarizes registration events from their action instead of the raw content'
   )
 })
 
+it('summarizes a registration without a recorded method without template placeholders', async () => {
+  const i18n = createInstance()
+  await i18n.init({ lng: 'zh', resources: { zh } })
+  const detail = buildAuditDetails(
+    {
+      ...entry,
+      user_id: 0,
+      username: '',
+      actor_role: 1,
+      category: 'login',
+      action: 'user.register',
+      success: false,
+      content: 'User registration',
+      other: {
+        op: {
+          action: 'user.register',
+          params: { failure_reason: 'turnstile_failed' },
+        },
+      },
+    },
+    i18n.t
+  )
+
+  expect(detail.summary).toBe(zh.translation['User registration'])
+  expect(detail.summary).not.toContain('{{')
+})
+
 it('loads scope labels for a generated token when its details open', async () => {
   const get = vi.spyOn(api, 'get').mockResolvedValue({
     data: { success: true, data: { resources: scopeResources } },

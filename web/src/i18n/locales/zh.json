@@ -5,6 +5,7 @@
     "10000": "10000",
     "Registration via {{method}}": "通过 {{method}} 注册",
     "Registration verification code request": "注册验证码请求",
+    "User registration": "用户注册",
     "{{name}} · Unified API for Claude, Codex, Gemini and OpenAI-compatible models": "{{name}} · Claude、Codex、Gemini 与 OpenAI 兼容模型的统一 API",
     "_copy": "_复制",
     "，": "，",

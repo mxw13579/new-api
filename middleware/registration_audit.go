@@ -42,6 +42,10 @@ func RegistrationAudit(action string) gin.HandlerFunc {
 		// The verification endpoint carries the address in its query; the
 		// handler replaces it with the validated value when it gets that far.
 		detail := &RegistrationAuditDetail{Email: model.NormalizeEmail(c.Query("email"))}
+		if action == AuditActionRegister {
+			// Requests rejected before the handler still name the sign-up method.
+			detail.Method = "password"
+		}
 		c.Set(registrationAuditContextKey, detail)
 		writer := &auditResponseWriter{ResponseWriter: c.Writer, body: bytes.NewBuffer(nil), maxSize: 64 * 1024}
 		c.Writer = writer
