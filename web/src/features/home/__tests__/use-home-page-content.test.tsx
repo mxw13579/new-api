@@ -17,25 +17,33 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { renderHook, waitFor } from '@testing-library/react'
+import { toast } from 'sonner'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { api } from '@/lib/api'
 
-import { prefetchHomePageContent } from '../api'
+import {
+  HOME_PAGE_CONTENT_PREFETCH_TTL_MS,
+  prefetchHomePageContent,
+} from '../api'
 import { useHomePageContent } from '../hooks'
 
 const STORAGE_KEY = 'home_page_content'
 
-type Deferred = { resolve: (data: string) => void }
+type Deferred = {
+  resolve: (data: string) => void
+  reject: (error: Error) => void
+}
 
 /** Holds each `/api/home_page_content` request until the test answers it. */
 function mockContentRequests() {
   const pending: Deferred[] = []
   const get = vi.spyOn(api, 'get').mockImplementation(
     () =>
-      new Promise((resolve) => {
+      new Promise((resolve, reject) => {
         pending.push({
           resolve: (data) => resolve({ data: { success: true, data } }),
+          reject,
         })
       })
   )
@@ -56,6 +64,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  vi.useRealTimers()
   localStorage.clear()
 })
 
@@ -121,5 +130,82 @@ describe('useHomePageContent', () => {
 
     await waitFor(() => expect(result.current.content).toBe('# Welcome'))
     expect(get).toHaveBeenCalledTimes(1)
+  })
+
+  it('clears the cached content when the response is empty', async () => {
+    localStorage.setItem(STORAGE_KEY, '# Old home')
+    const { pending } = mockContentRequests()
+    const { result } = renderHook(() => useHomePageContent())
+
+    pending[0].resolve('')
+
+    await waitFor(() => expect(result.current.content).toBe(''))
+    expect(result.current.isLoaded).toBe(true)
+    expect(localStorage.getItem(STORAGE_KEY)).toBeNull()
+  })
+
+  it('keeps the cached content and reports the error when the request fails', async () => {
+    localStorage.setItem(STORAGE_KEY, '# Cached home')
+    const error = vi.spyOn(toast, 'error')
+    const { pending } = mockContentRequests()
+    const { result } = renderHook(() => useHomePageContent())
+
+    pending[0].reject(new Error('Network Error'))
+
+    await waitFor(() => expect(error).toHaveBeenCalledTimes(1))
+    expect(result.current.content).toBe('# Cached home')
+    expect(localStorage.getItem(STORAGE_KEY)).toBe('# Cached home')
+  })
+
+  it('requests again instead of reusing a failed prefetch', async () => {
+    vi.useFakeTimers()
+    const error = vi.spyOn(toast, 'error')
+    const { get, pending } = mockContentRequests()
+    prefetchHomePageContent()
+    pending[0].reject(new Error('Network Error'))
+    await vi.advanceTimersByTimeAsync(0)
+    vi.useRealTimers()
+
+    const { result } = renderHook(() => useHomePageContent())
+    expect(get).toHaveBeenCalledTimes(2)
+    pending[1].resolve('# Welcome')
+
+    await waitFor(() => expect(result.current.content).toBe('# Welcome'))
+    expect(error).not.toHaveBeenCalled()
+  })
+
+  it('reuses a prefetched response that arrived within the usable window', async () => {
+    vi.useFakeTimers()
+    const { get, pending } = mockContentRequests()
+    prefetchHomePageContent()
+    pending[0].resolve('# Welcome')
+    await vi.advanceTimersByTimeAsync(0)
+    vi.useRealTimers()
+    // Real timers drive the render below; only the clock moves on.
+    vi.setSystemTime(Date.now() + HOME_PAGE_CONTENT_PREFETCH_TTL_MS - 1)
+
+    const { result } = renderHook(() => useHomePageContent())
+
+    await waitFor(() => expect(result.current.content).toBe('# Welcome'))
+    expect(get).toHaveBeenCalledTimes(1)
+  })
+
+  it('requests fresh content once the prefetched response has expired', async () => {
+    vi.useFakeTimers()
+    const { get, pending } = mockContentRequests()
+    prefetchHomePageContent()
+    pending[0].resolve('# Boot content')
+    await vi.advanceTimersByTimeAsync(0)
+    vi.useRealTimers()
+    // Real timers drive the render below; only the clock moves on.
+    vi.setSystemTime(Date.now() + HOME_PAGE_CONTENT_PREFETCH_TTL_MS + 1)
+
+    const { result } = renderHook(() => useHomePageContent())
+    expect(get).toHaveBeenCalledTimes(2)
+    pending[1].resolve('# Current content')
+
+    await waitFor(() =>
+      expect(result.current.content).toBe('# Current content')
+    )
   })
 })

@@ -40,22 +40,51 @@ export async function getHomePageContent(): Promise<HomePageContentResponse> {
 
 // The request `main.tsx` starts at boot on the home path, so it runs alongside
 // `/api/status` instead of after the home route chunk mounts.
-let prefetchedHomePageContent: Promise<HomePageContentResponse> | null = null
+type HomePageContentPrefetch = {
+  request: Promise<HomePageContentResponse>
+  /** When the response arrived; undefined while it is pending. */
+  receivedAt?: number
+}
+
+let prefetchedHomePageContent: HomePageContentPrefetch | null = null
+
+/**
+ * How long a prefetched response stays usable. It only covers the first page
+ * load; a home page mounted later (after a redirect elsewhere and in-app
+ * navigation back) requests fresh content.
+ */
+export const HOME_PAGE_CONTENT_PREFETCH_TTL_MS = 10_000
 
 /** Start loading the home page content before the home route mounts. */
 export function prefetchHomePageContent(): void {
   if (prefetchedHomePageContent) return
-  prefetchedHomePageContent = getHomePageContent()
-  // The home page reports failures when it takes the request.
-  prefetchedHomePageContent.catch(() => undefined)
+  const prefetch: HomePageContentPrefetch = {
+    request: getHomePageContent(),
+  }
+  prefetchedHomePageContent = prefetch
+  prefetch.request
+    .then(() => {
+      prefetch.receivedAt = Date.now()
+    })
+    .catch(() => {
+      // A failed prefetch is dropped; the home page requests again when it
+      // mounts and reports that request's failure itself.
+      if (prefetchedHomePageContent === prefetch) {
+        prefetchedHomePageContent = null
+      }
+    })
 }
 
 /**
- * The prefetched request if one is pending (each prefetch is used once), or a
- * new request otherwise.
+ * The prefetched request while it is pending or recently answered (each
+ * prefetch is used once), or a new request otherwise.
  */
 export function takeHomePageContent(): Promise<HomePageContentResponse> {
-  const request = prefetchedHomePageContent ?? getHomePageContent()
+  const prefetch = prefetchedHomePageContent
   prefetchedHomePageContent = null
-  return request
+  const usable =
+    prefetch &&
+    (prefetch.receivedAt === undefined ||
+      Date.now() - prefetch.receivedAt <= HOME_PAGE_CONTENT_PREFETCH_TTL_MS)
+  return usable ? prefetch.request : getHomePageContent()
 }
