@@ -242,17 +242,25 @@ function buildAiMaMiURL(link: ImportLink): string {
 /** Most model ids a magpie import link carries; magpie ignores the rest. */
 const MAGPIE_MAX_MODELS = 200
 
+/** Provider name magpie gets when the name field is left blank. */
+const MAGPIE_DEFAULT_NAME = 'My Provider'
+
+/** Provider id used when neither the name nor the host gives a usable one. */
+const MAGPIE_FALLBACK_ID = 'relay'
+
 /**
  * magpie takes a plain-http base URL only for this machine or the local
- * network (localhost, *.local, loopback and private addresses).
+ * network: localhost, *.local, loopback and private addresses. The hostname
+ * is the one `URL` normalized, so IPv4 is dotted and IPv6 compressed.
  */
 function isMagpieLocalHost(hostname: string): boolean {
-  const host = hostname.replaceAll(/^\[|\]$/g, '').toLowerCase()
-  if (host === 'localhost' || host.endsWith('.local')) return true
-  if (host.includes(':')) {
-    return host === '::1' || /^f[cd][0-9a-f]{0,2}:/.test(host)
+  if (hostname === 'localhost' || hostname.endsWith('.local')) return true
+  if (hostname.startsWith('[')) {
+    const ipv6 = hostname.slice(1, -1)
+    // fc00::/7 is a first hextet of fcXX or fdXX, written with four digits
+    return ipv6 === '::1' || /^f[cd][0-9a-f]{2}:/.test(ipv6)
   }
-  const octets = host.split('.').map(Number)
+  const octets = hostname.split('.').map(Number)
   if (
     octets.length !== 4 ||
     octets.some((n) => !Number.isInteger(n) || n < 0 || n > 255)
@@ -268,27 +276,42 @@ function isMagpieLocalHost(hostname: string): boolean {
   )
 }
 
-/** Whether magpie accepts this site as a provider base URL. */
-function supportsMagpieBaseURL(serverAddress: string): boolean {
+/**
+ * The site as a magpie link carries it, normalized by `URL`, or null when
+ * magpie would refuse it as a base URL: not https, plain http off the local
+ * network, or userinfo, a query or a fragment in it.
+ */
+function toMagpieSite(serverAddress: string): URL | null {
+  let url: URL
   try {
-    const url = new URL(serverAddress)
-    if (url.protocol === 'https:') return true
-    return url.protocol === 'http:' && isMagpieLocalHost(url.hostname)
+    url = new URL(serverAddress)
   } catch {
-    return false
+    return null
   }
+  if (url.username || url.password || url.search || url.hash) return null
+  if (url.protocol === 'https:') return url
+  if (url.protocol === 'http:' && isMagpieLocalHost(url.hostname)) return url
+  return null
+}
+
+function supportsMagpieBaseURL(serverAddress: string): boolean {
+  return toMagpieSite(serverAddress) !== null
 }
 
 /**
  * magpie keeps a website and asks a balance query only over HTTPS, with no
  * exception for loopback hosts.
  */
-function isHTTPSAddress(serverAddress: string): boolean {
-  try {
-    return new URL(serverAddress).protocol === 'https:'
-  } catch {
-    return false
-  }
+function supportsMagpieBalance(serverAddress: string): boolean {
+  return toMagpieSite(serverAddress)?.protocol === 'https:'
+}
+
+/** magpie's provider id rule (Slug): lowercase, other runs become "-". */
+function toMagpieSlug(text: string): string {
+  return text
+    .toLowerCase()
+    .replaceAll(/[^a-z0-9]+/g, '-')
+    .replaceAll(/^-|-$/g, '')
 }
 
 /** A number as a magpie balance expression reads one: digits and a dot. */
@@ -302,7 +325,7 @@ function toMagpieNumber(value: number): string | null {
  * arithmetic and a leading currency sign. It mirrors the CC Switch script's
  * conversion: CNY sites multiply by the USD exchange rate, every other
  * display shows USD. A key without its own limit reads the account quota,
- * which the endpoint returns only when the key may query it.
+ * which the endpoint returns only when the key allows that query.
  */
 function buildMagpieBalancePath(
   currency: UsageScriptCurrency,
@@ -322,31 +345,50 @@ function buildMagpieBalancePath(
 
 /**
  * magpie takes one provider with all four protocol base URLs, so the link
- * has no application choice. Without models it lists the site's own.
+ * has no application choice. Without models it lists the site's own. magpie
+ * derives the provider id from the name and refuses an empty id or
+ * "magpie", so such a name gets an id from the site host.
  */
 function buildMagpieURL(link: ImportLink): string {
-  const serverAddress = getServerAddress().replace(/\/+$/, '')
+  const site = toMagpieSite(getServerAddress())
+  if (!site) throw new Error('magpie does not accept this site')
+  const siteAddress = site.origin + site.pathname.replace(/\/+$/, '')
+  const name = link.name.trim() ? link.name : MAGPIE_DEFAULT_NAME
   const params = new URLSearchParams()
-  params.set('name', link.name)
+  params.set('name', name)
+  const nameSlug = toMagpieSlug(name)
+  if (!nameSlug || nameSlug === 'magpie') {
+    const hostSlug = toMagpieSlug(site.hostname)
+    params.set(
+      'id',
+      hostSlug && hostSlug !== 'magpie' ? hostSlug : MAGPIE_FALLBACK_ID
+    )
+  }
   params.set('key', link.apiKey)
-  params.set('chat', `${serverAddress}/v1`)
-  params.set('responses', `${serverAddress}/v1`)
-  params.set('anthropic', serverAddress)
-  params.set('gemini', `${serverAddress}/v1beta`)
+  params.set('chat', `${siteAddress}/v1`)
+  params.set('responses', `${siteAddress}/v1`)
+  params.set('anthropic', siteAddress)
+  params.set('gemini', `${siteAddress}/v1beta`)
   if (link.modelIds.length > 0) {
     params.set('models', link.modelIds.slice(0, MAGPIE_MAX_MODELS).join(','))
   }
-  if (isHTTPSAddress(serverAddress)) {
-    params.set('website', serverAddress)
+  if (site.protocol === 'https:') {
+    params.set('website', siteAddress)
   }
   const balancePath =
     link.usageCurrency &&
     buildMagpieBalancePath(link.usageCurrency, link.unlimitedQuota)
   if (balancePath) {
-    params.set('balance', `${serverAddress}/api/usage/token/`)
+    params.set('balance', `${siteAddress}/api/usage/token/`)
     params.set('balance_path', balancePath)
   }
   return `magpie://import?${toPercentEncodedQuery(params)}`
+}
+
+/** What the dialog knows about the key's quota. */
+interface KeyQuota {
+  unlimitedQuota: boolean
+  allowUserQuotaQuery: boolean
 }
 
 interface UsageQueryConfig {
@@ -356,6 +398,11 @@ interface UsageQueryConfig {
   description: string
   /** i18n key of the switch description when the site is not supported */
   unsupportedDescription: string
+  /** Keys the client cannot query, with the switch description for them */
+  keyCheck?: {
+    supports: (key: KeyQuota) => boolean
+    unsupportedDescription: string
+  }
 }
 
 interface ImportTargetConfig {
@@ -412,12 +459,19 @@ const IMPORT_TARGETS: Record<ClientImportTarget, ImportTargetConfig> = {
     title: 'Import to magpie',
     submitLabel: 'Open magpie',
     apps: [],
-    defaultName: 'My Provider',
+    defaultName: MAGPIE_DEFAULT_NAME,
     modelSelection: 'multiple',
     usageQuery: {
-      supports: isHTTPSAddress,
+      supports: supportsMagpieBalance,
       description: 'Lets magpie show the remaining quota after import.',
       unsupportedDescription: 'magpie can only query balance for HTTPS sites.',
+      keyCheck: {
+        // An unlimited key's balance is the account quota, which the usage
+        // endpoint returns only when the key allows querying it.
+        supports: (key) => !key.unlimitedQuota || key.allowUserQuotaQuery,
+        unsupportedDescription:
+          'This key has no limit of its own and does not allow querying the account quota, so magpie cannot show its balance.',
+      },
     },
     siteCheck: {
       supports: supportsMagpieBaseURL,
@@ -435,6 +489,8 @@ interface Props {
   tokenKey: string
   /** Whether the key has no limit of its own; used by the magpie balance */
   unlimitedQuota?: boolean
+  /** Whether the key may query the account quota; used by the magpie balance */
+  allowUserQuotaQuery?: boolean
 }
 
 export function ClientImportDialog(props: Props) {
@@ -450,13 +506,29 @@ export function ClientImportDialog(props: Props) {
   const [modelIds, setModelIds] = useState<string[]>([])
   const [usageQueryEnabled, setUsageQueryEnabled] = useState(true)
   const currency = useSystemConfigStore((state) => state.config.currency)
-  const usageQuerySupported = useMemo(
+  const unlimitedQuota = props.unlimitedQuota === true
+  const allowUserQuotaQuery = props.allowUserQuotaQuery === true
+  const usageQuerySiteSupported = useMemo(
     () =>
       props.open &&
       targetConfig.usageQuery !== null &&
       targetConfig.usageQuery.supports(getServerAddress()),
     [props.open, targetConfig.usageQuery]
   )
+  const usageQueryKeySupported =
+    targetConfig.usageQuery?.keyCheck?.supports({
+      unlimitedQuota,
+      allowUserQuotaQuery,
+    }) ?? true
+  const usageQuerySupported = usageQuerySiteSupported && usageQueryKeySupported
+  let usageQueryDescription = targetConfig.usageQuery?.description ?? ''
+  if (!usageQuerySiteSupported) {
+    usageQueryDescription =
+      targetConfig.usageQuery?.unsupportedDescription ?? ''
+  } else if (!usageQueryKeySupported) {
+    usageQueryDescription =
+      targetConfig.usageQuery?.keyCheck?.unsupportedDescription ?? ''
+  }
 
   const { data: modelsData } = useQuery({
     queryKey: ['user-models-ccswitch'],
@@ -542,7 +614,7 @@ export function ClientImportDialog(props: Props) {
       modelIds,
       apiKey: key,
       usageCurrency,
-      unlimitedQuota: props.unlimitedQuota === true,
+      unlimitedQuota,
     })
     window.open(url, '_blank')
     props.onOpenChange(false)
@@ -592,7 +664,7 @@ export function ClientImportDialog(props: Props) {
             id='client-import-name'
             value={name}
             onChange={(event) => setName(event.target.value)}
-            placeholder={defaultName}
+            placeholder={targetConfig.defaultName ?? currentConfig.defaultName}
           />
         </div>
 
@@ -644,9 +716,7 @@ export function ClientImportDialog(props: Props) {
                 id='client-import-usage-query-description'
                 className='text-muted-foreground text-xs'
               >
-                {usageQuerySupported
-                  ? t(targetConfig.usageQuery.description)
-                  : t(targetConfig.usageQuery.unsupportedDescription)}
+                {t(usageQueryDescription)}
               </p>
             </div>
             <Switch

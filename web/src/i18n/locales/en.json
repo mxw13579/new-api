@@ -3398,6 +3398,7 @@
     "Lets magpie show the remaining quota after import.": "Lets magpie show the remaining quota after import.",
     "magpie can only query balance for HTTPS sites.": "magpie can only query balance for HTTPS sites.",
     "magpie only imports HTTPS sites, or HTTP sites on this machine or the local network.": "magpie only imports HTTPS sites, or HTTP sites on this machine or the local network.",
+    "This key has no limit of its own and does not allow querying the account quota, so magpie cannot show its balance.": "This key has no limit of its own and does not allow querying the account quota, so magpie cannot show its balance.",
     "Leave empty to use all models of the site": "Leave empty to use all models of the site",
     "Only the first {{max}} models are included in the link.": "Only the first {{max}} models are included in the link.",
     "Important": "Important",

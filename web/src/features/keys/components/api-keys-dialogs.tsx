@@ -41,6 +41,7 @@ export function ApiKeysDialogs() {
           onOpenChange={(isOpen) => !isOpen && setOpen(null)}
           tokenKey={resolvedKey}
           unlimitedQuota={currentRow?.unlimited_quota}
+          allowUserQuotaQuery={currentRow?.allow_user_quota_query}
         />
       ))}
     </>

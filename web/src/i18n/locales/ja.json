@@ -3398,6 +3398,7 @@
     "Lets magpie show the remaining quota after import.": "インポート後、magpie で残りのクォータを表示できます。",
     "magpie can only query balance for HTTPS sites.": "magpie は HTTPS サイトの残高のみ照会できます。",
     "magpie only imports HTTPS sites, or HTTP sites on this machine or the local network.": "magpie がインポートできるのは HTTPS サイト、またはこのマシンやローカルネットワーク上の HTTP サイトのみです。",
+    "This key has no limit of its own and does not allow querying the account quota, so magpie cannot show its balance.": "このキーには独自の上限がなく、アカウントのクォータ照会も許可されていないため、magpie は残高を表示できません。",
     "Leave empty to use all models of the site": "空欄の場合はサイトのすべてのモデルを使用します",
     "Only the first {{max}} models are included in the link.": "リンクには最初の {{max}} 個のモデルのみが含まれます。",
     "Important": "重要",

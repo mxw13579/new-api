@@ -3398,6 +3398,7 @@
     "Lets magpie show the remaining quota after import.": "Permet à magpie d'afficher le quota restant après l'importation.",
     "magpie can only query balance for HTTPS sites.": "magpie ne peut interroger le solde que pour les sites HTTPS.",
     "magpie only imports HTTPS sites, or HTTP sites on this machine or the local network.": "magpie n'importe que les sites HTTPS, ou les sites HTTP sur cette machine ou le réseau local.",
+    "This key has no limit of its own and does not allow querying the account quota, so magpie cannot show its balance.": "Cette clé n'a pas de limite propre et n'autorise pas la consultation du quota du compte, magpie ne peut donc pas afficher son solde.",
     "Leave empty to use all models of the site": "Laisser vide pour utiliser tous les modèles du site",
     "Only the first {{max}} models are included in the link.": "Seuls les {{max}} premiers modèles sont inclus dans le lien.",
     "Important": "Important",

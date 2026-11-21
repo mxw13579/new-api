@@ -470,6 +470,7 @@ export const STATIC_I18N_KEYS = [
   'Lets magpie show the remaining quota after import.',
   'magpie can only query balance for HTTPS sites.',
   'magpie only imports HTTPS sites, or HTTP sites on this machine or the local network.',
+  'This key has no limit of its own and does not allow querying the account quota, so magpie cannot show its balance.',
   'Primary Model',
   'Haiku Model',
   'Sonnet Model',

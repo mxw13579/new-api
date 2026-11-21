@@ -3398,6 +3398,7 @@
     "Lets magpie show the remaining quota after import.": "匯入後 magpie 可直接顯示剩餘額度。",
     "magpie can only query balance for HTTPS sites.": "magpie 僅支援查詢 HTTPS 站點的餘額。",
     "magpie only imports HTTPS sites, or HTTP sites on this machine or the local network.": "magpie 僅支援匯入 HTTPS 站點，或本機、區域網路內的 HTTP 站點。",
+    "This key has no limit of its own and does not allow querying the account quota, so magpie cannot show its balance.": "此密鑰沒有單獨的額度上限，且未允許查詢帳戶額度，magpie 無法顯示其餘額。",
     "Leave empty to use all models of the site": "留空則使用站點的全部模型",
     "Only the first {{max}} models are included in the link.": "連結中只包含前 {{max}} 個模型。",
     "Important": "重要",

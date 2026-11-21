@@ -3398,6 +3398,7 @@
     "Lets magpie show the remaining quota after import.": "Cho phép magpie hiển thị hạn mức còn lại sau khi nhập.",
     "magpie can only query balance for HTTPS sites.": "magpie chỉ có thể truy vấn số dư cho các trang HTTPS.",
     "magpie only imports HTTPS sites, or HTTP sites on this machine or the local network.": "magpie chỉ nhập các trang HTTPS, hoặc các trang HTTP trên máy này hoặc mạng cục bộ.",
+    "This key has no limit of its own and does not allow querying the account quota, so magpie cannot show its balance.": "Khóa này không có hạn mức riêng và không cho phép truy vấn hạn mức tài khoản, vì vậy magpie không thể hiển thị số dư của nó.",
     "Leave empty to use all models of the site": "Để trống để dùng tất cả mô hình của trang",
     "Only the first {{max}} models are included in the link.": "Liên kết chỉ bao gồm {{max}} mô hình đầu tiên.",
     "Important": "Quan trọng",
