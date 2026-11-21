@@ -130,4 +130,63 @@ describe('system settings sidebar navigation', () => {
         : undefined
     ).toBe('3')
   })
+
+  it('titles every section with its translation key', () => {
+    const items = getItems()
+
+    expect(
+      items.map((item) =>
+        'items' in item ? item.items?.map((sub) => sub.title) : []
+      )
+    ).toEqual([
+      [
+        'System Information',
+        'System Notice',
+        'Header navigation',
+        'Sidebar modules',
+      ],
+      [
+        'Basic Authentication',
+        'OAuth Integrations',
+        'Passkey Authentication',
+        'Bot Protection',
+        'Custom OAuth',
+      ],
+      [
+        'Quota Settings',
+        'Currency & Display',
+        'Model Pricing',
+        'Group Pricing',
+        'Payment Gateway',
+        'Check-in Rewards',
+      ],
+      [
+        'Global Model Configuration',
+        'Gemini',
+        'Claude',
+        'Grok',
+        'Model Deployment',
+      ],
+      ['Sessions and retries', 'Channel health'],
+      ['Rate Limiting', 'SSRF Protection', 'Token Limits'],
+      [
+        'Data Dashboard',
+        'Announcements',
+        'API Addresses',
+        'FAQ',
+        'Uptime Kuma',
+        'Chat Presets',
+        'Drawing',
+      ],
+      [
+        'System Behavior',
+        'Model performance metrics',
+        'Email & Notifications',
+        'Worker Proxy',
+        'Log Maintenance',
+        'Performance',
+        'System maintenance',
+      ],
+    ])
+  })
 })
