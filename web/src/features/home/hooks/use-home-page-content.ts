@@ -22,7 +22,7 @@ import { useEffect, useState } from 'react'
 import { isHttpUrl } from '@/lib/content-format'
 import { handleServerError } from '@/lib/handle-server-error'
 
-import { getHomePageContent } from '../api'
+import { takeHomePageContent } from '../api'
 import type { HomePageContentResult } from '../types'
 
 const STORAGE_KEY = 'home_page_content'
@@ -30,23 +30,22 @@ const STORAGE_KEY = 'home_page_content'
 /**
  * Hook to load and manage custom home page content
  * Supports both Markdown/HTML content and iframe URLs
+ *
+ * Content cached from the last visit renders at once; the response replaces it
+ * only when it differs, so an unchanged iframe is not reloaded.
  */
 export function useHomePageContent(): HomePageContentResult {
-  const [content, setContent] = useState<string>('')
-  const [isLoaded, setIsLoaded] = useState(false)
+  const [content, setContent] = useState<string>(
+    () => localStorage.getItem(STORAGE_KEY) ?? ''
+  )
+  const [isLoaded, setIsLoaded] = useState(() => content !== '')
 
   useEffect(() => {
     let mounted = true
 
     const loadContent = async () => {
-      // Load from localStorage first for immediate display
-      const cached = localStorage.getItem(STORAGE_KEY)
-      if (cached && mounted) {
-        setContent(cached)
-      }
-
       try {
-        const response = await getHomePageContent()
+        const response = await takeHomePageContent()
         const { success, data } = response
 
         if (!mounted) return

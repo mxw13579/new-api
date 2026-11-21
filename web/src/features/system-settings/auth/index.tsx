@@ -18,8 +18,8 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { SettingsPage } from '../components/settings-page'
 import type { AuthSettings } from '../types'
+import { AUTH_DEFAULT_SECTION } from './section-meta'
 import {
-  AUTH_DEFAULT_SECTION,
   getAuthSectionContent,
   getAuthSectionMeta,
 } from './section-registry.tsx'

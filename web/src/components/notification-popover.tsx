@@ -20,7 +20,7 @@ import type { TFunction } from 'i18next'
 import { Bell, Megaphone } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
-import { RichContent } from '@/components/rich-content'
+import { LazyRichContent } from '@/components/lazy-rich-content'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -205,7 +205,7 @@ function NoticeContent({
 
   return (
     <ScrollArea className='h-[min(52vh,28rem)] pr-3'>
-      <RichContent breaks content={notice} />
+      <LazyRichContent breaks content={notice} />
     </ScrollArea>
   )
 }
@@ -260,12 +260,12 @@ function AnnouncementsContent({
                   <AnnouncementDot type={item.type} />
                   <div className='flex min-w-0 flex-1 flex-col gap-2'>
                     <div className='text-sm'>
-                      <RichContent breaks content={item.content || ''} />
+                      <LazyRichContent breaks content={item.content || ''} />
                     </div>
 
                     {item.extra ? (
                       <div className='text-muted-foreground text-xs'>
-                        <RichContent breaks content={item.extra} />
+                        <LazyRichContent breaks content={item.extra} />
                       </div>
                     ) : null}
 

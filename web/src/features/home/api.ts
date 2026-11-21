@@ -37,3 +37,54 @@ export async function getHomePageContent(): Promise<HomePageContentResponse> {
   })
   return res.data
 }
+
+// The request `main.tsx` starts at boot on the home path, so it runs alongside
+// `/api/status` instead of after the home route chunk mounts.
+type HomePageContentPrefetch = {
+  request: Promise<HomePageContentResponse>
+  /** When the response arrived; undefined while it is pending. */
+  receivedAt?: number
+}
+
+let prefetchedHomePageContent: HomePageContentPrefetch | null = null
+
+/**
+ * How long a prefetched response stays usable. It only covers the first page
+ * load; a home page mounted later (after a redirect elsewhere and in-app
+ * navigation back) requests fresh content.
+ */
+export const HOME_PAGE_CONTENT_PREFETCH_TTL_MS = 10_000
+
+/** Start loading the home page content before the home route mounts. */
+export function prefetchHomePageContent(): void {
+  if (prefetchedHomePageContent) return
+  const prefetch: HomePageContentPrefetch = {
+    request: getHomePageContent(),
+  }
+  prefetchedHomePageContent = prefetch
+  prefetch.request
+    .then(() => {
+      prefetch.receivedAt = Date.now()
+    })
+    .catch(() => {
+      // A failed prefetch is dropped; the home page requests again when it
+      // mounts and reports that request's failure itself.
+      if (prefetchedHomePageContent === prefetch) {
+        prefetchedHomePageContent = null
+      }
+    })
+}
+
+/**
+ * The prefetched request while it is pending or recently answered (each
+ * prefetch is used once), or a new request otherwise.
+ */
+export function takeHomePageContent(): Promise<HomePageContentResponse> {
+  const prefetch = prefetchedHomePageContent
+  prefetchedHomePageContent = null
+  const usable =
+    prefetch &&
+    (prefetch.receivedAt === undefined ||
+      Date.now() - prefetch.receivedAt <= HOME_PAGE_CONTENT_PREFETCH_TTL_MS)
+  return usable ? prefetch.request : getHomePageContent()
+}
