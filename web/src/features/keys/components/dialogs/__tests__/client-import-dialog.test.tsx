@@ -131,6 +131,18 @@ describe('CC Switch model selection', () => {
     await waitFor(() => expect(input).toHaveValue('gpt-5.4'))
   })
 
+  it('shows the default name of the chosen application as the name placeholder', async () => {
+    renderDialog()
+    const user = userEvent.setup()
+
+    await user.click(screen.getByRole('radio', { name: 'Codex' }))
+
+    expect(screen.getByRole('textbox', { name: 'Name' })).toHaveAttribute(
+      'placeholder',
+      'My Codex'
+    )
+  })
+
   it('lets users edit the provider name without opening a model dropdown', async () => {
     renderDialog()
     const user = userEvent.setup()
@@ -713,6 +725,353 @@ describe('client imports without CC Switch usage query', () => {
       expect(
         screen.getByRole('dialog', { name: 'Import to AiMaMi' })
       ).toBeVisible()
+    })
+  })
+})
+
+describe('magpie import', () => {
+  const MAGPIE_SITE = 'https://api.example.com'
+  const MODELS_INPUT = { name: 'Leave empty to use all models of the site' }
+  const BALANCE_SWITCH = { name: 'Also configure usage query' }
+  let openSpy: ReturnType<typeof vi.spyOn>
+
+  function setSite(serverAddress: string) {
+    localStorage.setItem(
+      'status',
+      JSON.stringify({ server_address: serverAddress })
+    )
+  }
+
+  function setCurrency(currency: Partial<typeof DEFAULT_CURRENCY_CONFIG>) {
+    useSystemConfigStore.getState().setConfig({
+      currency: { ...DEFAULT_CURRENCY_CONFIG, ...currency },
+    })
+  }
+
+  beforeEach(() => {
+    setSite(MAGPIE_SITE)
+    setCurrency({ quotaPerUnit: 1000000 })
+    openSpy = vi.spyOn(window, 'open').mockImplementation(() => null)
+  })
+
+  afterEach(() => {
+    openSpy.mockRestore()
+    localStorage.removeItem('status')
+    setCurrency({})
+  })
+
+  type KeyOptions = { unlimitedQuota?: boolean; allowUserQuotaQuery?: boolean }
+
+  function renderMagpie(key: KeyOptions = {}) {
+    queryClient.setQueryData(['user-models-ccswitch'], {
+      success: true,
+      data: ['gpt-5.4', 'claude-sonnet-4-6'],
+    })
+    render(
+      <QueryClientProvider client={queryClient}>
+        <ClientImportDialog
+          target='magpie'
+          open
+          onOpenChange={vi.fn()}
+          tokenKey='test-only'
+          unlimitedQuota={key.unlimitedQuota}
+          allowUserQuotaQuery={key.allowUserQuotaQuery}
+        />
+        <Toaster />
+      </QueryClientProvider>
+    )
+  }
+
+  async function submitMagpie(
+    options: KeyOptions & {
+      models?: string[]
+      name?: string
+      usage?: boolean
+    } = {}
+  ) {
+    renderMagpie(options)
+    const user = userEvent.setup()
+    if (options.name !== undefined) {
+      const input = screen.getByRole('textbox', { name: 'Name' })
+      await user.clear(input)
+      if (options.name) await user.type(input, options.name)
+    }
+    for (const model of options.models ?? []) {
+      await user.click(screen.getByRole('combobox', MODELS_INPUT))
+      await user.click(await screen.findByRole('option', { name: model }))
+    }
+    if (options.models) {
+      // The multi-select stays open for more picks; close it like a user.
+      await user.keyboard('{Escape}')
+    }
+    if (options.usage === false) {
+      await user.click(screen.getByRole('switch', BALANCE_SWITCH))
+    }
+    await user.click(screen.getByRole('button', { name: 'Open magpie' }))
+  }
+
+  function openedLink(): URL {
+    expect(openSpy).toHaveBeenCalledTimes(1)
+    return new URL(String(openSpy.mock.calls[0][0]))
+  }
+
+  describe('link parameters', () => {
+    it('builds the complete parameter list with all four base URLs and the balance query', async () => {
+      await submitMagpie({ models: ['gpt-5.4', 'claude-sonnet-4-6'] })
+
+      expect([...openedLink().searchParams.entries()]).toEqual([
+        ['name', 'My Provider'],
+        ['key', 'sk-test-only'],
+        ['chat', `${MAGPIE_SITE}/v1`],
+        ['responses', `${MAGPIE_SITE}/v1`],
+        ['anthropic', MAGPIE_SITE],
+        ['gemini', `${MAGPIE_SITE}/v1beta`],
+        ['models', 'gpt-5.4,claude-sonnet-4-6'],
+        ['website', MAGPIE_SITE],
+        ['balance', `${MAGPIE_SITE}/api/usage/token/`],
+        ['balance_path', '$data.total_available / 1000000'],
+      ])
+    })
+
+    it('opens a magpie import link with spaces encoded as %20', async () => {
+      await submitMagpie()
+
+      const raw = String(openSpy.mock.calls[0][0])
+      expect(raw.startsWith('magpie://import?name=My%20Provider&')).toBe(true)
+    })
+
+    it('leaves models out when none are picked so magpie lists the site models', async () => {
+      await submitMagpie()
+
+      expect(openedLink().searchParams.has('models')).toBe(false)
+    })
+  })
+
+  describe('name and id', () => {
+    it('uses the default name when the name is cleared', async () => {
+      await submitMagpie({ name: '   ' })
+
+      expect(openedLink().searchParams.get('name')).toBe('My Provider')
+    })
+
+    it('adds no id when the name gives magpie a usable one', async () => {
+      await submitMagpie({ name: 'Team Relay' })
+
+      expect(openedLink().searchParams.has('id')).toBe(false)
+    })
+
+    it('keeps a Chinese name and derives the id from the site host', async () => {
+      await submitMagpie({ name: '我的中转' })
+
+      const link = openedLink()
+      expect([
+        link.searchParams.get('name'),
+        link.searchParams.get('id'),
+      ]).toEqual(['我的中转', 'api-example-com'])
+    })
+
+    it('derives the id from the site host for the reserved name magpie', async () => {
+      await submitMagpie({ name: 'Magpie' })
+
+      expect(openedLink().searchParams.get('id')).toBe('api-example-com')
+    })
+
+    it('falls back to a fixed id when the host slug is also magpie', async () => {
+      setSite('https://magpie')
+
+      await submitMagpie({ name: '中转' })
+
+      expect(openedLink().searchParams.get('id')).toBe('relay')
+    })
+  })
+
+  describe('balance query', () => {
+    it('converts the balance to CNY with the USD exchange rate for a CNY site', async () => {
+      setCurrency({
+        quotaPerUnit: 1000000,
+        quotaDisplayType: 'CNY',
+        usdExchangeRate: 7.3,
+      })
+
+      await submitMagpie()
+
+      expect(openedLink().searchParams.get('balance_path')).toBe(
+        '¥data.total_available / 1000000 * 7.3'
+      )
+    })
+
+    it('reads the account quota for an unlimited key that allows the query', async () => {
+      await submitMagpie({ unlimitedQuota: true, allowUserQuotaQuery: true })
+
+      expect(openedLink().searchParams.get('balance_path')).toBe(
+        '$data.user_quota.total_available / 1000000'
+      )
+    })
+
+    it('converts the account quota to CNY for an unlimited key on a CNY site', async () => {
+      setCurrency({
+        quotaPerUnit: 1000000,
+        quotaDisplayType: 'CNY',
+        usdExchangeRate: 7.3,
+      })
+
+      await submitMagpie({ unlimitedQuota: true, allowUserQuotaQuery: true })
+
+      expect(openedLink().searchParams.get('balance_path')).toBe(
+        '¥data.user_quota.total_available / 1000000 * 7.3'
+      )
+    })
+
+    it('disables the balance switch with the key reason for an unlimited key without the account quota query', () => {
+      renderMagpie({ unlimitedQuota: true, allowUserQuotaQuery: false })
+
+      const toggle = screen.getByRole('switch', BALANCE_SWITCH)
+      expect(toggle).toHaveAttribute('aria-disabled', 'true')
+      expect(toggle).toHaveAccessibleDescription(
+        'This key has no limit of its own and does not allow querying the account quota, so magpie cannot show its balance.'
+      )
+    })
+
+    it('omits balance parameters for an unlimited key without the account quota query', async () => {
+      await submitMagpie({ unlimitedQuota: true, allowUserQuotaQuery: false })
+
+      const keys = [...openedLink().searchParams.keys()]
+      expect(keys.filter((key) => key.startsWith('balance'))).toEqual([])
+    })
+
+    it('omits balance parameters when the switch is turned off', async () => {
+      await submitMagpie({ usage: false })
+
+      const keys = [...openedLink().searchParams.keys()]
+      expect(keys.filter((key) => key.startsWith('balance'))).toEqual([])
+    })
+
+    it('describes the balance switch for magpie when the query is available', () => {
+      renderMagpie()
+
+      expect(
+        screen.getByRole('switch', BALANCE_SWITCH)
+      ).toHaveAccessibleDescription(
+        'Lets magpie show the remaining quota after import.'
+      )
+    })
+  })
+
+  describe('dialog layout', () => {
+    it('shows no application choice', () => {
+      renderMagpie()
+
+      const dialog = screen.getByRole('dialog', { name: 'Import to magpie' })
+      expect(within(dialog).queryByRole('radio')).not.toBeInTheDocument()
+    })
+
+    it('prefills the default provider name', () => {
+      renderMagpie()
+
+      expect(screen.getByRole('textbox', { name: 'Name' })).toHaveValue(
+        'My Provider'
+      )
+    })
+  })
+
+  describe('site address', () => {
+    it.each([
+      [
+        'a trailing slash',
+        'https://api.example.com/',
+        'https://api.example.com',
+      ],
+      [
+        'an HTTPS port',
+        'https://api.example.com:8443',
+        'https://api.example.com:8443',
+      ],
+      [
+        'an uppercase local host',
+        'http://LOCALHOST:3000',
+        'http://localhost:3000',
+      ],
+      ['a shorthand private IPv4 address', 'http://10.1', 'http://10.0.0.1'],
+      [
+        'a private IPv6 address',
+        'http://[fd12::1]:8080',
+        'http://[fd12::1]:8080',
+      ],
+    ])(
+      'normalizes a site with %s in the base URLs',
+      async (_case, site, base) => {
+        setSite(site)
+
+        await submitMagpie()
+
+        expect(openedLink().searchParams.get('chat')).toBe(`${base}/v1`)
+      }
+    )
+
+    it('asks the balance on the HTTPS port of the site', async () => {
+      setSite('https://api.example.com:8443/')
+
+      await submitMagpie()
+
+      expect(openedLink().searchParams.get('balance')).toBe(
+        'https://api.example.com:8443/api/usage/token/'
+      )
+    })
+
+    it('disables the balance switch for a local HTTP site', () => {
+      setSite('http://192.168.1.10:3000')
+
+      renderMagpie()
+
+      const toggle = screen.getByRole('switch', BALANCE_SWITCH)
+      expect(toggle).toHaveAttribute('aria-disabled', 'true')
+      expect(toggle).toHaveAccessibleDescription(
+        'magpie can only query balance for HTTPS sites.'
+      )
+    })
+
+    it.each(['http://localhost:3000', 'http://192.168.1.10:3000'])(
+      'imports the local HTTP site %s without balance or website',
+      async (site) => {
+        setSite(site)
+
+        await submitMagpie()
+
+        expect([...openedLink().searchParams.keys()]).toEqual([
+          'name',
+          'key',
+          'chat',
+          'responses',
+          'anthropic',
+          'gemini',
+        ])
+      }
+    )
+
+    it('warns that magpie only imports HTTPS or local sites for a public HTTP site', async () => {
+      setSite('http://api.example.com')
+
+      await submitMagpie()
+
+      expect(
+        await screen.findByText(
+          'magpie only imports HTTPS sites, or HTTP sites on this machine or the local network.'
+        )
+      ).toBeVisible()
+    })
+
+    it.each([
+      ['a public HTTP site', 'http://api.example.com'],
+      ['a site with userinfo', 'https://user:pass@api.example.com'],
+      ['a site with a query', 'https://api.example.com/?a=1'],
+      ['a site with a fragment', 'https://api.example.com/#top'],
+      ['an IPv6 address outside fc00::/7', 'http://[fc::1]'],
+    ])('does not open magpie for %s', async (_case, site) => {
+      setSite(site)
+
+      await submitMagpie()
+
+      expect(openSpy).not.toHaveBeenCalled()
     })
   })
 })

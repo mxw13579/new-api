@@ -114,4 +114,5 @@ export const CLIENT_IMPORT_ENTRIES: {
   { target: 'cc-switch', labelKey: 'CC Switch' },
   { target: 'codex-plus-plus', labelKey: 'Codex++' },
   { target: 'aimami', labelKey: 'AiMaMi' },
+  { target: 'magpie', labelKey: 'magpie' },
 ]
