@@ -17,6 +17,7 @@ func TurnstileCheck() gin.HandlerFunc {
 		if common.TurnstileCheckEnabled {
 			response := c.Query("turnstile")
 			if response == "" {
+				c.Set(turnstileRejectionContextKey, "turnstile_missing")
 				common.ApiErrorT(c, "Turnstile token is empty")
 				c.Abort()
 				return
@@ -28,6 +29,7 @@ func TurnstileCheck() gin.HandlerFunc {
 			})
 			if err != nil {
 				common.SysLog(err.Error())
+				c.Set(turnstileRejectionContextKey, "turnstile_unavailable")
 				c.JSON(http.StatusOK, gin.H{
 					"success": false,
 					"message": err.Error(),
@@ -40,6 +42,7 @@ func TurnstileCheck() gin.HandlerFunc {
 			err = common.DecodeJson(rawRes.Body, &res)
 			if err != nil {
 				common.SysLog(err.Error())
+				c.Set(turnstileRejectionContextKey, "turnstile_unavailable")
 				c.JSON(http.StatusOK, gin.H{
 					"success": false,
 					"message": err.Error(),
@@ -48,6 +51,7 @@ func TurnstileCheck() gin.HandlerFunc {
 				return
 			}
 			if !res.Success {
+				c.Set(turnstileRejectionContextKey, "turnstile_failed")
 				common.ApiErrorT(c, "Turnstile verification failed, please refresh and try again!")
 				c.Abort()
 				return

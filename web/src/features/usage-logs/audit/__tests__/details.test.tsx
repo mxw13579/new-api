@@ -881,6 +881,81 @@ it('labels account operation parameters', async () => {
   ])
 })
 
+it('summarizes registration events from their action instead of the raw content', async () => {
+  const i18n = createInstance()
+  await i18n.init({ lng: 'zh', resources: { zh } })
+  const registration = buildAuditDetails(
+    {
+      ...entry,
+      user_id: 0,
+      username: '',
+      actor_role: 1,
+      category: 'login',
+      action: 'user.register',
+      success: false,
+      content: 'User registration',
+      other: {
+        op: {
+          action: 'user.register',
+          params: { method: 'password', failure_reason: 'code_invalid' },
+        },
+      },
+    },
+    i18n.t
+  )
+  const verification = buildAuditDetails(
+    {
+      ...entry,
+      category: 'login',
+      action: 'user.register.verification',
+      content: 'Registration verification code request',
+      other: { op: { action: 'user.register.verification', params: {} } },
+    },
+    i18n.t
+  )
+
+  expect(registration.summary).toBe(
+    zh.translation['Registration via {{method}}'].replace(
+      '{{method}}',
+      String(registration.fields[0]?.value)
+    )
+  )
+  expect(registration.fields).toContainEqual({
+    label: zh.translation['Failure reason'],
+    value: 'code_invalid',
+  })
+  expect(verification.summary).toBe(
+    zh.translation['Registration verification code request']
+  )
+})
+
+it('summarizes a registration without a recorded method without template placeholders', async () => {
+  const i18n = createInstance()
+  await i18n.init({ lng: 'zh', resources: { zh } })
+  const detail = buildAuditDetails(
+    {
+      ...entry,
+      user_id: 0,
+      username: '',
+      actor_role: 1,
+      category: 'login',
+      action: 'user.register',
+      success: false,
+      content: 'User registration',
+      other: {
+        op: {
+          action: 'user.register',
+          params: { failure_reason: 'turnstile_failed' },
+        },
+      },
+    },
+    i18n.t
+  )
+
+  expect(detail.summary).toBe(zh.translation['User registration'])
+  expect(detail.summary).not.toContain('{{')
+})
+
 it('loads scope labels for a generated token when its details open', async () => {
   const get = vi.spyOn(api, 'get').mockResolvedValue({
     data: { success: true, data: { resources: scopeResources } },

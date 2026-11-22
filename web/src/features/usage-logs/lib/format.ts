@@ -477,6 +477,8 @@ const AUDIT_TEMPLATES: Record<string, string> = {
   'user.binding_bind': 'Account binding',
   'user.binding_unbind': 'Account unlinking',
   'user.email_binding_resend': 'Email confirmation code resend',
+  'user.register': 'Registration via {{method}}',
+  'user.register.verification': 'Registration verification code request',
 
   login: 'Logged in successfully via {{method}}',
   // User management
@@ -642,5 +644,9 @@ export function renderAuditContent(
     return `${quotaOperation.summary} · ${quotaOperation.description}`
   }
   const params = { ...op.params }
+  // Older rows rejected before the handler ran carry no sign-up method.
+  if (op.action === 'user.register' && !params.method) {
+    return t('User registration')
+  }
   return t(template, params)
 }

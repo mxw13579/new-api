@@ -475,8 +475,17 @@ func findOrCreateOAuthUser(c *gin.Context, provider oauth.Provider, oauthUser *o
 		}
 	}
 
-	// User doesn't exist, create new user if registration is enabled
+	// User doesn't exist, create new user if registration is enabled. The
+	// registration event is recorded apart from the login that follows it.
+	registration := middleware.RegistrationAuditDetail{Method: loginMethodFromContext(c)}
+	defer func() {
+		if registration.UserId == 0 && registration.Reason == "" {
+			registration.Reason = "create_failed"
+		}
+		middleware.RecordRegistrationAudit(c, middleware.AuditActionRegister, 0, registration.UserId > 0, registration)
+	}()
 	if !common.RegisterEnabled {
+		registration.Reason = "registration_disabled"
 		return nil, nil, &OAuthRegistrationDisabledError{}
 	}
 
@@ -501,10 +510,13 @@ func findOrCreateOAuthUser(c *gin.Context, provider oauth.Provider, oauthUser *o
 	}
 	if oauthUser.Email != "" {
 		user.Email = model.NormalizeEmail(oauthUser.Email)
+		registration.Email = user.Email
 		if err := model.EnsureEmailAvailable(user.Email, 0); err != nil {
 			if errors.Is(err, model.ErrEmailAlreadyTaken) {
+				registration.Reason = "email_taken"
 				return nil, nil, &OAuthEmailAlreadyTakenError{}
 			}
+			registration.Reason = "database_error"
 			return nil, nil, err
 		}
 	}
@@ -517,6 +529,7 @@ func findOrCreateOAuthUser(c *gin.Context, provider oauth.Provider, oauthUser *o
 		inviterId, _ = model.GetUserIdByAffCode(affiliateCode)
 	}
 	user.InviterId = inviterId
+	registration.Username, registration.InviterId = user.Username, inviterId
 
 	// Use transaction to ensure user creation and OAuth binding are atomic
 	if genericProvider, ok := provider.(*oauth.GenericOAuthProvider); ok {
@@ -576,6 +589,7 @@ func findOrCreateOAuthUser(c *gin.Context, provider oauth.Provider, oauthUser *o
 		user.FinalizeOAuthUserCreation(inviterId)
 	}
 
+	registration.UserId = user.Id
 	return user, nil, nil
 }
 

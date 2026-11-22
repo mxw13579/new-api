@@ -81,20 +81,26 @@ func WeChatAuth(c *gin.Context) {
 			return
 		}
 	} else {
-		if common.RegisterEnabled {
-			user.Username = "wechat_" + strconv.Itoa(model.GetMaxUserId()+1)
-			user.DisplayName = "WeChat User"
-			user.Role = common.RoleCommonUser
-			user.Status = common.UserStatusEnabled
-
-			if err := user.Insert(0); err != nil {
-				common.ApiError(c, err)
-				return
-			}
-		} else {
+		registration := middleware.RegistrationAuditDetail{Method: "wechat"}
+		if !common.RegisterEnabled {
+			registration.Reason = "registration_disabled"
+			middleware.RecordRegistrationAudit(c, middleware.AuditActionRegister, 0, false, registration)
 			common.ApiErrorT(c, "New user registration has been disabled by administrator")
 			return
 		}
+		user.Username = "wechat_" + strconv.Itoa(model.GetMaxUserId()+1)
+		user.DisplayName = "WeChat User"
+		user.Role = common.RoleCommonUser
+		user.Status = common.UserStatusEnabled
+		registration.Username = user.Username
+		if err := user.Insert(0); err != nil {
+			registration.Reason = "create_failed"
+			middleware.RecordRegistrationAudit(c, middleware.AuditActionRegister, 0, false, registration)
+			common.ApiError(c, err)
+			return
+		}
+		registration.UserId = user.Id
+		middleware.RecordRegistrationAudit(c, middleware.AuditActionRegister, 0, true, registration)
 	}
 
 	if user.Status != common.UserStatusEnabled {
