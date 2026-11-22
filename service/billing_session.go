@@ -325,8 +325,30 @@ func (s *BillingSession) reserveToken(delta int) error {
 	return nil
 }
 
+// staysTrustedFor 判断信任旁路会话在预估抬高到 targetQuota 后是否仍满足首次预扣的旁路条件：
+// 钱包余额覆盖新预估，且令牌和钱包仍超过信任阈值。满足时不预扣、不写库，会话保持信任。
+func (s *BillingSession) staysTrustedFor(c *gin.Context, targetQuota int) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.trusted || s.settled || s.refunded || s.funding.Source() != BillingSourceWallet {
+		return false, nil
+	}
+	userQuota, err := model.GetUserQuota(s.relayInfo.UserId, false)
+	if err != nil {
+		return false, err
+	}
+	if userQuota <= 0 || userQuota < targetQuota {
+		return false, nil
+	}
+	return s.trustedWithWalletQuota(c, userQuota), nil
+}
+
 // shouldTrust 统一信任额度检查，适用于钱包和订阅。
 func (s *BillingSession) shouldTrust(c *gin.Context) bool {
+	return s.trustedWithWalletQuota(c, s.relayInfo.UserQuota)
+}
+
+func (s *BillingSession) trustedWithWalletQuota(c *gin.Context, walletQuota int) bool {
 	// 异步任务（ForcePreConsume=true）必须预扣全额，不允许信任旁路
 	if s.relayInfo.ForcePreConsume {
 		return false
@@ -349,7 +371,7 @@ func (s *BillingSession) shouldTrust(c *gin.Context) bool {
 
 	switch s.funding.Source() {
 	case BillingSourceWallet:
-		return float64(s.relayInfo.UserQuota) > trustQuota
+		return float64(walletQuota) > trustQuota
 	case BillingSourceSubscription:
 		// 订阅不能启用信任旁路。原因：
 		// 1. PreConsumeUserSubscription 要求 amount>0 来创建预扣记录并锁定订阅

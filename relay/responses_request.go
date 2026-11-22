@@ -14,6 +14,7 @@ import (
 	"github.com/QuantumNous/new-api/relay/requestplugin"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/gin-gonic/gin"
 )
@@ -58,6 +59,9 @@ func PrepareResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, req *d
 		if apiErr := requestplugin.PassThrough(c, info, storage); apiErr != nil {
 			return nil, nil, nil, apiErr
 		}
+		if apiErr := service.PrepareTieredBillingForUpstreamRequest(c, info, nil); apiErr != nil {
+			return nil, nil, nil, apiErr
+		}
 		body := common.NewReplayableBodyReader(storage)
 		return adaptor, body, io.NopCloser(body), nil
 	}
@@ -93,6 +97,9 @@ func PrepareResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, req *d
 	}
 	// egress reads the body as it is sent, after the channel finalized it.
 	if apiErr = requestplugin.Egress(c, info, jsonData); apiErr != nil {
+		return nil, nil, nil, apiErr
+	}
+	if apiErr = service.PrepareTieredBillingForUpstreamRequest(c, info, jsonData); apiErr != nil {
 		return nil, nil, nil, apiErr
 	}
 

@@ -1,8 +1,11 @@
 package service
 
 import (
+	"errors"
 	"net/http"
+	"strings"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
@@ -233,6 +236,127 @@ func PrepareTieredBillingForSelectedGroup(c *gin.Context, relayInfo *relaycommon
 	if err := relayInfo.Billing.Reserve(snap.EstimatedQuotaAfterGroup); err != nil {
 		return types.NewError(err, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry())
 	}
+	relayInfo.FinalPreConsumedQuota = relayInfo.Billing.GetPreConsumedQuota()
+	return nil
+}
+
+// PrepareTieredBillingForUpstreamRequest prices param("service_tier") by the
+// body this attempt sends upstream, after channel field filtering, request
+// plugins, parameter overrides and finalizers, and reserves a higher estimate
+// before that body is sent. A nil upstreamBody marks a pass-through attempt,
+// which sends the client's body and so prices the client's tier. Every other
+// request member keeps the client's value, and each attempt starts from the
+// client's tier, so settlement uses the last attempt's. An expression that
+// does not call param() is left alone, as is a tier equal to the one already
+// priced. A lower estimate is not refunded here; settlement reconciles it.
+func PrepareTieredBillingForUpstreamRequest(c *gin.Context, relayInfo *relaycommon.RelayInfo, upstreamBody []byte) *types.NewAPIError {
+	if relayInfo == nil {
+		return nil
+	}
+	snap := relayInfo.TieredBillingSnapshot
+	if snap == nil || snap.BillingMode != "tiered_expr" || !billingexpr.UsedVarsByHash(snap.ExprString, snap.ExprHash)["param"] {
+		return nil
+	}
+	input := billingexpr.RequestInput{}
+	if relayInfo.BillingRequestInput != nil {
+		input = *relayInfo.BillingRequestInput
+	}
+	const member = "service_tier"
+	priced := ojson.GetBytesNoCopy(input.Body, member).Raw
+	if relayInfo.BillingClientServiceTier == nil {
+		client := strings.Clone(priced)
+		relayInfo.BillingClientServiceTier = &client
+	}
+	sent := *relayInfo.BillingClientServiceTier
+	if upstreamBody != nil {
+		sent = ojson.GetBytesNoCopy(upstreamBody, member).Raw
+	}
+	if sent == priced {
+		return nil
+	}
+
+	// Only the tier member changes; everything else keeps the client's bytes,
+	// so param() on other paths is unaffected. A body the gateway did not
+	// load (not JSON) still prices the tier the upstream receives.
+	base := input.Body
+	if base == nil {
+		base = []byte("{}")
+	}
+	if !ojson.GetBytesNoCopy(base, "@this").IsObject() {
+		return nil
+	}
+	doc := ojson.NewDoc(base)
+	err := relaycommon.DeleteJSONMember(doc, member)
+	if err == nil && sent != "" {
+		err = doc.SetRaw(member, sent)
+	}
+	if err != nil {
+		return types.NewErrorWithStatusCode(err, types.ErrorCodeModelPriceError, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+	}
+	input.Body = doc.Bytes()
+
+	cost, trace, err := billingexpr.RunExprByHashWithRequest(snap.ExprString, snap.ExprHash, billingexpr.TokenParams{
+		P: float64(snap.EstimatedPromptTokens), C: float64(snap.EstimatedCompletionTokens), Len: float64(snap.EstimatedPromptTokens),
+	}, input)
+	if err != nil {
+		return types.NewErrorWithStatusCode(err, types.ErrorCodeModelPriceError, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+	}
+	beforeGroup := cost / 1_000_000 * snap.QuotaPerUnit
+	if trace.BillingUnit != billingexpr.BillingUnitRequest && snap.PreConsumeMultiplier != 0 {
+		beforeGroup *= snap.PreConsumeMultiplier
+	}
+	groupRatio := relayInfo.PriceData.GroupRatioInfo.GroupRatio
+	quota, err := billingexpr.QuotaRoundStrict(beforeGroup * groupRatio)
+	if err != nil {
+		return types.NewErrorWithStatusCode(err, types.ErrorCodeModelPriceError, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+	}
+
+	if groupRatio != 0 && quota > snap.EstimatedQuotaAfterGroup {
+		if apiErr := reserveRaisedTieredEstimate(c, relayInfo, quota); apiErr != nil {
+			return apiErr
+		}
+	}
+
+	relayInfo.BillingRequestInput = &input
+	snap.GroupRatio = groupRatio
+	snap.EstimatedQuotaBeforeGroup = beforeGroup
+	snap.EstimatedQuotaAfterGroup = quota
+	snap.EstimatedTier = trace.MatchedTier
+	snap.EstimatedBillingUnit = trace.BillingUnit
+	snap.EstimatedFixedPrice = trace.FixedPrice
+	relayInfo.PriceData.QuotaToPreConsume = quota
+	return nil
+}
+
+// reserveRaisedTieredEstimate covers a raised estimate before submission. A
+// trusted session keeps its bypass when it would still be trusted for the
+// new estimate; otherwise the raise is reserved and must be covered by the
+// balance rather than admitted as wallet debt.
+func reserveRaisedTieredEstimate(c *gin.Context, relayInfo *relaycommon.RelayInfo, quota int) *types.NewAPIError {
+	if relayInfo.Billing == nil {
+		if apiErr := PreConsumeBilling(c, quota, relayInfo); apiErr != nil {
+			return apiErr
+		}
+		relayInfo.PriceData.FreeModel = false
+		return nil
+	}
+	if session, ok := relayInfo.Billing.(*BillingSession); ok {
+		trusted, err := session.staysTrustedFor(c, quota)
+		if err != nil {
+			return types.NewError(err, types.ErrorCodeQueryDataError, types.ErrOptionWithSkipRetry())
+		}
+		if trusted {
+			return nil
+		}
+	}
+	if err := relayInfo.Billing.ReserveBeforeSubmit(quota); err != nil {
+		var apiErr *types.NewAPIError
+		if errors.As(err, &apiErr) {
+			return apiErr
+		}
+		return types.NewErrorWithStatusCode(err, types.ErrorCodeInsufficientUserQuota, http.StatusForbidden, types.ErrOptionWithSkipRetry())
+	}
+	relayInfo.PriceData.FreeModel = false
 	relayInfo.FinalPreConsumedQuota = relayInfo.Billing.GetPreConsumedQuota()
 	return nil
 }

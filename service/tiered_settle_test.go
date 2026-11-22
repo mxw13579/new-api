@@ -12,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	kittypes "github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/shopspring/decimal"
@@ -560,6 +561,231 @@ func TestTryTieredSettleUsesFinalGroupAfterRetry(t *testing.T) {
 			assert.Equal(t, tt.wantQuota, quota)
 			assert.Equal(t, tt.finalGroupRatio, relayInfo.TieredBillingSnapshot.GroupRatio)
 			assert.Equal(t, tt.wantQuota, relayInfo.TieredBillingSnapshot.EstimatedQuotaAfterGroup)
+		})
+	}
+}
+
+// serviceTierExpr prices the tier the upstream body carries; the stream rule
+// shows that the other param() members keep the client's value.
+const serviceTierExpr = `(tier("base", p * 10 + c * 50)) * (param("service_tier") == "fast" ? 2 : 1) * (param("service_tier") == "priority" ? 2 : 1) * (param("service_tier") == "ultrafast" ? 6 : 1) * (param("stream") == true ? 3 : 1)`
+
+func TestPrepareTieredBillingForUpstreamRequestPricesTheSentServiceTier(t *testing.T) {
+	// Estimates use P=1000, C=0: base 10000 -> 5000 quota. Settlement uses
+	// P=1000, C=100: base 15000 -> 7500 quota.
+	for _, tc := range []struct {
+		name, client string
+		// noBody is a client body the gateway did not load (not JSON).
+		noBody bool
+		// attempts are the upstream bodies of the attempts in order; the
+		// last one settles. "" is a pass-through attempt.
+		attempts     []string
+		wantReserves []int
+		wantEstimate int
+		wantQuota    int
+		wantMatched  []string
+	}{
+		{name: "override sets fast for a client without a tier", client: `{"model":"m","input":"hi"}`,
+			attempts:     []string{`{"model":"m","input":"hi","service_tier":"fast"}`},
+			wantReserves: []int{10000}, wantEstimate: 10000, wantQuota: 15000,
+			wantMatched: []string{`param("service_tier") == "fast"`}},
+		{name: "channel filters the client's fast", client: `{"model":"m","service_tier":"fast"}`,
+			attempts:     []string{`{"model":"m"}`},
+			wantEstimate: 5000, wantQuota: 7500},
+		{name: "override turns fast into ultrafast", client: `{"model":"m","service_tier":"fast"}`,
+			attempts:     []string{`{"model":"m","service_tier":"ultrafast"}`},
+			wantReserves: []int{30000}, wantEstimate: 30000, wantQuota: 45000,
+			wantMatched: []string{`param("service_tier") == "ultrafast"`}},
+		{name: "allowed priority without override is unchanged", client: `{"model":"m","service_tier":"priority"}`,
+			attempts:     []string{`{"service_tier":"priority","model":"m"}`},
+			wantEstimate: 10000, wantQuota: 15000,
+			wantMatched: []string{`param("service_tier") == "priority"`}},
+		{name: "retry settles on the last attempt", client: `{"model":"m"}`,
+			attempts:     []string{`{"model":"m","service_tier":"fast"}`, `{"model":"m"}`},
+			wantReserves: []int{10000}, wantEstimate: 5000, wantQuota: 7500},
+		{name: "pass-through retry after an override prices the client's tier", client: `{"model":"m"}`,
+			attempts:     []string{`{"model":"m","service_tier":"fast"}`, ""},
+			wantReserves: []int{10000}, wantEstimate: 5000, wantQuota: 7500},
+		{name: "pass-through retry restores the client's fast", client: `{"model":"m","service_tier":"fast"}`,
+			attempts:     []string{`{"model":"m","service_tier":"ultrafast"}`, ""},
+			wantReserves: []int{30000}, wantEstimate: 10000, wantQuota: 15000,
+			wantMatched: []string{`param("service_tier") == "fast"`}},
+		{name: "unloaded non-JSON body prices the forced tier", noBody: true,
+			attempts:     []string{`{"model":"m","service_tier":"fast"}`},
+			wantReserves: []int{10000}, wantEstimate: 10000, wantQuota: 15000,
+			wantMatched: []string{`param("service_tier") == "fast"`}},
+		{name: "other members keep the client's value", client: `{"model":"m","stream":true}`,
+			attempts:     []string{`{"model":"m","service_tier":"fast"}`},
+			wantReserves: []int{30000}, wantEstimate: 30000, wantQuota: 45000,
+			wantMatched: []string{`param("service_tier") == "fast"`, `param("stream") == true`}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			input := billingexpr.RequestInput{}
+			if !tc.noBody {
+				input.Body = []byte(tc.client)
+			}
+			hash := billingexpr.ExprHashString(serviceTierExpr)
+			cost, trace, err := billingexpr.RunExprByHashWithRequest(serviceTierExpr, hash, billingexpr.TokenParams{P: 1000, Len: 1000}, input)
+			require.NoError(t, err)
+			estimate := billingexpr.QuotaRound(cost / 1_000_000 * testQuotaPerUnit)
+			billing := &recordingBillingSettler{preConsumedQuota: estimate}
+			info := &relaycommon.RelayInfo{
+				Billing:               billing,
+				FinalPreConsumedQuota: estimate,
+				BillingRequestInput:   &input,
+				TieredBillingSnapshot: &billingexpr.BillingSnapshot{
+					BillingMode: "tiered_expr", ExprString: serviceTierExpr, ExprHash: hash, GroupRatio: 1,
+					EstimatedPromptTokens: 1000, PreConsumeMultiplier: 1, QuotaPerUnit: testQuotaPerUnit,
+					EstimatedQuotaBeforeGroup: cost / 1_000_000 * testQuotaPerUnit, EstimatedQuotaAfterGroup: estimate, EstimatedTier: trace.MatchedTier,
+				},
+				PriceData: types.PriceData{QuotaToPreConsume: estimate, GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 1}},
+			}
+
+			for _, body := range tc.attempts {
+				var upstream []byte
+				if body != "" {
+					upstream = []byte(body)
+				}
+				require.Nil(t, PrepareTieredBillingForUpstreamRequest(nil, info, upstream))
+			}
+
+			assert.Equal(t, tc.wantReserves, billing.reserveTargets)
+			assert.Equal(t, tc.wantEstimate, info.TieredBillingSnapshot.EstimatedQuotaAfterGroup)
+			assert.Equal(t, tc.wantEstimate, info.PriceData.QuotaToPreConsume)
+			assert.Equal(t, billing.preConsumedQuota, info.FinalPreConsumedQuota)
+			assert.GreaterOrEqual(t, info.FinalPreConsumedQuota, max(estimate, tc.wantEstimate), "a lower estimate keeps the reservation")
+			ok, quota, result := TryTieredSettle(info, billingexpr.TokenParams{P: 1000, C: 100, Len: 1000})
+			require.True(t, ok)
+			require.NotNil(t, result)
+			assert.Equal(t, tc.wantQuota, quota)
+			var matched []string
+			for _, rule := range result.RequestRules {
+				if rule.Matched {
+					matched = append(matched, rule.Cond)
+				}
+			}
+			assert.Equal(t, tc.wantMatched, matched)
+		})
+	}
+}
+
+func TestPrepareTieredBillingForUpstreamRequestSkipsExpressionsWithoutParam(t *testing.T) {
+	const expr = `tier("base", p * 10 + c * 50)`
+	snap := makeSnapshot(expr, 1, 1000, 0)
+	snap.EstimatedQuotaAfterGroup = 5000
+	billing := &recordingBillingSettler{preConsumedQuota: 5000}
+	info := &relaycommon.RelayInfo{
+		Billing:               billing,
+		TieredBillingSnapshot: snap,
+		BillingRequestInput:   &billingexpr.RequestInput{Headers: map[string]string{}},
+		PriceData:             types.PriceData{GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 1}},
+	}
+
+	require.Nil(t, PrepareTieredBillingForUpstreamRequest(nil, info, []byte(`{"service_tier":"fast"}`)))
+
+	assert.Nil(t, info.BillingRequestInput.Body, "the client body is not loaded for an expression without param()")
+	assert.Empty(t, billing.reserveTargets)
+	assert.Equal(t, 5000, info.TieredBillingSnapshot.EstimatedQuotaAfterGroup)
+}
+
+func TestPrepareTieredBillingForUpstreamRequestRejectsUncoveredRaise(t *testing.T) {
+	truncate(t)
+	const userID = 703
+	// The initial 5000 is already reserved; the 5000 raise to fast exceeds
+	// the 3000 left in the wallet.
+	seedUser(t, userID, 3000)
+	hash := billingexpr.ExprHashString(serviceTierExpr)
+	client := billingexpr.RequestInput{Body: []byte(`{"model":"m"}`)}
+	info := &relaycommon.RelayInfo{
+		UserId:                userID,
+		IsPlayground:          true,
+		FinalPreConsumedQuota: 5000,
+		BillingRequestInput:   &client,
+		TieredBillingSnapshot: &billingexpr.BillingSnapshot{
+			BillingMode: "tiered_expr", ExprString: serviceTierExpr, ExprHash: hash, GroupRatio: 1,
+			EstimatedPromptTokens: 1000, QuotaPerUnit: testQuotaPerUnit,
+			EstimatedQuotaBeforeGroup: 5000, EstimatedQuotaAfterGroup: 5000, EstimatedTier: "base",
+		},
+		PriceData: types.PriceData{GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 1}},
+	}
+	session := &BillingSession{relayInfo: info, funding: &WalletFunding{userId: userID, consumed: 5000}, preConsumedQuota: 5000}
+	info.Billing = session
+
+	apiErr := PrepareTieredBillingForUpstreamRequest(nil, info, []byte(`{"model":"m","service_tier":"fast"}`))
+
+	require.NotNil(t, apiErr)
+	assert.Equal(t, kittypes.ErrorCodeInsufficientUserQuota, apiErr.GetErrorCode())
+	assert.Equal(t, http.StatusForbidden, apiErr.StatusCode)
+	assert.Equal(t, 5000, session.GetPreConsumedQuota())
+	assert.Equal(t, 5000, info.TieredBillingSnapshot.EstimatedQuotaAfterGroup)
+	assert.Equal(t, `{"model":"m"}`, string(info.BillingRequestInput.Body))
+	userQuota, err := model.GetUserQuota(userID, false)
+	require.NoError(t, err)
+	assert.Equal(t, 3000, userQuota, "an uncovered raise is not admitted as wallet debt")
+}
+
+func TestPrepareTieredBillingForUpstreamRequestKeepsTrustedBypass(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, tc := range []struct {
+		name   string
+		wallet int
+		// wantTrusted keeps the bypass; otherwise the raise is reserved
+		// against a wallet that cannot cover it.
+		wantTrusted bool
+	}{
+		{name: "wallet above the trust threshold", wallet: 10_000_000, wantTrusted: true},
+		{name: "wallet no longer trusted", wallet: 6000},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			truncate(t)
+			const userID = 704
+			seedUser(t, userID, tc.wallet)
+			hash := billingexpr.ExprHashString(serviceTierExpr)
+			client := billingexpr.RequestInput{Body: []byte(`{"model":"m"}`)}
+			info := &relaycommon.RelayInfo{
+				UserId:              userID,
+				IsPlayground:        true,
+				TokenUnlimited:      true,
+				UserQuota:           10_000_000,
+				BillingRequestInput: &client,
+				TieredBillingSnapshot: &billingexpr.BillingSnapshot{
+					BillingMode: "tiered_expr", ExprString: serviceTierExpr, ExprHash: hash, GroupRatio: 1,
+					EstimatedPromptTokens: 1000, QuotaPerUnit: testQuotaPerUnit,
+					EstimatedQuotaBeforeGroup: 5000, EstimatedQuotaAfterGroup: 5000, EstimatedTier: "base",
+				},
+				PriceData: types.PriceData{GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 1}},
+			}
+			session := &BillingSession{relayInfo: info, funding: &WalletFunding{userId: userID}, trusted: true}
+			info.Billing = session
+			ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+			ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+
+			apiErr := PrepareTieredBillingForUpstreamRequest(ctx, info, []byte(`{"model":"m","service_tier":"fast"}`))
+
+			if !tc.wantTrusted {
+				require.NotNil(t, apiErr)
+				assert.Equal(t, kittypes.ErrorCodeInsufficientUserQuota, apiErr.GetErrorCode())
+				userQuota, err := model.GetUserQuota(userID, false)
+				require.NoError(t, err)
+				assert.Equal(t, tc.wallet, userQuota)
+				return
+			}
+			require.Nil(t, apiErr)
+			assert.True(t, session.trusted)
+			assert.Zero(t, session.GetPreConsumedQuota())
+			assert.Zero(t, info.FinalPreConsumedQuota)
+			assert.Equal(t, 10000, info.TieredBillingSnapshot.EstimatedQuotaAfterGroup)
+			userQuota, err := model.GetUserQuota(userID, false)
+			require.NoError(t, err)
+			assert.Equal(t, tc.wallet, userQuota, "a trusted raise writes nothing before submission")
+
+			ok, quota, result := TryTieredSettle(info, billingexpr.TokenParams{P: 1000, C: 100, Len: 1000})
+			require.True(t, ok)
+			require.NotNil(t, result)
+			assert.Equal(t, 15000, quota)
+			require.NoError(t, session.Settle(quota))
+			userQuota, err = model.GetUserQuota(userID, false)
+			require.NoError(t, err)
+			assert.Equal(t, tc.wallet-15000, userQuota)
 		})
 	}
 }
