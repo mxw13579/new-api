@@ -98,6 +98,9 @@ func GeminiHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 		if newAPIError = requestplugin.PassThrough(c, info, storage); newAPIError != nil {
 			return newAPIError
 		}
+		if newAPIError = service.PrepareTieredBillingForUpstreamRequest(c, info, nil); newAPIError != nil {
+			return newAPIError
+		}
 		requestBody = common.NewReplayableBodyReader(storage)
 	} else {
 		// 使用 ConvertGeminiRequest 转换请求格式

@@ -59,6 +59,9 @@ func PrepareResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, req *d
 		if apiErr := requestplugin.PassThrough(c, info, storage); apiErr != nil {
 			return nil, nil, nil, apiErr
 		}
+		if apiErr := service.PrepareTieredBillingForUpstreamRequest(c, info, nil); apiErr != nil {
+			return nil, nil, nil, apiErr
+		}
 		body := common.NewReplayableBodyReader(storage)
 		return adaptor, body, io.NopCloser(body), nil
 	}

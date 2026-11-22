@@ -95,6 +95,9 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 		if newAPIError = requestplugin.PassThrough(c, info, storage); newAPIError != nil {
 			return newAPIError
 		}
+		if newAPIError = service.PrepareTieredBillingForUpstreamRequest(c, info, nil); newAPIError != nil {
+			return newAPIError
+		}
 		requestBody = common.NewReplayableBodyReader(storage)
 	} else {
 		convertedRequest, err := adaptor.ConvertClaudeRequest(c, info, request)

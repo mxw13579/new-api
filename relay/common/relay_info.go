@@ -189,7 +189,12 @@ type RelayInfo struct {
 	// and again before settlement. Non-nil only when billing mode is "tiered_expr".
 	TieredBillingSnapshot *billingexpr.BillingSnapshot
 	BillingRequestInput   *billingexpr.RequestInput
-	BillingImageCount     *int
+	// BillingClientServiceTier is the client's top-level service_tier as raw
+	// JSON ("" when absent), recorded before an attempt prices the tier it
+	// sends upstream so that every attempt starts from the client's value.
+	// Nil until the first attempt records it.
+	BillingClientServiceTier *string
+	BillingImageCount        *int
 	// ImageRequestCount is the effective quantity sent on the current attempt;
 	// ImageQuotaBeforeGroup is the frozen legacy estimate before request ratios.
 	ImageRequestCount     int

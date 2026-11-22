@@ -574,8 +574,10 @@ func TestPrepareTieredBillingForUpstreamRequestPricesTheSentServiceTier(t *testi
 	// P=1000, C=100: base 15000 -> 7500 quota.
 	for _, tc := range []struct {
 		name, client string
+		// noBody is a client body the gateway did not load (not JSON).
+		noBody bool
 		// attempts are the upstream bodies of the attempts in order; the
-		// last one settles.
+		// last one settles. "" is a pass-through attempt.
 		attempts     []string
 		wantReserves []int
 		wantEstimate int
@@ -600,13 +602,27 @@ func TestPrepareTieredBillingForUpstreamRequestPricesTheSentServiceTier(t *testi
 		{name: "retry settles on the last attempt", client: `{"model":"m"}`,
 			attempts:     []string{`{"model":"m","service_tier":"fast"}`, `{"model":"m"}`},
 			wantReserves: []int{10000}, wantEstimate: 5000, wantQuota: 7500},
+		{name: "pass-through retry after an override prices the client's tier", client: `{"model":"m"}`,
+			attempts:     []string{`{"model":"m","service_tier":"fast"}`, ""},
+			wantReserves: []int{10000}, wantEstimate: 5000, wantQuota: 7500},
+		{name: "pass-through retry restores the client's fast", client: `{"model":"m","service_tier":"fast"}`,
+			attempts:     []string{`{"model":"m","service_tier":"ultrafast"}`, ""},
+			wantReserves: []int{30000}, wantEstimate: 10000, wantQuota: 15000,
+			wantMatched: []string{`param("service_tier") == "fast"`}},
+		{name: "unloaded non-JSON body prices the forced tier", noBody: true,
+			attempts:     []string{`{"model":"m","service_tier":"fast"}`},
+			wantReserves: []int{10000}, wantEstimate: 10000, wantQuota: 15000,
+			wantMatched: []string{`param("service_tier") == "fast"`}},
 		{name: "other members keep the client's value", client: `{"model":"m","stream":true}`,
 			attempts:     []string{`{"model":"m","service_tier":"fast"}`},
 			wantReserves: []int{30000}, wantEstimate: 30000, wantQuota: 45000,
 			wantMatched: []string{`param("service_tier") == "fast"`, `param("stream") == true`}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			input := billingexpr.RequestInput{Body: []byte(tc.client)}
+			input := billingexpr.RequestInput{}
+			if !tc.noBody {
+				input.Body = []byte(tc.client)
+			}
 			hash := billingexpr.ExprHashString(serviceTierExpr)
 			cost, trace, err := billingexpr.RunExprByHashWithRequest(serviceTierExpr, hash, billingexpr.TokenParams{P: 1000, Len: 1000}, input)
 			require.NoError(t, err)
@@ -625,7 +641,11 @@ func TestPrepareTieredBillingForUpstreamRequestPricesTheSentServiceTier(t *testi
 			}
 
 			for _, body := range tc.attempts {
-				require.Nil(t, PrepareTieredBillingForUpstreamRequest(nil, info, []byte(body)))
+				var upstream []byte
+				if body != "" {
+					upstream = []byte(body)
+				}
+				require.Nil(t, PrepareTieredBillingForUpstreamRequest(nil, info, upstream))
 			}
 
 			assert.Equal(t, tc.wantReserves, billing.reserveTargets)
@@ -701,6 +721,73 @@ func TestPrepareTieredBillingForUpstreamRequestRejectsUncoveredRaise(t *testing.
 	userQuota, err := model.GetUserQuota(userID, false)
 	require.NoError(t, err)
 	assert.Equal(t, 3000, userQuota, "an uncovered raise is not admitted as wallet debt")
+}
+
+func TestPrepareTieredBillingForUpstreamRequestKeepsTrustedBypass(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, tc := range []struct {
+		name   string
+		wallet int
+		// wantTrusted keeps the bypass; otherwise the raise is reserved
+		// against a wallet that cannot cover it.
+		wantTrusted bool
+	}{
+		{name: "wallet above the trust threshold", wallet: 10_000_000, wantTrusted: true},
+		{name: "wallet no longer trusted", wallet: 6000},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			truncate(t)
+			const userID = 704
+			seedUser(t, userID, tc.wallet)
+			hash := billingexpr.ExprHashString(serviceTierExpr)
+			client := billingexpr.RequestInput{Body: []byte(`{"model":"m"}`)}
+			info := &relaycommon.RelayInfo{
+				UserId:              userID,
+				IsPlayground:        true,
+				TokenUnlimited:      true,
+				UserQuota:           10_000_000,
+				BillingRequestInput: &client,
+				TieredBillingSnapshot: &billingexpr.BillingSnapshot{
+					BillingMode: "tiered_expr", ExprString: serviceTierExpr, ExprHash: hash, GroupRatio: 1,
+					EstimatedPromptTokens: 1000, QuotaPerUnit: testQuotaPerUnit,
+					EstimatedQuotaBeforeGroup: 5000, EstimatedQuotaAfterGroup: 5000, EstimatedTier: "base",
+				},
+				PriceData: types.PriceData{GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 1}},
+			}
+			session := &BillingSession{relayInfo: info, funding: &WalletFunding{userId: userID}, trusted: true}
+			info.Billing = session
+			ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+			ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+
+			apiErr := PrepareTieredBillingForUpstreamRequest(ctx, info, []byte(`{"model":"m","service_tier":"fast"}`))
+
+			if !tc.wantTrusted {
+				require.NotNil(t, apiErr)
+				assert.Equal(t, kittypes.ErrorCodeInsufficientUserQuota, apiErr.GetErrorCode())
+				userQuota, err := model.GetUserQuota(userID, false)
+				require.NoError(t, err)
+				assert.Equal(t, tc.wallet, userQuota)
+				return
+			}
+			require.Nil(t, apiErr)
+			assert.True(t, session.trusted)
+			assert.Zero(t, session.GetPreConsumedQuota())
+			assert.Zero(t, info.FinalPreConsumedQuota)
+			assert.Equal(t, 10000, info.TieredBillingSnapshot.EstimatedQuotaAfterGroup)
+			userQuota, err := model.GetUserQuota(userID, false)
+			require.NoError(t, err)
+			assert.Equal(t, tc.wallet, userQuota, "a trusted raise writes nothing before submission")
+
+			ok, quota, result := TryTieredSettle(info, billingexpr.TokenParams{P: 1000, C: 100, Len: 1000})
+			require.True(t, ok)
+			require.NotNil(t, result)
+			assert.Equal(t, 15000, quota)
+			require.NoError(t, session.Settle(quota))
+			userQuota, err = model.GetUserQuota(userID, false)
+			require.NoError(t, err)
+			assert.Equal(t, tc.wallet-15000, userQuota)
+		})
+	}
 }
 
 func TestTryTieredSettle_GroupRatioScaling(t *testing.T) {

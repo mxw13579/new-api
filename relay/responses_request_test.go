@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"cmp"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +14,7 @@ import (
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/relay/requestplugin"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
@@ -147,7 +149,7 @@ func TestPrepareResponsesRequestEgressReadsTheFinalizedBody(t *testing.T) {
 	assert.Equal(t, types.ErrorCodeRequestRejected, apiErr.GetErrorCode())
 }
 
-func TestResponsesBillingUsesTheSentServiceTier(t *testing.T) {
+func TestTextBillingUsesTheSentServiceTier(t *testing.T) {
 	service.InitHttpClient()
 	settings := model_setting.GetGlobalSettings()
 	previous := settings.PassThroughRequestEnabled
@@ -156,25 +158,38 @@ func TestResponsesBillingUsesTheSentServiceTier(t *testing.T) {
 	const expr = `(tier("base", p * 10)) * (param("service_tier") == "fast" ? 2 : 1) * (param("service_tier") == "ultrafast" ? 6 : 1)`
 	// P=1000 estimates base 10000, which is 5000 quota at a 500000 unit.
 	const quotaPerUnit = 500_000.0
+	const responsesBody = `{"model":"gpt-5","input":"hi"}`
+	const responsesFast = `{"model":"gpt-5","input":"hi","service_tier":"fast"}`
+	type attempt struct {
+		override               string
+		allowTier, passThrough bool
+	}
 	for _, tc := range []struct {
-		name, body, override string
-		allowTier            bool
-		passThrough          bool
-		websocket            bool
-		insufficient         bool
-		// wantTier is the tier the billing input carries; "" means none.
+		name, endpoint, body, contentType string
+		attempts                          []attempt
+		insufficient                      bool
+		// wantTier is the tier the last attempt sends and the billing input
+		// carries; "" means none.
 		wantTier  string
 		wantQuota int
 	}{
-		{name: "override writes fast", body: `{"model":"gpt-5","input":"hi"}`, override: "fast", wantTier: "fast", wantQuota: 10000},
-		{name: "filtered client tier", body: `{"model":"gpt-5","input":"hi","service_tier":"fast"}`, wantQuota: 5000},
-		{name: "override replaces the client tier", body: `{"model":"gpt-5","input":"hi","service_tier":"fast"}`, allowTier: true, override: "ultrafast", wantTier: "ultrafast", wantQuota: 30000},
-		{name: "pass-through keeps the client tier", body: `{"model":"gpt-5","input":"hi","service_tier":"fast"}`, passThrough: true, override: "ultrafast", wantTier: "fast", wantQuota: 10000},
-		{name: "websocket create", body: `{"model":"gpt-5","input":"hi"}`, override: "fast", websocket: true, wantTier: "fast", wantQuota: 10000},
-		{name: "uncovered raise blocks upstream", body: `{"model":"gpt-5","input":"hi"}`, override: "fast", insufficient: true},
+		{name: "override writes fast", body: responsesBody, attempts: []attempt{{override: "fast"}}, wantTier: "fast", wantQuota: 10000},
+		{name: "filtered client tier", body: responsesFast, attempts: []attempt{{}}, wantQuota: 5000},
+		{name: "override replaces the client tier", body: responsesFast, attempts: []attempt{{allowTier: true, override: "ultrafast"}}, wantTier: "ultrafast", wantQuota: 30000},
+		{name: "pass-through keeps the client tier", body: responsesFast, attempts: []attempt{{passThrough: true, override: "ultrafast"}}, wantTier: "fast", wantQuota: 10000},
+		{name: "pass-through retry after an override", body: responsesBody, attempts: []attempt{{override: "fast"}, {passThrough: true}}, wantQuota: 5000},
+		{name: "non-JSON content type with a forced tier", body: responsesBody, contentType: "application/x-www-form-urlencoded", attempts: []attempt{{override: "fast"}}, wantTier: "fast", wantQuota: 10000},
+		{name: "websocket create", endpoint: "websocket", body: responsesBody, attempts: []attempt{{override: "fast"}}, wantTier: "fast", wantQuota: 10000},
+		{name: "chat completions override", endpoint: "chat", body: `{"model":"gpt-5","messages":[{"role":"user","content":"hi"}]}`, attempts: []attempt{{override: "fast"}}, wantTier: "fast", wantQuota: 10000},
+		{name: "claude messages override", endpoint: "claude", body: `{"model":"claude-x","max_tokens":16,"messages":[{"role":"user","content":"hi"}]}`, attempts: []attempt{{override: "fast"}}, wantTier: "fast", wantQuota: 10000},
+		{name: "chat completions pass-through retry", endpoint: "chat", body: `{"model":"gpt-5","messages":[{"role":"user","content":"hi"}]}`, attempts: []attempt{{override: "fast"}, {passThrough: true}}, wantQuota: 5000},
+		{name: "claude messages pass-through retry", endpoint: "claude", body: `{"model":"claude-x","max_tokens":16,"messages":[{"role":"user","content":"hi"}]}`, attempts: []attempt{{override: "fast"}, {passThrough: true}}, wantQuota: 5000},
+		{name: "gemini override", endpoint: "gemini", body: `{"contents":[{"role":"user","parts":[{"text":"hi"}]}]}`, attempts: []attempt{{override: "fast"}}, wantTier: "fast", wantQuota: 10000},
+		{name: "gemini pass-through retry", endpoint: "gemini", body: `{"contents":[{"role":"user","parts":[{"text":"hi"}]}]}`, attempts: []attempt{{override: "fast"}, {passThrough: true}}, wantQuota: 5000},
+		{name: "uncovered raise blocks upstream", body: responsesBody, attempts: []attempt{{override: "fast"}}, insufficient: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			received := make(chan []byte, 1)
+			received := make(chan []byte, len(tc.attempts))
 			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				body, err := io.ReadAll(r.Body)
 				if err == nil {
@@ -185,25 +200,50 @@ func TestResponsesBillingUsesTheSentServiceTier(t *testing.T) {
 				_, _ = io.WriteString(w, `{"error":{"message":"fixture upstream failure","type":"upstream_error"}}`)
 			}))
 			t.Cleanup(upstream.Close)
+			path, channelType := "/v1/responses", constant.ChannelTypeOpenAI
+			switch tc.endpoint {
+			case "chat":
+				path = "/v1/chat/completions"
+			case "claude":
+				path, channelType = "/v1/messages", constant.ChannelTypeAnthropic
+			case "gemini":
+				path, channelType = "/v1beta/models/gemini-x:generateContent", constant.ChannelTypeGemini
+			}
 			c, _ := gin.CreateTestContext(httptest.NewRecorder())
-			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(tc.body))
-			c.Request.Header.Set("Content-Type", "application/json")
+			c.Request = httptest.NewRequest(http.MethodPost, path, strings.NewReader(tc.body))
+			c.Request.Header.Set("Content-Type", cmp.Or(tc.contentType, "application/json"))
 			t.Cleanup(func() { common.CleanupBodyStorage(c) })
-			common.SetContextKey(c, constant.ContextKeyOriginalModel, "gpt-5")
-			common.SetContextKey(c, constant.ContextKeyChannelType, constant.ChannelTypeOpenAI)
+			model := cmp.Or(gjson.Get(tc.body, "model").String(), "gemini-x")
+			common.SetContextKey(c, constant.ContextKeyOriginalModel, model)
+			common.SetContextKey(c, constant.ContextKeyChannelType, channelType)
 			common.SetContextKey(c, constant.ContextKeyChannelBaseUrl, upstream.URL)
 			common.SetContextKey(c, constant.ContextKeyChannelKey, "fixture-key")
-			common.SetContextKey(c, constant.ContextKeyChannelSetting, dto.ChannelSettings{PassThroughBodyEnabled: tc.passThrough})
-			common.SetContextKey(c, constant.ContextKeyChannelOtherSetting, dto.ChannelOtherSettings{AllowServiceTier: tc.allowTier})
-			if tc.override != "" {
-				common.SetContextKey(c, constant.ContextKeyChannelParamOverride, map[string]any{"operations": []any{map[string]any{"path": "service_tier", "mode": "set", "value": tc.override}}})
+			var info *relaycommon.RelayInfo
+			var responsesReq dto.OpenAIResponsesRequest
+			switch tc.endpoint {
+			case "chat":
+				var req dto.GeneralOpenAIRequest
+				require.NoError(t, common.Unmarshal([]byte(tc.body), &req))
+				info = relaycommon.GenRelayInfoOpenAI(c, &req)
+			case "claude":
+				var req dto.ClaudeRequest
+				require.NoError(t, common.Unmarshal([]byte(tc.body), &req))
+				info = relaycommon.GenRelayInfoClaude(c, &req)
+			case "gemini":
+				var req dto.GeminiChatRequest
+				require.NoError(t, common.Unmarshal([]byte(tc.body), &req))
+				info = relaycommon.GenRelayInfoGemini(c, &req)
+			default:
+				require.NoError(t, common.Unmarshal([]byte(tc.body), &responsesReq))
+				info = relaycommon.GenRelayInfoResponses(c, &responsesReq)
 			}
-			var req dto.OpenAIResponsesRequest
-			require.NoError(t, common.Unmarshal([]byte(tc.body), &req))
-			info := relaycommon.GenRelayInfoResponses(c, &req)
-			// The initial reservation prices the client's own tier, as
-			// PrepareRequestBilling does.
-			input := billingexpr.RequestInput{Body: []byte(tc.body)}
+			// The initial reservation prices the client's own tier from the
+			// body PrepareRequestBilling loads.
+			input, err := helper.ResolveIncomingBillingExprRequestInput(c, info, true)
+			require.NoError(t, err)
+			if tc.contentType != "" {
+				require.Nil(t, input.Body, "a non-JSON body is not loaded for param()")
+			}
 			cost, _, err := billingexpr.RunExprByHashWithRequest(expr, billingexpr.ExprHashString(expr), billingexpr.TokenParams{P: 1000, Len: 1000}, input)
 			require.NoError(t, err)
 			initial := common.QuotaRound(cost / 1_000_000 * quotaPerUnit)
@@ -219,12 +259,32 @@ func TestResponsesBillingUsesTheSentServiceTier(t *testing.T) {
 				EstimatedQuotaBeforeGroup: float64(initial), EstimatedQuotaAfterGroup: initial, EstimatedTier: "base"}
 			info.PriceData = hosttypes.PriceData{QuotaToPreConsume: initial, GroupRatioInfo: hosttypes.GroupRatioInfo{GroupRatio: 1}}
 
-			if tc.websocket {
-				payload, apiErr := buildResponsesWSCreatePayload(c, info, req, nil, "")
-				require.Nil(t, apiErr)
-				assert.Equal(t, tc.wantTier, gjson.GetBytes(payload, "service_tier").String())
-			} else {
-				apiErr := ResponsesHelper(c, info)
+			var sent []byte
+			for _, at := range tc.attempts {
+				common.SetContextKey(c, constant.ContextKeyChannelSetting, dto.ChannelSettings{PassThroughBodyEnabled: at.passThrough})
+				common.SetContextKey(c, constant.ContextKeyChannelOtherSetting, dto.ChannelOtherSettings{AllowServiceTier: at.allowTier})
+				var override map[string]any
+				if at.override != "" {
+					override = map[string]any{"operations": []any{map[string]any{"path": "service_tier", "mode": "set", "value": at.override}}}
+				}
+				common.SetContextKey(c, constant.ContextKeyChannelParamOverride, override)
+				if tc.endpoint == "websocket" {
+					payload, apiErr := buildResponsesWSCreatePayload(c, info, responsesReq, nil, "")
+					require.Nil(t, apiErr)
+					sent = payload
+					continue
+				}
+				var apiErr *types.NewAPIError
+				switch tc.endpoint {
+				case "chat":
+					apiErr = TextHelper(c, info)
+				case "claude":
+					apiErr = ClaudeHelper(c, info)
+				case "gemini":
+					apiErr = GeminiHelper(c, info)
+				default:
+					apiErr = ResponsesHelper(c, info)
+				}
 				require.NotNil(t, apiErr)
 				if tc.insufficient {
 					assert.Equal(t, http.StatusForbidden, apiErr.StatusCode)
@@ -234,16 +294,19 @@ func TestResponsesBillingUsesTheSentServiceTier(t *testing.T) {
 					assert.Equal(t, initial, info.TieredBillingSnapshot.EstimatedQuotaAfterGroup)
 					return
 				}
-				assert.Equal(t, http.StatusBadGateway, apiErr.StatusCode)
+				assert.Equal(t, http.StatusBadGateway, apiErr.StatusCode, apiErr.Error())
 				require.Len(t, received, 1)
-				assert.Equal(t, tc.wantTier, gjson.GetBytes(<-received, "service_tier").String())
+				sent = <-received
 			}
+			assert.Equal(t, tc.wantTier, gjson.GetBytes(sent, "service_tier").String())
 			tier := gjson.GetBytes(info.BillingRequestInput.Body, "service_tier")
 			assert.Equal(t, tc.wantTier, tier.String())
 			assert.Equal(t, tc.wantTier != "", tier.Exists())
-			assert.Equal(t, "hi", gjson.GetBytes(info.BillingRequestInput.Body, "input").String())
+			if tc.contentType == "" {
+				assert.Equal(t, gjson.Get(tc.body, "model").String(), gjson.GetBytes(info.BillingRequestInput.Body, "model").String())
+			}
 			assert.Equal(t, tc.wantQuota, info.TieredBillingSnapshot.EstimatedQuotaAfterGroup)
-			assert.Equal(t, max(initial, tc.wantQuota), reservation.held, "a lower estimate keeps the reservation")
+			assert.GreaterOrEqual(t, reservation.held, max(initial, tc.wantQuota), "a lower estimate keeps the reservation")
 		})
 	}
 }
