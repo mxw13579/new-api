@@ -147,6 +147,9 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 		if newAPIError = requestplugin.Egress(c, info, jsonData); newAPIError != nil {
 			return newAPIError
 		}
+		if newAPIError = service.PrepareTieredBillingForUpstreamRequest(c, info, jsonData); newAPIError != nil {
+			return newAPIError
+		}
 
 		logger.LogDebug(c, "text request body: %s", jsonData)
 

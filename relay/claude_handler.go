@@ -126,6 +126,9 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 		if newAPIError = requestplugin.Egress(c, info, jsonData); newAPIError != nil {
 			return newAPIError
 		}
+		if newAPIError = service.PrepareTieredBillingForUpstreamRequest(c, info, jsonData); newAPIError != nil {
+			return newAPIError
+		}
 
 		logger.LogDebug(c, "requestBody: %s", jsonData)
 		body, closer, err := relaycommon.NewOutboundJSONBody(jsonData)

@@ -124,6 +124,9 @@ func GeminiHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 		if newAPIError = requestplugin.Egress(c, info, jsonData); newAPIError != nil {
 			return newAPIError
 		}
+		if newAPIError = service.PrepareTieredBillingForUpstreamRequest(c, info, jsonData); newAPIError != nil {
+			return newAPIError
+		}
 
 		logger.LogDebug(c, "Gemini request body: %s", jsonData)
 

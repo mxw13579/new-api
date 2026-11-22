@@ -1,8 +1,10 @@
 package service
 
 import (
+	"errors"
 	"net/http"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
@@ -234,6 +236,91 @@ func PrepareTieredBillingForSelectedGroup(c *gin.Context, relayInfo *relaycommon
 		return types.NewError(err, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry())
 	}
 	relayInfo.FinalPreConsumedQuota = relayInfo.Billing.GetPreConsumedQuota()
+	return nil
+}
+
+// PrepareTieredBillingForUpstreamRequest prices param("service_tier") by the
+// body this attempt sends upstream, after channel field filtering, request
+// plugins, parameter overrides and finalizers, and reserves a higher estimate
+// before that body is sent. Every other request member keeps the client's
+// value. Each attempt calls it again, so settlement uses the last attempt's
+// tier. An expression that reads no request body (Body is nil) is left alone,
+// as is a tier equal to the one already priced. A lower estimate is not
+// refunded here; settlement reconciles it.
+func PrepareTieredBillingForUpstreamRequest(c *gin.Context, relayInfo *relaycommon.RelayInfo, upstreamBody []byte) *types.NewAPIError {
+	if relayInfo == nil || relayInfo.BillingRequestInput == nil || relayInfo.BillingRequestInput.Body == nil {
+		return nil
+	}
+	snap := relayInfo.TieredBillingSnapshot
+	if snap == nil || snap.BillingMode != "tiered_expr" {
+		return nil
+	}
+	frozenBody := relayInfo.BillingRequestInput.Body
+	if !ojson.GetBytes(frozenBody, "@this").IsObject() {
+		return nil
+	}
+	const member = "service_tier"
+	frozen := ojson.GetBytes(frozenBody, member)
+	sent := ojson.GetBytes(upstreamBody, member)
+	if frozen.Exists() == sent.Exists() && frozen.Raw == sent.Raw {
+		return nil
+	}
+
+	// Only the tier member changes; the frozen body keeps the client's bytes
+	// for everything else, so param() on other paths is unaffected.
+	doc := ojson.NewDoc(append([]byte(nil), frozenBody...))
+	err := relaycommon.DeleteJSONMember(doc, member)
+	if err == nil && sent.Exists() {
+		err = doc.SetRaw(member, sent.Raw)
+	}
+	if err != nil {
+		return types.NewErrorWithStatusCode(err, types.ErrorCodeModelPriceError, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+	}
+	request := *relayInfo.BillingRequestInput
+	request.Body = doc.Bytes()
+
+	cost, trace, err := billingexpr.RunExprByHashWithRequest(snap.ExprString, snap.ExprHash, billingexpr.TokenParams{
+		P: float64(snap.EstimatedPromptTokens), C: float64(snap.EstimatedCompletionTokens), Len: float64(snap.EstimatedPromptTokens),
+	}, request)
+	if err != nil {
+		return types.NewErrorWithStatusCode(err, types.ErrorCodeModelPriceError, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+	}
+	beforeGroup := cost / 1_000_000 * snap.QuotaPerUnit
+	if trace.BillingUnit != billingexpr.BillingUnitRequest && snap.PreConsumeMultiplier != 0 {
+		beforeGroup *= snap.PreConsumeMultiplier
+	}
+	groupRatio := relayInfo.PriceData.GroupRatioInfo.GroupRatio
+	quota, err := billingexpr.QuotaRoundStrict(beforeGroup * groupRatio)
+	if err != nil {
+		return types.NewErrorWithStatusCode(err, types.ErrorCodeModelPriceError, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+	}
+
+	// The price is known before submission, so a raise must be covered by the
+	// balance rather than admitted as wallet debt.
+	if groupRatio != 0 && quota > snap.EstimatedQuotaAfterGroup {
+		if relayInfo.Billing == nil {
+			if apiErr := PreConsumeBilling(c, quota, relayInfo); apiErr != nil {
+				return apiErr
+			}
+		} else if err := relayInfo.Billing.ReserveBeforeSubmit(quota); err != nil {
+			var apiErr *types.NewAPIError
+			if errors.As(err, &apiErr) {
+				return apiErr
+			}
+			return types.NewErrorWithStatusCode(err, types.ErrorCodeInsufficientUserQuota, http.StatusForbidden, types.ErrOptionWithSkipRetry())
+		}
+		relayInfo.PriceData.FreeModel = false
+		relayInfo.FinalPreConsumedQuota = relayInfo.Billing.GetPreConsumedQuota()
+	}
+
+	relayInfo.BillingRequestInput = &request
+	snap.GroupRatio = groupRatio
+	snap.EstimatedQuotaBeforeGroup = beforeGroup
+	snap.EstimatedQuotaAfterGroup = quota
+	snap.EstimatedTier = trace.MatchedTier
+	snap.EstimatedBillingUnit = trace.BillingUnit
+	snap.EstimatedFixedPrice = trace.FixedPrice
+	relayInfo.PriceData.QuotaToPreConsume = quota
 	return nil
 }
 

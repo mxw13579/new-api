@@ -10,14 +10,17 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/i18n"
+	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/requestplugin"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/config"
 	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/QuantumNous/new-api/setting/request_plugin_setting"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -142,4 +145,105 @@ func TestPrepareResponsesRequestEgressReadsTheFinalizedBody(t *testing.T) {
 	}
 	require.NotNil(t, apiErr, "egress must read the reasoning item the finalizer added")
 	assert.Equal(t, types.ErrorCodeRequestRejected, apiErr.GetErrorCode())
+}
+
+func TestResponsesBillingUsesTheSentServiceTier(t *testing.T) {
+	service.InitHttpClient()
+	settings := model_setting.GetGlobalSettings()
+	previous := settings.PassThroughRequestEnabled
+	t.Cleanup(func() { settings.PassThroughRequestEnabled = previous })
+	settings.PassThroughRequestEnabled = false
+	const expr = `(tier("base", p * 10)) * (param("service_tier") == "fast" ? 2 : 1) * (param("service_tier") == "ultrafast" ? 6 : 1)`
+	// P=1000 estimates base 10000, which is 5000 quota at a 500000 unit.
+	const quotaPerUnit = 500_000.0
+	for _, tc := range []struct {
+		name, body, override string
+		allowTier            bool
+		passThrough          bool
+		websocket            bool
+		insufficient         bool
+		// wantTier is the tier the billing input carries; "" means none.
+		wantTier  string
+		wantQuota int
+	}{
+		{name: "override writes fast", body: `{"model":"gpt-5","input":"hi"}`, override: "fast", wantTier: "fast", wantQuota: 10000},
+		{name: "filtered client tier", body: `{"model":"gpt-5","input":"hi","service_tier":"fast"}`, wantQuota: 5000},
+		{name: "override replaces the client tier", body: `{"model":"gpt-5","input":"hi","service_tier":"fast"}`, allowTier: true, override: "ultrafast", wantTier: "ultrafast", wantQuota: 30000},
+		{name: "pass-through keeps the client tier", body: `{"model":"gpt-5","input":"hi","service_tier":"fast"}`, passThrough: true, override: "ultrafast", wantTier: "fast", wantQuota: 10000},
+		{name: "websocket create", body: `{"model":"gpt-5","input":"hi"}`, override: "fast", websocket: true, wantTier: "fast", wantQuota: 10000},
+		{name: "uncovered raise blocks upstream", body: `{"model":"gpt-5","input":"hi"}`, override: "fast", insufficient: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			received := make(chan []byte, 1)
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, err := io.ReadAll(r.Body)
+				if err == nil {
+					received <- body
+				}
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusBadGateway)
+				_, _ = io.WriteString(w, `{"error":{"message":"fixture upstream failure","type":"upstream_error"}}`)
+			}))
+			t.Cleanup(upstream.Close)
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(tc.body))
+			c.Request.Header.Set("Content-Type", "application/json")
+			t.Cleanup(func() { common.CleanupBodyStorage(c) })
+			common.SetContextKey(c, constant.ContextKeyOriginalModel, "gpt-5")
+			common.SetContextKey(c, constant.ContextKeyChannelType, constant.ChannelTypeOpenAI)
+			common.SetContextKey(c, constant.ContextKeyChannelBaseUrl, upstream.URL)
+			common.SetContextKey(c, constant.ContextKeyChannelKey, "fixture-key")
+			common.SetContextKey(c, constant.ContextKeyChannelSetting, dto.ChannelSettings{PassThroughBodyEnabled: tc.passThrough})
+			common.SetContextKey(c, constant.ContextKeyChannelOtherSetting, dto.ChannelOtherSettings{AllowServiceTier: tc.allowTier})
+			if tc.override != "" {
+				common.SetContextKey(c, constant.ContextKeyChannelParamOverride, map[string]any{"operations": []any{map[string]any{"path": "service_tier", "mode": "set", "value": tc.override}}})
+			}
+			var req dto.OpenAIResponsesRequest
+			require.NoError(t, common.Unmarshal([]byte(tc.body), &req))
+			info := relaycommon.GenRelayInfoResponses(c, &req)
+			// The initial reservation prices the client's own tier, as
+			// PrepareRequestBilling does.
+			input := billingexpr.RequestInput{Body: []byte(tc.body)}
+			cost, _, err := billingexpr.RunExprByHashWithRequest(expr, billingexpr.ExprHashString(expr), billingexpr.TokenParams{P: 1000, Len: 1000}, input)
+			require.NoError(t, err)
+			initial := common.QuotaRound(cost / 1_000_000 * quotaPerUnit)
+			reservation := &imageReservation{held: initial, limit: 1_000_000}
+			if tc.insufficient {
+				reservation.limit = reservation.held
+			}
+			info.Billing = reservation
+			info.FinalPreConsumedQuota = initial
+			info.BillingRequestInput = &input
+			info.TieredBillingSnapshot = &billingexpr.BillingSnapshot{BillingMode: "tiered_expr", ExprString: expr, ExprHash: billingexpr.ExprHashString(expr),
+				GroupRatio: 1, EstimatedPromptTokens: 1000, PreConsumeMultiplier: 1, QuotaPerUnit: quotaPerUnit,
+				EstimatedQuotaBeforeGroup: float64(initial), EstimatedQuotaAfterGroup: initial, EstimatedTier: "base"}
+			info.PriceData = hosttypes.PriceData{QuotaToPreConsume: initial, GroupRatioInfo: hosttypes.GroupRatioInfo{GroupRatio: 1}}
+
+			if tc.websocket {
+				payload, apiErr := buildResponsesWSCreatePayload(c, info, req, nil, "")
+				require.Nil(t, apiErr)
+				assert.Equal(t, tc.wantTier, gjson.GetBytes(payload, "service_tier").String())
+			} else {
+				apiErr := ResponsesHelper(c, info)
+				require.NotNil(t, apiErr)
+				if tc.insufficient {
+					assert.Equal(t, http.StatusForbidden, apiErr.StatusCode)
+					assert.Equal(t, types.ErrorCodeInsufficientUserQuota, apiErr.GetErrorCode())
+					assert.Empty(t, received, "no upstream request before the raised reservation")
+					assert.Equal(t, tc.body, string(info.BillingRequestInput.Body))
+					assert.Equal(t, initial, info.TieredBillingSnapshot.EstimatedQuotaAfterGroup)
+					return
+				}
+				assert.Equal(t, http.StatusBadGateway, apiErr.StatusCode)
+				require.Len(t, received, 1)
+				assert.Equal(t, tc.wantTier, gjson.GetBytes(<-received, "service_tier").String())
+			}
+			tier := gjson.GetBytes(info.BillingRequestInput.Body, "service_tier")
+			assert.Equal(t, tc.wantTier, tier.String())
+			assert.Equal(t, tc.wantTier != "", tier.Exists())
+			assert.Equal(t, "hi", gjson.GetBytes(info.BillingRequestInput.Body, "input").String())
+			assert.Equal(t, tc.wantQuota, info.TieredBillingSnapshot.EstimatedQuotaAfterGroup)
+			assert.Equal(t, max(initial, tc.wantQuota), reservation.held, "a lower estimate keeps the reservation")
+		})
+	}
 }
